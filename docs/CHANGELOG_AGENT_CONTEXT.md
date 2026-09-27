@@ -19,8 +19,10 @@
 
 ### Verified
 - Targeted PHASE 5 tests: 21 passed
-- Full suite + smoke: see PHASE 5 report
+- Full pytest: **395 passed**
+- Smoke: `/health`, `/`, `/system`, `/metrics`, `/owner/status|otp/request`, `/platform/migrations` (schema 3), `/platform/providers` (local readiness), coding/chat/plan
 - No deploy; no secrets exposed; no weight training
+- Note: fixed `test_v91` MigrationRunner temp state_path so tests no longer clobber live `schema_version.json`
 
 ## 2026-09-27 — Longevity PHASE 4: Planner / Authz / Skills / Heal
 

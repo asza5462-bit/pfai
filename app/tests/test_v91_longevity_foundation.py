@@ -105,15 +105,17 @@ class TestLongevityContracts(unittest.TestCase):
 
     def test_schema_version_and_migration_dry_run(self):
         self.assertEqual(PFAI_SCHEMA_VERSION, 3)
-        runner = MigrationRunner(current=1)
-        runner.register(Migration(version=2, name="example_future", description="not applied yet"))
-        # target beyond current schema constant still plans registered steps up to target
-        plan = runner.plan(target=2)
-        self.assertEqual(len(plan), 1)
-        report = runner.run(target=2, dry_run=True)
-        self.assertTrue(report.ok)
-        self.assertTrue(report.dry_run)
-        self.assertEqual(runner.current_version(), 1)
+        with tempfile.TemporaryDirectory() as d:
+            state = Path(d) / "schema_version.json"
+            runner = MigrationRunner(current=1, state_path=str(state))
+            runner.register(Migration(version=2, name="example_future", description="not applied yet"))
+            # target beyond current schema constant still plans registered steps up to target
+            plan = runner.plan(target=2)
+            self.assertEqual(len(plan), 1)
+            report = runner.run(target=2, dry_run=True)
+            self.assertTrue(report.ok)
+            self.assertTrue(report.dry_run)
+            self.assertEqual(runner.current_version(), 1)
 
     def test_versioned_store_rollback(self):
         store = InMemoryVersionedStore()
