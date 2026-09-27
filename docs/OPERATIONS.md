@@ -93,6 +93,11 @@ Promotion to active **never** happens automatically. Use owner-authenticated API
 | `PFAI_OWNER_SESSION_TTL` | Optional | Owner session seconds |
 | `PFAI_OWNER_MAX_FAILURES` | Optional | Auth lockout threshold |
 | `PFAI_OWNER_LOCKOUT_SECONDS` | Optional | Auth lockout duration |
+| `PFAI_EMAIL_PROVIDER` | Optional | `mock` (default) or `smtp` for Email OTP |
+| `PFAI_SMTP_HOST` / `PORT` / `USER` / `PASSWORD` / `FROM` | Optional | SMTP OTP delivery (env secrets only) |
+| `PFAI_OTP_TTL_SECONDS` / `RESEND_COOLDOWN` / `MAX_ATTEMPTS` | Optional | OTP lifetime / cooldown / attempts |
+| `MODEL_PROVIDER` / `MODEL_NAME` / `MODEL_ENDPOINT` | Optional | Local/open-weight/openai_compatible selection |
+| `MODEL_TIMEOUT` / `MAX_TOKENS` / `TEMPERATURE` / `CONTEXT_LENGTH` | Optional | Local adapter generation settings |
 | `PFAI_CONTINUOUS_TRAINING_ENABLED` | Optional | Override continuous loop |
 | `PFAI_CORS_ORIGINS` | Optional | Comma-separated origins |
 | `PFAI_HOST` | Optional | Default `0.0.0.0` in `run_web.py` |
