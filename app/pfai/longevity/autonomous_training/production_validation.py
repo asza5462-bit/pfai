@@ -405,10 +405,12 @@ class ProductionQualityGate:
         )
         report["content_probe_tasks"] = len(content_tasks)
         report["deterministic_core_tasks"] = len(DETERMINISTIC_TASKS)
-        # Recompute sample-gate using max(eligible corpus, executed tasks)
+        # Recompute sample-gate using max(eligible corpus, executed task probes)
+        # Do not inflate with perplexity row counts — those are a separate metric.
         eligible_n = int(report["eligible_evaluation_sample_count"] or 0)
         executed_n = int(independent_samples)
-        sample_count = max(eligible_n, executed_n, int(report.get("evaluation_examples") or 0))
+        sample_count = max(eligible_n, executed_n)
+        ppl_n = int(getattr(candidate_eval, "perplexity_n", 0) or 0)
         report["evaluation_examples"] = sample_count
         report["gates"]["minimum_evaluation_samples"] = {
             "passed": sample_count >= self.config.min_evaluation_samples,
@@ -416,6 +418,7 @@ class ProductionQualityGate:
             "eligible": eligible_n,
             "executed": executed_n,
             "required": self.config.min_evaluation_samples,
+            "perplexity_n": ppl_n,
         }
         # Keep blockers consistent with recomputed sample gate
         blockers = list(report.get("blockers") or [])
