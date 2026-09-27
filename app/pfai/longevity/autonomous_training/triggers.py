@@ -1,4 +1,9 @@
-"""Training trigger evaluation — never fires on individual chats."""
+"""Training trigger evaluation — never fires on individual chats.
+
+Autonomous training requires enough total examples AND a justifying signal
+(growth / schedule / regression / performance / owner). min_examples alone
+is necessary but not sufficient for autonomous should_train.
+"""
 from __future__ import annotations
 
 import os
@@ -61,31 +66,67 @@ class TrainingTriggerPolicy:
         now: float | None = None,
     ) -> dict[str, Any]:
         if not self.enabled:
-            return {"should_train": False, "reason": "TRAINING_DISABLED", "triggers": []}
+            return {
+                "should_train": False,
+                "reason": "TRAINING_DISABLED",
+                "triggers": [],
+                "min_examples_met": False,
+                "justification": [],
+            }
         now = time.time() if now is None else now
         triggers: list[str] = []
+        justification: list[str] = []
         if owner_requested:
             triggers.append(TriggerKind.OWNER_REQUESTED.value)
+            justification.append(TriggerKind.OWNER_REQUESTED.value)
         if explicit_retrain:
             triggers.append(TriggerKind.EXPLICIT_RETRAIN.value)
+            justification.append(TriggerKind.EXPLICIT_RETRAIN.value)
         if regression_recovery:
             triggers.append(TriggerKind.REGRESSION_RECOVERY.value)
+            justification.append(TriggerKind.REGRESSION_RECOVERY.value)
         if performance_opportunity:
             triggers.append(TriggerKind.PERFORMANCE_OPPORTUNITY.value)
-        if new_example_count >= self.min_examples:
+            justification.append(TriggerKind.PERFORMANCE_OPPORTUNITY.value)
+
+        min_examples_met = int(new_example_count) >= self.min_examples
+        if min_examples_met:
             triggers.append(TriggerKind.MIN_EXAMPLES.value)
+
         growth = int(new_since_last_dataset if new_since_last_dataset is not None else 0)
         if growth >= self.min_new_examples:
             triggers.append("dataset_growth")
+            justification.append("dataset_growth")
+
         if self._last_scheduled_at and (now - self._last_scheduled_at) >= self.schedule_seconds:
             triggers.append(TriggerKind.SCHEDULED.value)
+            justification.append(TriggerKind.SCHEDULED.value)
         elif not self._last_scheduled_at:
             # first schedule window opens after interval from init unless other triggers fire
             self._last_scheduled_at = now
-        should = bool(triggers)
+
+        # Owner/explicit may train when they request (still blocked later by quality gate).
+        owner_path = bool(owner_requested or explicit_retrain)
+        # Autonomous path: need enough data AND a real justification (not min_examples alone).
+        autonomous_path = bool(min_examples_met and justification and not owner_path)
+        # Owner path still lists min_examples when met, but does not require growth.
+        should = bool(owner_path or autonomous_path)
+
+        reason = "ok"
+        if not should:
+            if not min_examples_met and not owner_path:
+                reason = "INSUFFICIENT_EXAMPLES"
+            elif min_examples_met and not justification:
+                reason = "NO_GROWTH_OR_SCHEDULE_JUSTIFICATION"
+            else:
+                reason = "TRIGGER_NOT_MET"
+
         return {
             "should_train": should,
+            "reason": reason,
             "triggers": triggers,
+            "justification": justification,
+            "min_examples_met": min_examples_met,
             "min_examples": self.min_examples,
             "min_new_examples": self.min_new_examples,
             "new_example_count": new_example_count,

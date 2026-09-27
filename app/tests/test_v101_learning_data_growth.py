@@ -209,11 +209,19 @@ class TestDatasetQualityVersioningAndSplits(unittest.TestCase):
 
 class TestTriggersAndTick(unittest.TestCase):
     def test_growth_trigger(self):
-        pol = TrainingTriggerPolicy(min_examples=100, min_new_examples=5, enabled=True)
+        pol = TrainingTriggerPolicy(min_examples=5, min_new_examples=5, enabled=True)
         pol.mark_dataset_baseline(10)
-        d = pol.evaluate(new_example_count=12, new_since_last_dataset=8)
+        # Enough total examples + real growth
+        d = pol.evaluate(new_example_count=18, new_since_last_dataset=8)
         self.assertTrue(d["should_train"])
         self.assertIn("dataset_growth", d["triggers"])
+        # Growth alone without min_examples still blocked
+        low = pol.evaluate(new_example_count=3, new_since_last_dataset=8)
+        self.assertFalse(low["should_train"])
+        # Large corpus without growth blocked
+        stale = pol.evaluate(new_example_count=52, new_since_last_dataset=0)
+        self.assertFalse(stale["should_train"])
+        self.assertEqual(stale["reason"], "NO_GROWTH_OR_SCHEDULE_JUSTIFICATION")
 
     def test_insufficient_prevents_training(self):
         with tempfile.TemporaryDirectory() as d:

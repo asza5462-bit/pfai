@@ -95,11 +95,18 @@ class TestDatasetVersioning(unittest.TestCase):
 
 class TestTriggersAndRuntime(unittest.TestCase):
     def test_trigger_min_examples(self):
-        p = TrainingTriggerPolicy(enabled=True, min_examples=5)
+        p = TrainingTriggerPolicy(enabled=True, min_examples=5, min_new_examples=10)
         no = p.evaluate(new_example_count=2)
         self.assertFalse(no["should_train"])
-        yes = p.evaluate(new_example_count=5)
-        self.assertTrue(yes["should_train"])
+        # min_examples alone is not enough for autonomous training
+        alone = p.evaluate(new_example_count=5, new_since_last_dataset=0)
+        self.assertFalse(alone["should_train"])
+        self.assertTrue(alone["min_examples_met"])
+        self.assertEqual(alone["reason"], "NO_GROWTH_OR_SCHEDULE_JUSTIFICATION")
+        # growth + min examples → eligible
+        grown = p.evaluate(new_example_count=12, new_since_last_dataset=10)
+        self.assertTrue(grown["should_train"])
+        self.assertIn("dataset_growth", grown["justification"])
         owner = p.evaluate(new_example_count=0, owner_requested=True)
         self.assertTrue(owner["should_train"])
 

@@ -103,3 +103,13 @@ Training is forbidden from modifying owner authentication, OTP, authorization, s
 - `transformers_local` inference provider wired through ProviderRegistry
 - Expanded approved experience seeds; dataset leakage/quality statuses
 - See `docs/REAL_MODEL_RUNTIME.md`, `docs/AUTONOMOUS_TRAINING.md`, `docs/TRAINING_LIMITATIONS.md`
+
+## Continuous experience (post–PHASE 9)
+
+- `ContinuousExperienceBridge` fans verified operational outcomes into `LearningCandidatePipeline`
+- Explicit eligibility states + trust-weighted source attribution
+- Dataset versions only on content checksum change; growth measured as accepted-count delta
+- Autonomous training requires min examples **and** growth/schedule/owner justification
+- Owner verification: `GET /platform/learning/verification`
+- Raw chat remains ineligible; no synthetic inflation; no Phase 10
+- Verified baseline remains PHASE 9: `model-v0001` / `dataset-v0002` (52 accepted), GPU false

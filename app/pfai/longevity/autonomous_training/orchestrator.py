@@ -562,6 +562,8 @@ class AutonomousTrainingOrchestrator:
             "latest_dataset": latest,
             "dataset_version": (latest or {}).get("dataset_id"),
             "dataset_growth_since_previous_version": growth,
+            "previous_dataset_accepted": prev_accepted,
+            "latest_dataset_accepted": latest_accepted,
             "train_validation_test": {
                 "train": (latest or {}).get("train_count"),
                 "validation": (latest or {}).get("validation_count"),
@@ -585,7 +587,7 @@ class AutonomousTrainingOrchestrator:
                     else (
                         quality_probe.get("status")
                         if not quality_probe.get("ok")
-                        else "TRIGGER_NOT_MET"
+                        else (trigger.get("reason") or "TRIGGER_NOT_MET")
                     )
                 ),
             },
@@ -595,6 +597,60 @@ class AutonomousTrainingOrchestrator:
             "lkg_model": self.models.last_known_good(),
             "experience_bridge": self.experience.status(),
             "note": "Candidate stats never include secret payloads or private example text.",
+        }
+
+    def pipeline_verification_status(self) -> dict[str, Any]:
+        """Honest readiness snapshot — never forces training or invents data."""
+        stats = self.learning_statistics()
+        caps = detect_runtime_capabilities(probe_inference=False)
+        active = self.models.active()
+        lkg = self.models.last_known_good()
+        last_train = dict(self._last_training_result or {})
+        return {
+            "ok": True,
+            "implemented": True,
+            "ready": bool(
+                self.autonomous_enabled
+                and self.triggers.enabled
+                and caps.get("training_available")
+            ),
+            "training_eligible": bool((stats.get("next_training_eligibility") or {}).get("eligible")),
+            "training_eligibility_reason": (stats.get("next_training_eligibility") or {}).get("reason"),
+            "dataset_version": stats.get("dataset_version"),
+            "dataset_accepted_examples": stats.get("latest_dataset_accepted"),
+            "dataset_growth": stats.get("dataset_growth_since_previous_version"),
+            "total_candidates": stats.get("total_learning_candidates"),
+            "real_training_executed": bool(last_train.get("real_training_executed")),
+            "real_model_available": bool(caps.get("training_available")),
+            "real_model_loaded": bool((self.active_runtime.current() or {}).get("loaded")),
+            "real_checkpoint_created": bool(last_train.get("real_checkpoint_created")),
+            "real_evaluation_executed": bool(last_train.get("real_evaluation_executed")),
+            "real_model_activated": bool(
+                active and not ((active.get("meta") or {}).get("is_mock"))
+            ),
+            "lkg_available": bool(lkg),
+            "rollback_available": bool(
+                lkg
+                and (
+                    (lkg.get("model_id") != (active or {}).get("model_id"))
+                    or (active or {}).get("previous_model_id")
+                )
+            ),
+            "active_model_id": (active or {}).get("model_id"),
+            "lkg_model_id": (lkg or {}).get("model_id"),
+            "base_model": (active or {}).get("base_model")
+            or (self.active_runtime.current() or {}).get("base_model"),
+            "training_backend": (active or {}).get("training_backend"),
+            "gpu_available": bool(caps.get("gpu_available")),
+            "model_quality_production_validated": False,
+            "per_chat_training": False,
+            "synthetic_inflation": False,
+            "authority_isolation": True,
+            "experience_bridge": self.experience.status(),
+            "note": (
+                "Pipeline is ready to train when real growth/schedule thresholds are met; "
+                "current eligibility may still be false."
+            ),
         }
 
     def build_dataset_from_sources(self, *, sources: list[str] | None = None) -> dict[str, Any]:

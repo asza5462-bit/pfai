@@ -1,5 +1,19 @@
 # Agent Context Changelog
 
+## 2026-09-27 — Autonomous learning verification (no Phase 10)
+
+### Verified
+- ContinuousExperienceBridge → LearningCandidate → dataset checksum versioning → trigger → train gates
+- Autonomous triggers now require growth/schedule/owner justification (not min_examples alone)
+- Raw chat ineligible; secrets rejected; LKG/rollback/isolation intact
+- PHASE 9 artifacts intact: model-v0001 active/LKG, dataset-v0002 (52), GPU false
+- No new real growth → TRAINING_ELIGIBLE=false; no forced training; no synthetic inflation
+- Tests `test_v103_autonomous_learning_verification.py`; docs updated to real state
+
+### Not claimed
+- MODEL_QUALITY_PRODUCTION_VALIDATED remains **false**
+- No new real training run in this verification pass
+
 ## 2026-09-27 — Continuous real experience collection (post–PHASE 9)
 
 ### Added

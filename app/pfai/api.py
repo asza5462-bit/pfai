@@ -1341,6 +1341,16 @@ def platform_eval_suites(owner: str = Depends(require_owner)):
 def platform_eval_run(suite: str = 'longevity', owner: str = Depends(require_owner)):
     _ = owner
     report = PLATFORM_EVAL.run_suite(suite)
+    learn = None
+    if report.ok and int(report.passed or 0) > 0:
+        learn = AUTONOMOUS_TRAINING.experience.record_evaluation_lesson(
+            instruction=f"Summarize evaluation outcomes for suite {report.suite}",
+            response=(
+                f"Suite {report.suite} passed={report.passed} failed={report.failed} "
+                f"ok={report.ok}. Prefer promoting only when regressions are absent."
+            ),
+            source_id=f"eval:{report.suite}:{report.fingerprint or ''}",
+        )
     return {
         'suite': report.suite,
         'ok': report.ok,
@@ -1349,6 +1359,15 @@ def platform_eval_run(suite: str = 'longevity', owner: str = Depends(require_own
         'fingerprint': report.fingerprint,
         'cases': report.cases,
         'meta': report.meta,
+        'learning_candidate': (
+            {
+                'eligibility': learn.get('eligibility'),
+                'candidate_id': learn.get('candidate_id'),
+                'trained': False,
+            }
+            if learn
+            else None
+        ),
     }
 
 
@@ -1545,6 +1564,20 @@ def platform_heal_propose(owner: str = Depends(require_owner)):
     _ = owner
     report = PLATFORM_SELF_CHECK.run_checks()
     proposal = PLATFORM_SELF_HEAL.propose_fix(report)
+    learn = None
+    # Only record a high-level lesson when checks pass — never embed secrets/config
+    if getattr(report, 'ok', None) is True or (
+        isinstance(report, dict) and report.get('ok')
+    ):
+        learn = AUTONOMOUS_TRAINING.experience.record_self_check(
+            instruction="Describe a healthy PFAI self-check outcome for operators.",
+            response=(
+                "Self-check passed without mutating authentication, authorization, "
+                "secrets, or training isolation boundaries."
+            ),
+            source_id=f"self_check:{getattr(report, 'fingerprint', '') or 'ok'}",
+            passed=True,
+        )
     return {
         'proposal_id': proposal.proposal_id,
         'diagnosis': proposal.diagnosis,
@@ -1554,6 +1587,15 @@ def platform_heal_propose(owner: str = Depends(require_owner)):
         'requires_owner': proposal.requires_owner,
         'risk': proposal.risk,
         'meta': proposal.meta,
+        'learning_candidate': (
+            {
+                'eligibility': learn.get('eligibility'),
+                'candidate_id': learn.get('candidate_id'),
+                'trained': False,
+            }
+            if learn
+            else None
+        ),
     }
 
 
@@ -1733,6 +1775,13 @@ def platform_learning_statistics(owner: str = Depends(require_owner)):
     """Owner-only learning/candidate/dataset observability (no secret payloads)."""
     _ = owner
     return AUTONOMOUS_TRAINING.learning_statistics()
+
+
+@app.get('/platform/learning/verification')
+def platform_learning_verification(owner: str = Depends(require_owner)):
+    """Honest pipeline readiness — never invents eligibility or metrics."""
+    _ = owner
+    return AUTONOMOUS_TRAINING.pipeline_verification_status()
 
 
 @app.get('/platform/learning/dataset')
