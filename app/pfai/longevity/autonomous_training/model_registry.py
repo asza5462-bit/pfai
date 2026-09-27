@@ -295,6 +295,53 @@ class ModelRegistry:
                 return {**prev, "is_lkg": True, "lkg_reason": "previous_active_fallback"}
         return None
 
+    def set_production_ready(
+        self,
+        model_id: str,
+        *,
+        ready: bool,
+        reason: str = "",
+        evaluation_run_id: str = "",
+    ) -> dict[str, Any]:
+        """Mark production_ready in meta — never implied by ACTIVE alone."""
+        with self._lock:
+            data = self.get(model_id)
+            if not data:
+                return {"ok": False, "error": "model_not_found"}
+            meta = dict(data.get("meta") or {})
+            meta["production_ready"] = bool(ready)
+            meta["serving_tier"] = (
+                "production_ready" if ready else (
+                    "internal_active"
+                    if data.get("status") == ModelStatus.ACTIVE.value
+                    else str(data.get("status") or "candidate").lower()
+                )
+            )
+            meta["production_ready_reason"] = reason
+            meta["production_evaluation_run_id"] = evaluation_run_id
+            meta["production_ready_at"] = time.time()
+            data["meta"] = meta
+            data["production_ready"] = bool(ready)
+            data["serving_tier"] = meta["serving_tier"]
+            # persist
+            db = self._conn()
+            try:
+                db.execute(
+                    "UPDATE model_versions SET meta=? WHERE model_id=?",
+                    (json.dumps(meta), model_id),
+                )
+                db.commit()
+            finally:
+                db.close()
+            # also write sidecar manifest if present
+            side = self.root / model_id / "manifest.json"
+            if side.exists():
+                try:
+                    side.write_text(json.dumps(data, indent=2), encoding="utf-8")
+                except Exception:
+                    pass
+            return {"ok": True, "model_id": model_id, "production_ready": bool(ready), "meta": meta}
+
     def activate(
         self,
         model_id: str,
@@ -302,6 +349,7 @@ class ModelRegistry:
         slot: str = "default",
         mark_as_lkg: bool = False,
         preserve_outgoing_as_lkg: bool = True,
+        production_ready: bool = False,
     ) -> dict[str, Any]:
         current = self.active(slot)
         previous_id = current.get("model_id") if current else None
@@ -339,7 +387,16 @@ class ModelRegistry:
             cur_manifest = self.get(previous_id) or {}
             if cur_manifest.get("status") != ModelStatus.ROLLED_BACK.value:
                 self.update_status(previous_id, ModelStatus.VALIDATED)
+            # Clear production_ready on demoted model
+            self.set_production_ready(previous_id, ready=False, reason="replaced_as_active")
         self.update_status(model_id, ModelStatus.ACTIVE)
+        # Activation alone never grants production_ready unless explicitly requested
+        # after ProductionQualityGate pass.
+        self.set_production_ready(
+            model_id,
+            ready=bool(production_ready),
+            reason="explicit_production_activation" if production_ready else "internal_active_only",
+        )
         # First successful activation becomes the initial LKG.
         if previous_id is None or mark_as_lkg:
             self.mark_lkg(

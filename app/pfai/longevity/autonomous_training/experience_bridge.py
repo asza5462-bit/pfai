@@ -5,7 +5,9 @@ Callers must only invoke after a verified success / owner approval / correction.
 """
 from __future__ import annotations
 
+import json
 import time
+from pathlib import Path
 from typing import Any
 
 from .types import (
@@ -192,6 +194,38 @@ class ContinuousExperienceBridge:
                         response=response,
                         source_id=source_id or rec.candidate_id,
                     )
+                # Future production-eval accumulation (never used to inflate training)
+                try:
+                    from .evaluation_dataset import EvaluationDatasetBuilder
+
+                    acc = Path(str(self.orch.root)) / "evaluation_datasets" / "accumulator.jsonl"
+                    acc.parent.mkdir(parents=True, exist_ok=True)
+                    dig = rec.content_hash or ""
+                    line = json.dumps(
+                        {
+                            "instruction": instruction,
+                            "response": response,
+                            "source": f"accumulator:{attribution}",
+                            "source_id": source_id or rec.candidate_id,
+                            "content_hash": dig,
+                            "provenance": {
+                                "continuous_experience": True,
+                                "eligibility": elig,
+                                "synthetic": False,
+                            },
+                        },
+                        ensure_ascii=False,
+                    )
+                    # Append only if hash not already present (best-effort scan of last 2k lines)
+                    exists = False
+                    if dig and acc.exists():
+                        tail = acc.read_text(encoding="utf-8", errors="ignore").splitlines()[-2000:]
+                        exists = any(dig in ln for ln in tail)
+                    if not exists:
+                        with acc.open("a", encoding="utf-8") as fh:
+                            fh.write(line + "\n")
+                except Exception:
+                    pass
         elif elig_l in ("rejected", LearningEligibility.REJECTED.value.lower()):
             elig = LearningEligibility.REJECTED.value
             if rec.eligibility != LearningEligibility.REJECTED.value:

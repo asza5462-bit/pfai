@@ -44,6 +44,7 @@ from .validator import TrainingExampleValidator
 from .verified_outcomes import VerifiedOutcomeStore
 from .post_train_validation import PostTrainValidator, write_report
 from .production_validation import ProductionGateConfig, ProductionQualityGate
+from .evaluation_dataset import EvaluationDatasetBuilder
 
 
 class AutonomousTrainingOrchestrator:
@@ -1490,6 +1491,9 @@ class AutonomousTrainingOrchestrator:
                     "is_mock": result.is_mock,
                     "real_training": bool(getattr(result, "real_training", False)),
                     "base_model": result.base_model or cfg.base_model,
+                    # Activation alone never grants production readiness
+                    "production_ready": False,
+                    "serving_tier": "internal_active",
                 },
             )
             if runtime_switch.get("status") != "ACTIVE":
@@ -1615,7 +1619,11 @@ class AutonomousTrainingOrchestrator:
             checkpoint_ref=cp,
             dataset_version=str(model.get("dataset_version") or ""),
             base_model=str(model.get("base_model") or ""),
-            meta={"base_model": model.get("base_model")},
+            meta={
+                "base_model": model.get("base_model"),
+                "production_ready": False,
+                "serving_tier": "internal_active",
+            },
         )
         self.audit.record("model_activated_manual", model_id=model_id, runtime_loaded=runtime.get("loaded"))
         return {
@@ -2018,9 +2026,11 @@ class AutonomousTrainingOrchestrator:
         dataset_id = str(candidate.get("dataset_version") or self._state.get("last_dataset_id") or "")
         rows: list[dict[str, Any]] = []
         dataset_integrity_ok = True
+        train_dir = None
         if dataset_id:
             man = self.datasets.get(dataset_id)
             dataset_integrity_ok = bool(man)
+            train_dir = self.root / "datasets" / dataset_id
             try:
                 rows = list(self.datasets.load_split(dataset_id, "test") or [])
                 if len(rows) < 4:
@@ -2031,6 +2041,15 @@ class AutonomousTrainingOrchestrator:
                 dataset_integrity_ok = False
                 rows = []
 
+        # Build versioned evaluation corpus from legitimate sources only
+        eval_builder = EvaluationDatasetBuilder(str(self.root / "evaluation_datasets"))
+        eval_ds = eval_builder.build_version(
+            exclude_train_dataset_dir=train_dir if train_dir and train_dir.exists() else None,
+            workspace=Path("data"),
+            label="prodeval",
+        )
+        eval_examples = list(eval_ds.get("examples") or [])
+
         rollback_available = bool(lkg) and (
             lkg.get("model_id") != candidate.get("model_id")
             or bool(candidate.get("previous_model_id"))
@@ -2039,18 +2058,62 @@ class AutonomousTrainingOrchestrator:
         prod = self.production_gate.evaluate(
             candidate=candidate,
             baseline=lkg,
-            dataset_id=dataset_id or "unknown",
+            dataset_id=str(eval_ds.get("dataset_id") or dataset_id or "unknown"),
             dataset_rows=rows,
+            eval_examples=eval_examples,
+            eval_dataset_meta={
+                k: eval_ds.get(k)
+                for k in (
+                    "dataset_id",
+                    "content_hash",
+                    "count",
+                    "excluded_train_hashes",
+                    "source_distribution",
+                    "filtering",
+                    "created",
+                )
+            },
             rollback_available=rollback_available,
             dataset_integrity_ok=dataset_integrity_ok,
         )
+
+        production_validated = bool(prod.get("model_quality_production_validated"))
+        # Semantic safety: ACTIVE ≠ production_ready
+        self.models.set_production_ready(
+            str(candidate.get("model_id")),
+            ready=production_validated,
+            reason=(
+                "production_quality_gate_pass"
+                if production_validated
+                else ",".join(prod.get("blockers") or prod.get("reasons") or ["not_validated"])
+            ),
+            evaluation_run_id=str(prod.get("evaluation_run_id") or ""),
+        )
+        # Keep LKG marked production-reference (not necessarily production_ready model)
+        if lkg.get("model_id") and lkg.get("model_id") != candidate.get("model_id"):
+            # LKG remains the production fallback reference until candidate is production_ready
+            pass
+
+        # Update active runtime serving tier metadata without swapping models
+        cur = self.active_runtime.current()
+        if cur.get("model_id") == candidate.get("model_id"):
+            cur["production_ready"] = production_validated
+            cur["serving_tier"] = (
+                "production_ready" if production_validated else "internal_active"
+            )
+            try:
+                self.active_runtime.path.write_text(
+                    json.dumps(cur, indent=2), encoding="utf-8"
+                )
+            except Exception:
+                pass
 
         # Optional: if production fails AND relative quality also fails hard, rollback
         real_rollback = False
         rollback_result = None
         if (
             apply_rollback_on_failure
-            and not prod.get("model_quality_production_validated")
+            and not production_validated
             and prod.get("regression_detected")
             and (self.models.active() or {}).get("model_id") == candidate.get("model_id")
         ):
@@ -2058,6 +2121,11 @@ class AutonomousTrainingOrchestrator:
             real_rollback = bool(rollback_result.get("ok"))
             if real_rollback:
                 self.models.update_status(str(candidate.get("model_id")), ModelStatus.ROLLED_BACK)
+                self.models.set_production_ready(
+                    str(candidate.get("model_id")),
+                    ready=False,
+                    reason="rolled_back_after_production_regression",
+                )
                 self.audit.record(
                     "production_validation_rollback",
                     candidate=candidate.get("model_id"),
@@ -2065,6 +2133,7 @@ class AutonomousTrainingOrchestrator:
                     reasons=prod.get("reasons"),
                 )
 
+        active = self.models.active() or {}
         out = {
             **prod,
             "ok": True,
@@ -2072,21 +2141,49 @@ class AutonomousTrainingOrchestrator:
             "real_evaluation_executed": True,
             "real_rollback_executed": real_rollback,
             "rollback": rollback_result,
-            "current_active_model": (self.models.active() or {}).get("model_id"),
+            "production_ready": production_validated,
+            "serving_tier": (active.get("meta") or {}).get("serving_tier")
+            or ("production_ready" if production_validated else "internal_active"),
+            "current_active_model": active.get("model_id"),
             "current_lkg": (self.models.last_known_good() or {}).get("model_id"),
             "rollback_available": bool(self.models.last_known_good()),
+            "activation_semantics": {
+                "active_means": "internal_or_lab_serving_pointer",
+                "production_ready_means": "passed_ProductionQualityGate",
+                "active_implies_production_ready": False,
+            },
+            "production_serving": self.active_runtime.production_serving(
+                lkg=self.models.last_known_good()
+            ),
+            "evaluation_dataset": eval_ds.get("dataset_id"),
+            "evaluation_samples": prod.get("independent_evaluation_samples")
+            or prod.get("evaluation_examples"),
+            "eligible_evaluation_sample_count": prod.get("eligible_evaluation_sample_count"),
+            "canary_result": (
+                "PASS"
+                if ((prod.get("gates") or {}).get("canary_validation") or {}).get("passed")
+                else "FAIL"
+            ),
+            "quality_gate": prod.get("status")
+            if production_validated
+            else ("PASS" if prod.get("relative_quality_gate_pass") else "FAIL"),
         }
+        # Prefer explicit quality gate label for report
+        out["quality_gate"] = "PASS" if production_validated else "FAIL"
         path = write_report(self.root / "artifacts" / report_name, out)
         out["report_path"] = path
         self._last_production_validation = {
             k: out.get(k)
             for k in (
                 "model_quality_production_validated",
+                "production_ready",
                 "status",
                 "reasons",
                 "evaluation_run_id",
                 "candidate_model",
                 "baseline_model",
+                "evaluation_dataset",
+                "evaluation_samples",
                 "at",
             )
         }
@@ -2094,9 +2191,12 @@ class AutonomousTrainingOrchestrator:
         self.audit.record(
             "production_validation",
             validated=bool(out.get("model_quality_production_validated")),
+            production_ready=bool(out.get("production_ready")),
             reasons=out.get("reasons"),
             report_path=path,
             evaluation_run_id=out.get("evaluation_run_id"),
+            evaluation_dataset=out.get("evaluation_dataset"),
+            evaluation_samples=out.get("evaluation_samples"),
         )
         return out
 

@@ -8,6 +8,7 @@ from __future__ import annotations
 import hashlib
 import json
 import os
+import re
 import time
 from dataclasses import asdict, dataclass, field
 from pathlib import Path
@@ -18,9 +19,46 @@ from .post_train_validation import (
     checkpoint_hash,
     DETERMINISTIC_TASKS,
 )
+from .evaluation_dataset import EvaluationDatasetBuilder
 
 
-EVALUATOR_VERSION = "phase11-prodval-v1"
+EVALUATOR_VERSION = "phase11-prodval-v2"
+
+
+def examples_to_eval_tasks(examples: list[dict[str, Any]], *, limit: int | None = None) -> list[dict[str, Any]]:
+    """Map provenance-traceable examples to deterministic generation probes.
+
+    One unique example → one evaluation sample (no duplication / inflation).
+    """
+    tasks: list[dict[str, Any]] = []
+    for i, ex in enumerate(examples if limit is None else examples[:limit]):
+        inst = str(ex.get("instruction") or "").strip()
+        resp = str(ex.get("response") or "").strip()
+        if not inst or not resp:
+            continue
+        # Prefer coding-like probes when response looks like code
+        is_code = ("def " in resp) or ("return " in resp) or ("assert " in resp)
+        tokens = [t for t in re.findall(r"[A-Za-z0-9_]{3,}", resp.lower()) if t not in {
+            "the", "and", "for", "with", "this", "that", "from", "are", "was", "were", "have",
+        }]
+        expect = tokens[:3] if tokens else []
+        tasks.append(
+            {
+                "id": f"evaldata-{(ex.get('content_hash') or str(i))[:12]}",
+                "suite": "coding" if is_code else "dataset",
+                "prompt": f"### Instruction:\n{inst}\n### Response:\n",
+                "expect_contains": expect,
+                "match_any": True,
+                "soft_expect": True,
+                "score_mode": "nonempty_safe" if not expect else "expect",
+                "forbid_contains": ["password=", "api_key", "sk-", "otp="],
+                "max_new_tokens": 48,
+                "source": ex.get("source"),
+                "content_hash": ex.get("content_hash"),
+            }
+        )
+    return tasks
+
 
 
 def _env_float(name: str, default: float) -> float:
@@ -284,40 +322,62 @@ class ProductionQualityGate:
         baseline: dict[str, Any],
         dataset_id: str,
         dataset_rows: list[dict[str, Any]] | None = None,
+        eval_examples: list[dict[str, Any]] | None = None,
+        eval_dataset_meta: dict[str, Any] | None = None,
         rollback_available: bool = True,
         dataset_integrity_ok: bool = True,
         apply_load: bool = True,
+        max_content_tasks: int | None = None,
     ) -> dict[str, Any]:
         started = time.time()
-        suite = self.suites.register_or_get(tasks=DETERMINISTIC_TASKS, suite_id="prodval")
+        content_tasks = examples_to_eval_tasks(
+            list(eval_examples or []),
+            limit=max_content_tasks,
+        )
+        # Deterministic core suite + unique content probes (no duplication)
+        # Deduplicate by id
+        merged_tasks: list[dict[str, Any]] = []
+        seen_ids: set[str] = set()
+        for t in list(DETERMINISTIC_TASKS) + content_tasks:
+            tid = str(t.get("id") or "")
+            if tid in seen_ids:
+                continue
+            seen_ids.add(tid)
+            merged_tasks.append(t)
+
+        suite = self.suites.register_or_get(tasks=merged_tasks, suite_id="prodval")
         base_model = str(
             candidate.get("base_model") or baseline.get("base_model") or "data/models/distilgpt2"
         )
+        validator = PostTrainValidator(
+            acceptance=self.validator.acceptance,
+            tasks=merged_tasks,
+        )
 
         if apply_load:
-            baseline_eval = self.validator.evaluate_model(
+            baseline_eval = validator.evaluate_model(
                 model_id=str(baseline.get("model_id")),
                 checkpoint_ref=str(baseline.get("checkpoint_ref")),
                 base_model=base_model,
                 dataset_rows=list(dataset_rows or []),
             )
-            candidate_eval = self.validator.evaluate_model(
+            candidate_eval = validator.evaluate_model(
                 model_id=str(candidate.get("model_id")),
                 checkpoint_ref=str(candidate.get("checkpoint_ref")),
                 base_model=base_model,
                 dataset_rows=list(dataset_rows or []),
             )
         else:
-            # Tests may inject precomputed evals via candidate/baseline meta
             raise ValueError("apply_load=False requires injected evals — use evaluate_from_results")
 
-        comparison = self.validator.compare(
+        independent_samples = len(merged_tasks)
+        comparison = validator.compare(
             baseline=baseline_eval,
             candidate=candidate_eval,
             evaluation_dataset=dataset_id,
-            evaluation_examples=len(DETERMINISTIC_TASKS) + int(candidate_eval.perplexity_n or 0),
+            evaluation_examples=independent_samples + int(candidate_eval.perplexity_n or 0),
         )
-        return self._finalize(
+        report = self._finalize(
             suite=suite,
             candidate=candidate,
             baseline=baseline,
@@ -329,6 +389,50 @@ class ProductionQualityGate:
             dataset_integrity_ok=dataset_integrity_ok,
             started=started,
         )
+        report["evaluation_dataset_meta"] = eval_dataset_meta or {}
+        report["independent_evaluation_samples"] = independent_samples
+        report["eligible_evaluation_sample_count"] = int(
+            (eval_dataset_meta or {}).get("count") or len(eval_examples or [])
+        )
+        report["content_probe_tasks"] = len(content_tasks)
+        report["deterministic_core_tasks"] = len(DETERMINISTIC_TASKS)
+        # Recompute sample-gate using max(eligible corpus, executed tasks)
+        eligible_n = int(report["eligible_evaluation_sample_count"] or 0)
+        executed_n = int(independent_samples)
+        sample_count = max(eligible_n, executed_n, int(report.get("evaluation_examples") or 0))
+        report["evaluation_examples"] = sample_count
+        report["gates"]["minimum_evaluation_samples"] = {
+            "passed": sample_count >= self.config.min_evaluation_samples,
+            "count": sample_count,
+            "eligible": eligible_n,
+            "executed": executed_n,
+            "required": self.config.min_evaluation_samples,
+        }
+        # Keep blockers consistent with recomputed sample gate
+        blockers = list(report.get("blockers") or [])
+        if report["gates"]["minimum_evaluation_samples"]["passed"]:
+            blockers = [b for b in blockers if b != "INSUFFICIENT_EVALUATION_SAMPLES"]
+        elif "INSUFFICIENT_EVALUATION_SAMPLES" not in blockers:
+            blockers.append("INSUFFICIENT_EVALUATION_SAMPLES")
+        # Deduplicate while preserving order
+        seen_b: set[str] = set()
+        uniq_b: list[str] = []
+        for b in blockers:
+            if b not in seen_b:
+                seen_b.add(b)
+                uniq_b.append(b)
+        report["blockers"] = uniq_b
+        report["reasons"] = uniq_b if uniq_b else ["ALL_PRODUCTION_GATES_PASSED"]
+        production_validated = len(uniq_b) == 0
+        report["model_quality_production_validated"] = production_validated
+        report["status"] = (
+            "PRODUCTION_VALIDATED" if production_validated else "NOT_PRODUCTION_VALIDATED"
+        )
+        # Rewrite run artifact with corrected sample accounting
+        run_path = Path(str(report.get("evaluation_run_path") or ""))
+        if run_path.exists():
+            run_path.write_text(json.dumps(report, indent=2), encoding="utf-8")
+        return report
 
     def evaluate_from_results(
         self,

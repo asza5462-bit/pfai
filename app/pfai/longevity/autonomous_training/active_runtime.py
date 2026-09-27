@@ -38,6 +38,11 @@ class ActiveModelRuntime:
             data.setdefault("loaded", bool(data.get("checkpoint_ref")))
             data.setdefault("base_model", None)
             data.setdefault("adapter_path", data.get("checkpoint_ref"))
+            data.setdefault("production_ready", False)
+            data.setdefault(
+                "serving_tier",
+                "production_ready" if data.get("production_ready") else "internal_active",
+            )
             return data
 
     @staticmethod
@@ -100,6 +105,13 @@ class ActiveModelRuntime:
                 "activated_at": time.time(),
                 "status": "ACTIVE",
                 "loaded": False,
+                "production_ready": bool((meta or {}).get("production_ready", False)),
+                "serving_tier": (meta or {}).get("serving_tier")
+                or (
+                    "production_ready"
+                    if (meta or {}).get("production_ready")
+                    else "internal_active"
+                ),
                 "meta": meta or {},
                 "integrity": integrity,
             }
@@ -164,6 +176,46 @@ class ActiveModelRuntime:
         )
         return {"ok": switched.get("status") == "ACTIVE", "runtime": switched}
 
+    def production_serving(self, *, lkg: dict[str, Any] | None = None) -> dict[str, Any]:
+        """Return the model that may serve production traffic.
+
+        ACTIVE internal candidates are NEVER production-serving unless production_ready.
+        Falls back to LKG checkpoint metadata when the active pointer is lab-only.
+        """
+        cur = self.current()
+        if cur.get("production_ready") and cur.get("serving_tier") == "production_ready":
+            return {
+                "ok": True,
+                "role": "production",
+                "model_id": cur.get("model_id"),
+                "checkpoint_ref": cur.get("checkpoint_ref"),
+                "serving_tier": "production_ready",
+                "production_ready": True,
+                "source": "active_runtime",
+            }
+        lkg = lkg or {}
+        if lkg.get("model_id"):
+            return {
+                "ok": True,
+                "role": "production",
+                "model_id": lkg.get("model_id"),
+                "checkpoint_ref": lkg.get("checkpoint_ref"),
+                "serving_tier": "lkg_fallback",
+                "production_ready": True,
+                "source": "last_known_good",
+                "note": "Active model is internal_active only; production path uses LKG.",
+                "internal_active_model": cur.get("model_id"),
+            }
+        return {
+            "ok": False,
+            "role": "production",
+            "model_id": None,
+            "serving_tier": "unavailable",
+            "production_ready": False,
+            "error": "no_production_ready_or_lkg_model",
+            "internal_active_model": cur.get("model_id"),
+        }
+
     def describe_status(
         self,
         *,
@@ -182,11 +234,15 @@ class ActiveModelRuntime:
             gpu = bool(torch.cuda.is_available())
         except Exception:
             gpu = False
+        prod = self.production_serving(lkg=lkg)
         return {
             "MODEL_AVAILABLE": bool(base or cp),
             "MODEL_LOADABLE": bool(integrity.get("ok")),
             "MODEL_ACTIVE": cur.get("status") == "ACTIVE" and bool(cur.get("loaded")),
             "MODEL_VERSION": cur.get("model_id"),
+            "MODEL_PRODUCTION_READY": bool(cur.get("production_ready")),
+            "SERVING_TIER": cur.get("serving_tier") or "internal_active",
+            "PRODUCTION_SERVING_MODEL": prod.get("model_id"),
             "BASE_MODEL": base,
             "ADAPTER": cur.get("adapter_path") or cp,
             "LKG_VERSION": (lkg or {}).get("model_id"),
@@ -194,6 +250,12 @@ class ActiveModelRuntime:
             "TRAINING_BACKEND": training_backend,
             "runtime": cur,
             "integrity": integrity,
+            "production_serving": prod,
+            "activation_semantics": {
+                "active_means": "internal_or_lab_serving_pointer",
+                "production_ready_means": "passed_ProductionQualityGate",
+                "active_implies_production_ready": False,
+            },
         }
 
     def bind_inference_provider(self, provider: Any) -> dict[str, Any]:

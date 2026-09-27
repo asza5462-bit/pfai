@@ -41,6 +41,17 @@ class ModelStatus(str, Enum):
     LKG = "LKG"  # marked last-known-good (may also be ACTIVE)
 
 
+class ModelServingTier(str, Enum):
+    """Semantic serving tier — ACTIVE ≠ production-ready."""
+
+    CANDIDATE = "candidate"
+    VALIDATED = "validated"
+    INTERNAL_ACTIVE = "internal_active"  # active pointer for lab/eval; not production
+    PRODUCTION_READY = "production_ready"
+    REJECTED = "rejected"
+    ROLLED_BACK = "rolled_back"
+
+
 class DatasetStatus(str, Enum):
     BUILDING = "BUILDING"
     READY = "READY"
