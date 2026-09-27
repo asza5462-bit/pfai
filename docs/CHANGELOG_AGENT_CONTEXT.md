@@ -1,5 +1,20 @@
 # Agent Context Changelog
 
+## 2026-09-27 — Real autonomous learning data growth (post–PHASE 9)
+
+### Added
+- `LearningCandidatePipeline` + SQLite candidate store (sanitize → secret/PII → quality → dedupe → provenance → accept)
+- Multi-source observers: seeds, durable learning, coding, eval, owner feedback, tool/skill, corrected failures
+- Dataset growth trigger (`TRAINING_MIN_NEW_EXAMPLES`) + tick loop: collect → version → decide → train
+- Owner APIs: `/platform/learning/statistics`, `/dataset`, `/models`, `/feedback`, `/candidates/collect`
+- Last training/rollback result persistence; Control Center learning stats
+- Tests `test_v101_learning_data_growth.py`
+- Docs: DATASET_PIPELINE updated
+
+### Constraints preserved
+- PHASE 8/9 gates, LKG, rollback, auth isolation, no per-chat training
+- MODEL_QUALITY_PRODUCTION_VALIDATED remains **false**
+
 ## 2026-09-27 — Longevity PHASE 9: Real open-weight upgrade + autonomous training
 
 ### Added

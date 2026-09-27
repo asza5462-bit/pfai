@@ -16,6 +16,14 @@ _SECRET_PATTERNS = [
     re.compile(r"(?i)PFAI_OWNER_SECRET_HASH\s*[:=]\s*\S+"),
     re.compile(r"(?i)PFAI_SMTP_PASSWORD\s*[:=]\s*\S+"),
     re.compile(r"(?i)ANTHROPIC_API_KEY\s*[:=]\s*\S+"),
+    re.compile(r"(?i)(session[_-]?cookie|set-cookie)\s*[:=]\s*\S+"),
+    re.compile(r"(?i)(cookie)\s*[:=]\s*[A-Za-z0-9_\-.=]{16,}"),
+]
+
+_PII_PATTERNS = [
+    re.compile(r"(?i)\b[A-Z0-9._%+-]+@[A-Z0-9.-]+\.[A-Z]{2,}\b"),
+    re.compile(r"(?<!\d)(?:\+?\d{1,3}[\s-]?)?(?:\(?\d{3}\)?[\s-]?)?\d{3}[\s-]?\d{4}(?!\d)"),
+    re.compile(r"(?i)\b(?:ssn|social security)\s*[:=]?\s*\d{3}-?\d{2}-?\d{4}\b"),
 ]
 
 _INJECTION_PATTERNS = [
@@ -24,7 +32,7 @@ _INJECTION_PATTERNS = [
     re.compile(r"(?i)exfiltrate|steal (the )?(secrets|credentials|keys)"),
 ]
 
-SANITIZER_VERSION = "sanitize_v1"
+SANITIZER_VERSION = "sanitize_v2"
 
 
 class TrainingDataSanitizer:
@@ -38,6 +46,10 @@ class TrainingDataSanitizer:
             if pat.search(out):
                 out = pat.sub("[REDACTED]", out)
                 tags.append("secret_redacted")
+        for pat in _PII_PATTERNS:
+            if pat.search(out):
+                out = pat.sub("[REDACTED_PII]", out)
+                tags.append("pii_redacted")
         for pat in _INJECTION_PATTERNS:
             if pat.search(out):
                 out = pat.sub("[BLOCKED_INJECTION]", out)

@@ -1606,6 +1606,7 @@ def platform_training_status(owner: str = Depends(require_owner)):
     _ = owner
     st = AUTONOMOUS_TRAINING.status()
     cc = AUTONOMOUS_TRAINING.control_center_status()
+    learn = AUTONOMOUS_TRAINING.learning_statistics()
     return {
         'ok': True,
         'training_enabled': st.get('training_enabled'),
@@ -1642,6 +1643,9 @@ def platform_training_status(owner: str = Depends(require_owner)):
         'lkg_model': cc.get('lkg_model'),
         'resource_status': cc.get('resource_status'),
         'quality_disclaimer': cc.get('quality_disclaimer'),
+        'learning_statistics': learn.get('candidates'),
+        'last_training_result': learn.get('last_training_result') or cc.get('last_training_result'),
+        'last_rollback_result': learn.get('last_rollback_result') or cc.get('last_rollback_result'),
         'orchestrator': st.get('orchestrator'),
         'datasets': st.get('datasets'),
         'models': st.get('models'),
@@ -1661,6 +1665,129 @@ def platform_training_status(owner: str = Depends(require_owner)):
         'authority_isolation': True,
         'weight_training_path': 'AutonomousTrainingOrchestrator',
         'note': st.get('note'),
+    }
+
+
+@app.get('/platform/learning/statistics')
+def platform_learning_statistics(owner: str = Depends(require_owner)):
+    """Owner-only learning/candidate/dataset observability (no secret payloads)."""
+    _ = owner
+    return AUTONOMOUS_TRAINING.learning_statistics()
+
+
+@app.get('/platform/learning/dataset')
+def platform_learning_dataset(owner: str = Depends(require_owner), limit: int = 20):
+    _ = owner
+    datasets = AUTONOMOUS_TRAINING.datasets.list_versions(limit=limit)
+    latest = datasets[0] if datasets else None
+    stats = AUTONOMOUS_TRAINING.learning_pipeline_gate.store.statistics()
+    return {
+        'ok': True,
+        'latest_dataset': latest,
+        'dataset_versions': datasets,
+        'candidate_statistics': stats,
+        'train_validation_test': {
+            'train': (latest or {}).get('train_count'),
+            'validation': (latest or {}).get('validation_count'),
+            'test': (latest or {}).get('test_count'),
+        }
+        if latest
+        else None,
+        'note': 'Dataset status only — example text is not exposed.',
+    }
+
+
+@app.get('/platform/learning/models')
+def platform_learning_models(owner: str = Depends(require_owner), limit: int = 50):
+    """Model registry observability: active, LKG, states — no weights/secrets."""
+    _ = owner
+    models = AUTONOMOUS_TRAINING.models.list_models(limit=limit)
+    safe = []
+    for m in models:
+        safe.append(
+            {
+                'model_id': m.get('model_id'),
+                'status': m.get('status'),
+                'base_model': m.get('base_model'),
+                'base_model_hash': m.get('base_model_hash'),
+                'base_model_revision': m.get('base_model_revision'),
+                'dataset_version': m.get('dataset_version'),
+                'training_backend': m.get('training_backend'),
+                'training_code_version': m.get('training_code_version'),
+                'parent_model_id': m.get('parent_model_id'),
+                'activated_at': m.get('activated_at'),
+                'rollback_status': m.get('rollback_status'),
+                'has_checkpoint': bool(m.get('checkpoint_ref')),
+                'metrics_keys': list((m.get('metrics') or {}).keys()),
+                'evaluation_decision': ((m.get('evaluation') or {}).get('decision')),
+            }
+        )
+    return {
+        'ok': True,
+        'models': safe,
+        'active_model': AUTONOMOUS_TRAINING.models.active(),
+        'lkg_model': AUTONOMOUS_TRAINING.models.last_known_good(),
+        'last_training_result': dict(AUTONOMOUS_TRAINING._last_training_result or {}),
+        'last_rollback_result': dict(AUTONOMOUS_TRAINING._last_rollback_result or {}),
+    }
+
+
+@app.post('/platform/learning/candidates/collect')
+def platform_learning_candidates_collect(owner: str = Depends(require_owner)):
+    """Run LearningCandidate pass only — does not train."""
+    result = AUTONOMOUS_TRAINING.run_learning_candidate_pass()
+    OWNER.authorize('PLATFORM_LEARNING_COLLECT', f'{owner} candidate pass observed={result.get("observed")}')
+    return {
+        'ok': True,
+        'observed': result.get('observed'),
+        'accepted_this_run': result.get('accepted_this_run'),
+        'rejected_this_run': result.get('rejected_this_run'),
+        'duplicates_this_run': result.get('duplicates_this_run'),
+        'rejection_reasons_this_run': result.get('rejection_reasons_this_run'),
+        'store_statistics': result.get('store_statistics'),
+        'trained': False,
+        'note': 'Collect/clean only — training is never triggered by this endpoint.',
+    }
+
+
+class LearningFeedbackBody(BaseModel):
+    instruction: str
+    response: str
+    id: str | None = None
+    approved: bool = True
+
+
+@app.post('/platform/learning/feedback')
+def platform_learning_feedback(x: LearningFeedbackBody, owner: str = Depends(require_owner)):
+    """Queue owner-approved feedback as a learning candidate (not immediate training)."""
+    result = AUTONOMOUS_TRAINING.submit_owner_feedback(
+        {
+            'id': x.id or '',
+            'instruction': x.instruction,
+            'response': x.response,
+            'approved': bool(x.approved),
+        }
+    )
+    OWNER.authorize('PLATFORM_LEARNING_FEEDBACK', f'{owner} queued feedback')
+    return result
+
+
+@app.get('/platform/training/datasets')
+def platform_training_datasets(owner: str = Depends(require_owner), limit: int = 50):
+    _ = owner
+    datasets = AUTONOMOUS_TRAINING.datasets.list_versions(limit=limit)
+    stats = AUTONOMOUS_TRAINING.learning_pipeline_gate.store.statistics()
+    return {
+        'datasets': datasets,
+        'candidate_statistics': {
+            'total_candidates': stats.get('total_candidates'),
+            'accepted_candidates': stats.get('accepted_candidates'),
+            'rejected_candidates': stats.get('rejected_candidates'),
+            'rejection_reasons': stats.get('rejection_reasons'),
+            'source_distribution': stats.get('source_distribution'),
+            'quality_distribution': stats.get('quality_distribution'),
+        },
+        'latest': datasets[0] if datasets else None,
     }
 
 
@@ -1709,16 +1836,10 @@ def platform_training_autonomous(x: AutonomousToggleBody, owner: str = Depends(r
 
 @app.post('/platform/training/tick')
 def platform_training_tick(owner: str = Depends(require_owner)):
-    """Owner-triggered autonomous tick (dataset/schedule triggers). Never chat-driven."""
+    """Owner-triggered autonomous tick (dataset/schedule/growth triggers). Never chat-driven."""
     result = AUTONOMOUS_TRAINING.maybe_run_autonomous_tick()
     OWNER.authorize('PLATFORM_TRAINING_TICK', f"{owner} tick status={result.get('status')}")
     return result
-
-
-@app.get('/platform/training/datasets')
-def platform_training_datasets(owner: str = Depends(require_owner), limit: int = 50):
-    _ = owner
-    return {'datasets': AUTONOMOUS_TRAINING.datasets.list_versions(limit=limit)}
 
 
 @app.get('/platform/training/models')

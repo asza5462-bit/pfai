@@ -1,4 +1,4 @@
-"""Training trigger evaluation."""
+"""Training trigger evaluation — never fires on individual chats."""
 from __future__ import annotations
 
 import os
@@ -14,6 +14,7 @@ class TrainingTriggerPolicy:
         *,
         enabled: bool | None = None,
         min_examples: int | None = None,
+        min_new_examples: int | None = None,
         schedule_seconds: int | None = None,
         max_runtime: int | None = None,
         max_resource_budget: int | None = None,
@@ -24,6 +25,11 @@ class TrainingTriggerPolicy:
             min_examples
             if min_examples is not None
             else os.environ.get("TRAINING_MIN_EXAMPLES", "5")
+        )
+        self.min_new_examples = int(
+            min_new_examples
+            if min_new_examples is not None
+            else os.environ.get("TRAINING_MIN_NEW_EXAMPLES", "10")
         )
         self.schedule_seconds = int(
             schedule_seconds
@@ -41,6 +47,7 @@ class TrainingTriggerPolicy:
             else os.environ.get("TRAINING_MAX_RESOURCE_BUDGET", "1")
         )
         self._last_scheduled_at = 0.0
+        self._last_dataset_accepted = 0
 
     def evaluate(
         self,
@@ -50,6 +57,7 @@ class TrainingTriggerPolicy:
         explicit_retrain: bool = False,
         regression_recovery: bool = False,
         performance_opportunity: bool = False,
+        new_since_last_dataset: int | None = None,
         now: float | None = None,
     ) -> dict[str, Any]:
         if not self.enabled:
@@ -66,6 +74,9 @@ class TrainingTriggerPolicy:
             triggers.append(TriggerKind.PERFORMANCE_OPPORTUNITY.value)
         if new_example_count >= self.min_examples:
             triggers.append(TriggerKind.MIN_EXAMPLES.value)
+        growth = int(new_since_last_dataset if new_since_last_dataset is not None else 0)
+        if growth >= self.min_new_examples:
+            triggers.append("dataset_growth")
         if self._last_scheduled_at and (now - self._last_scheduled_at) >= self.schedule_seconds:
             triggers.append(TriggerKind.SCHEDULED.value)
         elif not self._last_scheduled_at:
@@ -76,10 +87,15 @@ class TrainingTriggerPolicy:
             "should_train": should,
             "triggers": triggers,
             "min_examples": self.min_examples,
+            "min_new_examples": self.min_new_examples,
             "new_example_count": new_example_count,
+            "new_since_last_dataset": growth,
             "max_runtime": self.max_runtime,
             "max_resource_budget": self.max_resource_budget,
         }
 
     def mark_scheduled(self, now: float | None = None) -> None:
         self._last_scheduled_at = time.time() if now is None else now
+
+    def mark_dataset_baseline(self, accepted_total: int) -> None:
+        self._last_dataset_accepted = int(accepted_total)

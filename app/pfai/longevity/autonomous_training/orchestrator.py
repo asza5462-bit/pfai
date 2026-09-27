@@ -19,7 +19,17 @@ from .dataset import DatasetBuilder, DatasetVersionRegistry
 from .dataset_quality import DatasetQualityGate
 from .evaluation_gate import EvaluationGate
 from .isolation import TrainingSafetyIsolation
+from .learning_candidate import LearningCandidatePipeline
 from .model_registry import ModelRegistry
+from .observation_sources import (
+    observe_approved_seeds,
+    observe_coding_passes,
+    observe_corrected_failures,
+    observe_durable_learning,
+    observe_evaluation_lessons,
+    observe_owner_feedback,
+    observe_tool_skill_outcomes,
+)
 from .resources import TrainingResourceManager
 from .rollback import ModelRollbackManager
 from .runtime import detect_runtime_capabilities
@@ -75,6 +85,9 @@ class AutonomousTrainingOrchestrator:
         self.resources = TrainingResourceManager(self.detector)
         self.dataset_quality = DatasetQualityGate()
         self.canary = CanaryController()
+        self.learning_pipeline_gate = LearningCandidatePipeline(
+            str(self.root / "candidates")
+        )
         self._lock = threading.RLock()
         env_mock = (os.environ.get("TRAINING_ALLOW_MOCK") or "").lower() in ("1", "true", "yes")
         self.allow_mock_backend = env_mock if allow_mock_backend is None else bool(allow_mock_backend)
@@ -91,14 +104,71 @@ class AutonomousTrainingOrchestrator:
             "yes",
         )
         self.include_approved_seeds = env_seeds if include_approved_seeds is None else bool(include_approved_seeds)
+        self._owner_feedback_buffer: list[dict[str, Any]] = []
+        self._tool_outcome_buffer: list[dict[str, Any]] = []
+        self._correction_buffer: list[dict[str, Any]] = []
+        self._last_training_result: dict[str, Any] = {}
+        self._last_rollback_result: dict[str, Any] = {}
         self._ensure_default_sources()
+        self._register_learning_observers()
         self._state = self._load_state()
+        if isinstance(self._state.get("last_training_result"), dict):
+            self._last_training_result = dict(self._state["last_training_result"])
+        if isinstance(self._state.get("last_rollback_result"), dict):
+            self._last_rollback_result = dict(self._state["last_rollback_result"])
+        if self._state.get("last_dataset_accepted_baseline") is not None:
+            try:
+                self.triggers.mark_dataset_baseline(int(self._state["last_dataset_accepted_baseline"]))
+            except Exception:
+                pass
         self.reconcile_stale_jobs()
         # Safe reload of active pointer after restart
         try:
             self.active_runtime.reload()
         except Exception:
             pass
+
+    def _record_training_result(self, result: dict[str, Any]) -> dict[str, Any]:
+        """Persist a sanitized last-training summary (never stores example payloads)."""
+        summary = {
+            "ok": bool(result.get("ok")),
+            "status": result.get("status") or result.get("error"),
+            "job_id": (result.get("job") or {}).get("job_id") or result.get("job_id"),
+            "dataset_id": (result.get("job") or {}).get("dataset_id") or result.get("dataset_id"),
+            "model_id": (result.get("job") or {}).get("model_id") or result.get("model_id"),
+            "real_training_executed": bool(
+                result.get("real_training_executed") or result.get("actual_training_executed")
+            ),
+            "real_checkpoint_created": bool(result.get("real_checkpoint_created")),
+            "real_evaluation_executed": bool(result.get("real_evaluation_executed")),
+            "canary_executed": bool(result.get("canary_executed")),
+            "model_activated": bool(result.get("model_activated")),
+            "lkg_preserved": bool(result.get("lkg_preserved", True)),
+            "lkg_model_id": result.get("lkg_model_id"),
+            "rollback_available": bool(result.get("rollback_available")),
+            "error": result.get("error") or result.get("reason"),
+            "at": time.time(),
+        }
+        self._last_training_result = summary
+        self._state["last_training_result"] = summary
+        self._save_state()
+        return summary
+
+    def _record_rollback_result(self, result: dict[str, Any]) -> dict[str, Any]:
+        summary = {
+            "ok": bool(result.get("ok")),
+            "action": result.get("action") or "rollback",
+            "reason": result.get("reason")
+            or (result.get("rollback") or {}).get("reason")
+            or result.get("error"),
+            "restored_model_id": result.get("restored_model_id")
+            or (result.get("rollback") or {}).get("restored_model_id"),
+            "at": time.time(),
+        }
+        self._last_rollback_result = summary
+        self._state["last_rollback_result"] = summary
+        self._save_state()
+        return summary
 
     def _ensure_default_sources(self) -> None:
         if "durable_learning" not in getattr(self.collector, "_sources", {}):
@@ -110,6 +180,32 @@ class AutonomousTrainingOrchestrator:
             from .experience_seeds import approved_pfai_seed_examples
 
             self.collector.register("approved_seed", approved_pfai_seed_examples)
+
+    def _register_learning_observers(self) -> None:
+        pipe = self.learning_pipeline_gate
+        if self.include_approved_seeds:
+            pipe.register_observer("approved_seed", observe_approved_seeds)
+        pipe.register_observer(
+            "durable_learning",
+            lambda: observe_durable_learning(self.learning_pipeline),
+        )
+        pipe.register_observer("coding_passed", lambda: observe_coding_passes(None))
+        pipe.register_observer(
+            "evaluation",
+            lambda: observe_evaluation_lessons(getattr(self.gates, "eval_runner", None)),
+        )
+        pipe.register_observer(
+            "owner_feedback",
+            lambda: observe_owner_feedback(list(self._owner_feedback_buffer)),
+        )
+        pipe.register_observer(
+            "tool_skill",
+            lambda: observe_tool_skill_outcomes(list(self._tool_outcome_buffer)),
+        )
+        pipe.register_observer(
+            "corrected_failure",
+            lambda: observe_corrected_failures(list(self._correction_buffer)),
+        )
 
     def _load_state(self) -> dict[str, Any]:
         if self.state_path.exists():
@@ -255,6 +351,13 @@ class AutonomousTrainingOrchestrator:
             ),
             "open_weight_selection": None,  # filled by API when requested
             "resource_status": self.resources.admit(dataset_rows=0, method="lora", running_jobs=0),
+            "learning_statistics": {
+                k: v
+                for k, v in (self.learning_pipeline_gate.store.statistics() or {}).items()
+                if k != "accepted_rows"
+            },
+            "last_training_result": dict(self._last_training_result or {}),
+            "last_rollback_result": dict(self._last_rollback_result or {}),
             "autonomous_training_enabled": self.autonomous_enabled,
             "paused": bool(self._state.get("paused")),
             "authority_isolation": True,
@@ -341,20 +444,120 @@ class AutonomousTrainingOrchestrator:
         self._save_state()
         return {"ok": True, "autonomous_training_enabled": self.autonomous_enabled}
 
+    def submit_owner_feedback(self, item: dict[str, Any]) -> dict[str, Any]:
+        """Queue owner-approved feedback for the next candidate collect (not immediate train)."""
+        row = dict(item or {})
+        row["approved"] = True
+        self._owner_feedback_buffer.append(row)
+        self.audit.record("owner_feedback_queued", source_id=str(row.get("id") or ""))
+        return {"ok": True, "queued": len(self._owner_feedback_buffer)}
+
+    def submit_tool_outcome(self, item: dict[str, Any]) -> dict[str, Any]:
+        row = dict(item or {})
+        for bad in ("secret", "token", "password", "otp", "cookie", "api_key"):
+            row.pop(bad, None)
+        self._tool_outcome_buffer.append(row)
+        return {"ok": True, "queued": len(self._tool_outcome_buffer)}
+
+    def submit_correction(self, item: dict[str, Any]) -> dict[str, Any]:
+        row = dict(item or {})
+        row["corrected"] = True
+        self._correction_buffer.append(row)
+        return {"ok": True, "queued": len(self._correction_buffer)}
+
+    def run_learning_candidate_pass(self) -> dict[str, Any]:
+        """OBSERVATION→sanitize→…→ACCEPTED without training."""
+        result = self.learning_pipeline_gate.collect_and_process()
+        raw = self.collector.collect()
+        extra_accepted = 0
+        for row in raw:
+            rec = self.learning_pipeline_gate.process_observation(row)
+            if rec.eligibility == "accepted":
+                extra_accepted += 1
+                result.setdefault("accepted_rows", []).append(rec.to_training_row())
+            else:
+                result["rejected_this_run"] = int(result.get("rejected_this_run") or 0) + 1
+                if rec.rejection_reason == "duplicate":
+                    result["duplicates_this_run"] = int(result.get("duplicates_this_run") or 0) + 1
+        result["accepted_this_run"] = int(result.get("accepted_this_run") or 0) + extra_accepted
+        result["observed"] = int(result.get("observed") or 0) + len(raw)
+        result["store_statistics"] = self.learning_pipeline_gate.store.statistics()
+        self._owner_feedback_buffer.clear()
+        self._tool_outcome_buffer.clear()
+        self._correction_buffer.clear()
+        self.audit.record(
+            "learning_candidate_pass",
+            observed=result.get("observed"),
+            accepted=result.get("accepted_this_run"),
+            rejected=result.get("rejected_this_run"),
+        )
+        return result
+
+    def learning_statistics(self) -> dict[str, Any]:
+        stats = self.learning_pipeline_gate.store.statistics()
+        datasets = self.datasets.list_versions(limit=20)
+        latest = datasets[0] if datasets else None
+        caps = detect_runtime_capabilities(probe_inference=False)
+        return {
+            "ok": True,
+            "candidates": stats,
+            "dataset_versions": datasets,
+            "latest_dataset": latest,
+            "last_candidate_pass": self.learning_pipeline_gate.last_run_summary(),
+            "training_available": bool(caps.get("training_available")),
+            "gpu_available": bool(caps.get("gpu_available")),
+            "active_model": self.models.active(),
+            "lkg_model": self.models.last_known_good(),
+            "last_training_result": dict(self._last_training_result or {}),
+            "last_rollback_result": dict(self._last_rollback_result or {}),
+            "note": "Candidate stats never include secret payloads; responses are sanitized.",
+        }
+
     def build_dataset_from_sources(self, *, sources: list[str] | None = None) -> dict[str, Any]:
-        rows = self.collector.collect(sources=sources)
-        quality = self.dataset_quality.evaluate(rows)
+        pass_result = self.run_learning_candidate_pass()
+        rows = list(pass_result.get("accepted_rows") or [])
+        stored = self.learning_pipeline_gate.accepted_training_rows(limit=10000)
+        seen: set[str] = set()
+        merged: list[dict[str, Any]] = []
+        for r in stored + rows:
+            key = (r.get("instruction") or "") + "\0" + (r.get("response") or "")
+            if key in seen:
+                continue
+            seen.add(key)
+            merged.append(r)
+        if sources:
+            allowed = set(sources)
+            merged = [r for r in merged if r.get("source") in allowed]
+
+        prev_baseline = int(getattr(self.triggers, "_last_dataset_accepted", 0) or 0)
+        quality = self.dataset_quality.evaluate(merged)
         if not quality.get("ok"):
             return {
                 "ok": False,
                 "error": quality.get("status") or "INSUFFICIENT_DATA",
                 "quality": quality,
                 "built": quality.get("built"),
+                "new_since_last_dataset": max(
+                    0, int(pass_result.get("accepted_this_run") or 0)
+                ),
+                "candidate_pass": {
+                    k: pass_result.get(k)
+                    for k in (
+                        "observed",
+                        "accepted_this_run",
+                        "rejected_this_run",
+                        "duplicates_this_run",
+                    )
+                },
             }
         built = quality["built"]
+        accepted_n = int(quality["accepted"])
+        new_since = max(0, accepted_n - prev_baseline)
+        if new_since == 0 and int(pass_result.get("accepted_this_run") or 0) > 0:
+            new_since = int(pass_result.get("accepted_this_run") or 0)
         quality_report = {
-            "total_input": len(rows),
-            "accepted": quality["accepted"],
+            "total_input": len(merged),
+            "accepted": accepted_n,
             "rejected": quality["rejected"],
             "avg_quality": quality["avg_quality"],
             "min_required": quality["min_avg_quality"],
@@ -363,8 +566,16 @@ class AutonomousTrainingOrchestrator:
             "validation": quality["splits"]["validation"],
             "test": quality["splits"]["test"],
             "provenance_ok": quality["provenance_ok"],
+            "leakage_hashes": quality.get("leakage_hashes") or [],
             "quality_note": quality["quality_note"],
             "model_quality_claim": False,
+            "candidate_stats": pass_result.get("store_statistics"),
+            "source_distribution": (pass_result.get("store_statistics") or {}).get(
+                "source_distribution"
+            ),
+            "rejection_reasons": (pass_result.get("store_statistics") or {}).get(
+                "rejection_reasons"
+            ),
         }
         parent = None
         versions = self.datasets.list_versions(limit=1)
@@ -373,10 +584,21 @@ class AutonomousTrainingOrchestrator:
         manifest = self.datasets.create_version(
             built,
             parent_dataset=parent,
-            meta={"sources": sources or list(self.collector._sources.keys()), "quality": quality_report},
+            meta={
+                "sources": sources
+                or (
+                    list(self.collector._sources.keys())
+                    + list(self.learning_pipeline_gate._observers.keys())
+                ),
+                "quality": quality_report,
+            },
         )
-        self.audit.record("dataset_created", dataset_id=manifest["dataset_id"], counts=manifest.get("validation_results"))
+        self.audit.record(
+            "dataset_created", dataset_id=manifest["dataset_id"], counts=manifest.get("validation_results")
+        )
         self._state["last_dataset_id"] = manifest["dataset_id"]
+        self.triggers.mark_dataset_baseline(accepted_n)
+        self._state["last_dataset_accepted_baseline"] = accepted_n
         self._save_state()
         return {
             "ok": True,
@@ -384,6 +606,17 @@ class AutonomousTrainingOrchestrator:
             "accepted": built["accepted"],
             "rejected": built["rejected"],
             "quality": quality_report,
+            "new_since_last_dataset": new_since,
+            "dataset_versions": self.datasets.list_versions(limit=20),
+            "candidate_pass": {
+                k: pass_result.get(k)
+                for k in (
+                    "observed",
+                    "accepted_this_run",
+                    "rejected_this_run",
+                    "duplicates_this_run",
+                )
+            },
         }
 
     def run_cycle(
@@ -729,7 +962,7 @@ class AutonomousTrainingOrchestrator:
             self._state["phase"] = "rejected"
             self._state["cycles"] = int(self._state.get("cycles") or 0) + 1
             self._save_state()
-            return {
+            out = {
                 "ok": False,
                 "status": "REJECTED",
                 "job": job,
@@ -743,6 +976,8 @@ class AutonomousTrainingOrchestrator:
                 "lkg_preserved": True,
                 "lkg_model_id": (lkg or {}).get("model_id"),
             }
+            self._record_training_result(out)
+            return out
 
         self.models.update_status(model["model_id"], ModelStatus.VALIDATED, evaluation=eval_report)
 
@@ -838,7 +1073,7 @@ class AutonomousTrainingOrchestrator:
         self._state["cycles"] = int(self._state.get("cycles") or 0) + 1
         self._save_state()
         lkg_now = self.models.last_known_good()
-        return {
+        out = {
             "ok": True,
             "status": job["state"],
             "job": job,
@@ -862,6 +1097,8 @@ class AutonomousTrainingOrchestrator:
             "production_scale_training": False,
             "quality_note": "Bounded/tiny runs prove the pipeline — not production model quality.",
         }
+        self._record_training_result(out)
+        return out
 
     def activate_model(self, model_id: str) -> dict[str, Any]:
         model = self.models.get(model_id)
@@ -925,9 +1162,10 @@ class AutonomousTrainingOrchestrator:
         )
 
     def maybe_run_autonomous_tick(self) -> dict[str, Any]:
-        """Safe autonomous trigger — NEVER runs on chat messages.
+        """Safe autonomous loop — NEVER runs on chat messages.
 
-        Collect → quality gate → trigger policy → optional cycle.
+        collect → clean → evaluate → version dataset → decide → optional train
+        → evaluate → canary → activate or rollback → record.
         """
         if not self.autonomous_enabled:
             return {"ok": False, "status": "AUTONOMOUS_DISABLED", "trained": False}
@@ -937,11 +1175,36 @@ class AutonomousTrainingOrchestrator:
         # Monitor active model health first
         monitor = self.monitor_and_maybe_rollback(force_regression=False)
         if monitor.get("action") == "rollback":
-            return {"ok": bool(monitor.get("ok")), "status": "ROLLED_BACK", "trained": False, "monitor": monitor}
-        rows = self.collector.collect()
-        quality = self.dataset_quality.evaluate(rows)
+            self._record_rollback_result(monitor)
+            return {
+                "ok": bool(monitor.get("ok")),
+                "status": "ROLLED_BACK",
+                "trained": False,
+                "monitor": monitor,
+                "last_rollback_result": dict(self._last_rollback_result or {}),
+            }
+
+        # LearningCandidate pass + dataset version only if quality gate passes
+        built = self.build_dataset_from_sources()
+        if not built.get("ok"):
+            return {
+                "ok": False,
+                "status": built.get("error") or "INSUFFICIENT_DATA",
+                "trained": False,
+                "quality": {
+                    k: (built.get("quality") or {}).get(k)
+                    for k in ("accepted", "reasons", "quality_note", "status")
+                },
+                "candidate_pass": built.get("candidate_pass"),
+                "new_since_last_dataset": built.get("new_since_last_dataset"),
+                "note": "Quality gate failed — no dataset version created, no training.",
+            }
+
+        accepted = int(built.get("accepted") or 0)
+        growth = int(built.get("new_since_last_dataset") or 0)
         decision = self.triggers.evaluate(
-            new_example_count=int(quality.get("accepted") or 0),
+            new_example_count=accepted,
+            new_since_last_dataset=growth,
             owner_requested=False,
             explicit_retrain=False,
             regression_recovery=False,
@@ -953,17 +1216,47 @@ class AutonomousTrainingOrchestrator:
                 "status": "TRIGGER_NOT_MET",
                 "trained": False,
                 "trigger": decision,
-                "quality_status": quality.get("status"),
-                "note": "Autonomous tick does not train on chat; waits for dataset/schedule/eval triggers.",
+                "dataset_id": (built.get("manifest") or {}).get("dataset_id"),
+                "quality_status": "DATASET_READY",
+                "accepted": accepted,
+                "new_since_last_dataset": growth,
+                "candidate_pass": built.get("candidate_pass"),
+                "note": (
+                    "Autonomous tick collected/versioned data but did not train; "
+                    "waits for growth/schedule/eval triggers — never per-chat."
+                ),
             }
-        if not quality.get("ok"):
-            return {
-                "ok": False,
-                "status": quality.get("status") or "INSUFFICIENT_DATA",
-                "trained": False,
-                "quality": {k: quality.get(k) for k in ("accepted", "reasons", "quality_note")},
-            }
-        return self.run_cycle(owner_requested=False, activate_if_pass=True)
+
+        # Train against the freshly versioned dataset (no second collect)
+        cycle = self.run_cycle(
+            owner_requested=False,
+            activate_if_pass=True,
+            force_dataset=(built.get("manifest") or {}).get("dataset_id"),
+        )
+        self._record_training_result(cycle)
+        return {
+            "ok": bool(cycle.get("ok")),
+            "status": cycle.get("status"),
+            "trained": bool(
+                cycle.get("real_training_executed") or cycle.get("actual_training_executed")
+            ),
+            "trigger": decision,
+            "dataset_id": (built.get("manifest") or {}).get("dataset_id"),
+            "cycle": {
+                k: cycle.get(k)
+                for k in (
+                    "ok",
+                    "status",
+                    "job",
+                    "real_training_executed",
+                    "model_activated",
+                    "rollback_available",
+                    "lkg_model_id",
+                    "error",
+                )
+            },
+            "last_training_result": dict(self._last_training_result or {}),
+        }
 
     def monitor_and_maybe_rollback(self, *, force_regression: bool = False) -> dict[str, Any]:
         active = self.models.active()
@@ -982,5 +1275,14 @@ class AutonomousTrainingOrchestrator:
                 reason="post_activation_regression",
                 restored=rb.get("restored_model_id"),
             )
-            return {"ok": rb.get("ok"), "action": "rollback", "monitor": report, "rollback": rb}
+            out = {
+                "ok": rb.get("ok"),
+                "action": "rollback",
+                "reason": "post_activation_regression",
+                "monitor": report,
+                "rollback": rb,
+                "restored_model_id": rb.get("restored_model_id"),
+            }
+            self._record_rollback_result(out)
+            return out
         return {"ok": True, "action": "healthy", "monitor": report}
