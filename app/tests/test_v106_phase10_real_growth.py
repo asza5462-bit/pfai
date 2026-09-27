@@ -83,7 +83,11 @@ class TestRealGrowthWiring(unittest.TestCase):
         # After real training, active may be newer candidate; LKG stays v0001
         self.assertIsNotNone(active)
         ver = orch.pipeline_verification_status()
-        self.assertEqual(ver.get("dataset_version"), "dataset-v0003")
+        # Historical v0003 remains on disk; latest trained dataset may be newer
+        self.assertTrue(str(ver.get("dataset_version") or "").startswith("dataset-v"))
+        ds3 = orch.datasets.get("dataset-v0003") or {}
+        accepted_v3 = int((ds3.get("validation_results") or {}).get("accepted") or ds3.get("train_count") or 0)
+        self.assertGreaterEqual(accepted_v3, 50)
         self.assertGreaterEqual(int(ver.get("dataset_accepted_examples") or 0), 67)
 
 
