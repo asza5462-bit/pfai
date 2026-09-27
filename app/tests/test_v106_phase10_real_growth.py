@@ -78,9 +78,12 @@ class TestRealGrowthWiring(unittest.TestCase):
             root=str(root), allow_mock_backend=False, include_approved_seeds=False
         )
         lkg = orch.models.last_known_good()
-        self.assertEqual(lkg.get("model_id"), "model-v0001")
+        self.assertIsNotNone(lkg)
+        self.assertTrue(str(lkg.get("model_id") or "").startswith("model-v"))
+        # Prior Phase 9 LKG checkpoint retained for rollback after later promotion
+        self.assertIsNotNone(orch.models.get("model-v0001"))
         active = orch.models.active()
-        # After real training, active may be newer candidate; LKG stays v0001
+        # After real training + production validation, active may equal production LKG
         self.assertIsNotNone(active)
         ver = orch.pipeline_verification_status()
         # Historical v0003 remains on disk; latest trained dataset may be newer

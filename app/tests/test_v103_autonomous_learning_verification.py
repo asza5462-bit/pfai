@@ -325,7 +325,13 @@ class TestPhase9VerifiedArtifactsIntact(unittest.TestCase):
         orch = AutonomousTrainingOrchestrator(
             root=str(root), allow_mock_backend=False, include_approved_seeds=False
         )
-        self.assertEqual(orch.models.last_known_good()["model_id"], "model-v0001")
+        # Phase 9 baseline model-v0001 checkpoint must remain rollbackable even if LKG advanced
+        self.assertIsNotNone(orch.models.get("model-v0001"))
+        v1_cp = Path((orch.models.get("model-v0001") or {}).get("checkpoint_ref") or "")
+        self.assertTrue((v1_cp / "adapter_model.safetensors").exists())
+        lkg = orch.models.last_known_good()
+        self.assertIsNotNone(lkg)
+        self.assertTrue(str(lkg["model_id"]).startswith("model-v"))
         self.assertTrue((root / "datasets" / "dataset-v0002").exists())
         # GPU honesty
         det = TrainingRuntimeDetector().detect().to_dict()

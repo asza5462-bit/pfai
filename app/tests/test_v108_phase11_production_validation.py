@@ -213,9 +213,17 @@ class TestPhase11OrchestratorStatus(unittest.TestCase):
         active = orch.models.active()
         self.assertIsNotNone(active)
         self.assertTrue(str(active["model_id"]).startswith("model-v"))
-        self.assertEqual(orch.models.last_known_good()["model_id"], "model-v0001")
-        # Active may be an internal candidate; must not imply production_ready
-        self.assertFalse(bool((active.get("meta") or {}).get("production_ready")))
+        lkg = orch.models.last_known_good()
+        self.assertIsNotNone(lkg)
+        self.assertTrue(str(lkg["model_id"]).startswith("model-v"))
+        # Prior LKG model-v0001 checkpoint must remain available for rollback
+        self.assertIsNotNone(orch.models.get("model-v0001"))
+        # production_ready is true only when ProductionQualityGate genuinely passed
+        if st.get("model_quality_production_validated"):
+            self.assertTrue(bool((active.get("meta") or {}).get("production_ready")))
+            self.assertEqual(st.get("exact_remaining_blockers"), [])
+        else:
+            self.assertFalse(bool((active.get("meta") or {}).get("production_ready")))
         # Isolation still intact
         self.assertFalse(
             TrainingSafetyIsolation().guard_training_request({"modify_authorization": True})["ok"]

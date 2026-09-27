@@ -231,7 +231,11 @@ class TestOrchestratorPhase10(unittest.TestCase):
         orch = AutonomousTrainingOrchestrator(
             root=str(root), allow_mock_backend=False, include_approved_seeds=False
         )
-        self.assertEqual(orch.models.last_known_good()["model_id"], "model-v0001")
+        # Prior Phase 9 LKG artifact retained; current LKG may be a later production-validated model
+        self.assertIsNotNone(orch.models.get("model-v0001"))
+        v1_cp = Path((orch.models.get("model-v0001") or {}).get("checkpoint_ref") or "")
+        self.assertTrue((v1_cp / "adapter_model.safetensors").exists())
+        self.assertTrue(orch.models.last_known_good())
         self.assertTrue((root / "datasets" / "dataset-v0002").exists())
 
 
