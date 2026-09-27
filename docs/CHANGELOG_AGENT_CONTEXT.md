@@ -14,7 +14,9 @@
 - Core remains runnable without Anthropic; safe learning forbids weight mutation
 
 ### Verified
-- (fill after pytest + smoke)
+- pytest: **319 passed**
+- Live `/health` + Dashboard `/` 200
+- No API/Dashboard wiring changes
 
 ## 2026-09-27 — PHASE 1: Orchestrator platform interfaces
 

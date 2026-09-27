@@ -20,8 +20,8 @@ Last updated: 2026-09-27 (Longevity Architecture Foundation PHASE 1)
 
 ## Verification
 
-- pytest: (update after run)
-- Live smoke: (update after run)
+- pytest: 319 passed
+- Live smoke: `/health` + Dashboard `/` OK
 
 ## Operator secrets (platform only)
 
