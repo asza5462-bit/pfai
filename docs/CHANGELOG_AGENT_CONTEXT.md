@@ -1,5 +1,27 @@
 # Agent Context Changelog
 
+## 2026-09-27 — Longevity PHASE 5: Email OTP / Local providers / Migration audit
+
+### Added
+- `email_provider.py` — EmailProvider, SMTPEmailProvider, MockEmailProvider
+- Owner Email OTP request/verify in `owner_auth.py` + `/owner/otp/request|verify`
+- Dashboard OTP UI (no OTP in localStorage)
+- `model_local.py` — LocalModelProvider / OpenWeightModelProvider + env settings
+- MigrationRunner audit + verify + rollback_one; platform schema verify helper
+- Tests `test_v96_phase5_otp_providers.py`; ADR-025
+
+### Behavior
+- Passcode login + session cookie + X-Owner-Secret preserved
+- Authz/planner/skills/heal unchanged and still owner-gated
+- Local/open_weight are real adapters; runtime connectivity reported honestly
+- Learning: no weight mutation; coding/orchestrator wiring preserved
+- Dev schema apply: 1 → 3 with backup (this environment only — not a production claim)
+
+### Verified
+- Targeted PHASE 5 tests: 21 passed
+- Full suite + smoke: see PHASE 5 report
+- No deploy; no secrets exposed; no weight training
+
 ## 2026-09-27 — Longevity PHASE 4: Planner / Authz / Skills / Heal
 
 ### Added

@@ -45,6 +45,14 @@ def _upgrade_v2_longevity_foundation(conn: Any) -> None:
     _ = conn
 
 
+def _downgrade_v2_longevity_foundation(conn: Any) -> None:
+    """Best-effort reverse: remove phase marker only (keep data tables for safety)."""
+    marker = Path("data/longevity/.phase3")
+    if marker.exists():
+        marker.unlink()
+    _ = conn
+
+
 def _upgrade_v3_skill_tool_versions(conn: Any) -> None:
     """PHASE 4: durable skill version metadata + authz/heal audit dirs."""
     root = Path("data/longevity")
@@ -84,17 +92,46 @@ def _upgrade_v3_skill_tool_versions(conn: Any) -> None:
     _ = conn
 
 
+def _downgrade_v3_skill_tool_versions(conn: Any) -> None:
+    """Best-effort reverse: remove phase marker only (tables retained)."""
+    marker = Path("data/longevity/.phase4")
+    if marker.exists():
+        marker.unlink()
+    _ = conn
+
+
+def verify_platform_schema(current: int) -> dict[str, Any]:
+    """Integrity checks used by MigrationRunner after apply."""
+    root = Path("data/longevity")
+    checks: dict[str, Any] = {"ok": True, "current": current}
+    if current >= 2:
+        db = root / "ltm_versions.sqlite3"
+        checks["ltm_versions_db"] = db.exists()
+        if not db.exists():
+            checks["ok"] = False
+            checks["error"] = "ltm_versions.sqlite3 missing"
+    if current >= 3:
+        db = root / "skill_versions.sqlite3"
+        checks["skill_versions_db"] = db.exists()
+        if not db.exists():
+            checks["ok"] = False
+            checks["error"] = "skill_versions.sqlite3 missing"
+    return checks
+
+
 PLATFORM_MIGRATIONS: list[Migration] = [
     Migration(
         version=2,
         name="longevity_ltm_foundation",
         upgrade=_upgrade_v2_longevity_foundation,
+        downgrade=_downgrade_v2_longevity_foundation,
         description="PHASE 3: durable LTM versions table + longevity data root",
     ),
     Migration(
         version=3,
         name="skill_tool_versioning",
         upgrade=_upgrade_v3_skill_tool_versions,
+        downgrade=_downgrade_v3_skill_tool_versions,
         description="PHASE 4: skill version tables + planner/heal durability markers",
     ),
 ]

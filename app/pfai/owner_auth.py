@@ -1,7 +1,7 @@
-"""Owner authentication: setup, sessions, rate-limit, lockout.
+"""Owner authentication: setup, sessions, rate-limit, lockout, Email OTP.
 
 Integrates with OwnerControl — does not replace it.
-Never stores or logs plaintext passcodes. Never returns hashes to clients
+Never stores or logs plaintext passcodes or OTPs. Never returns hashes/OTPs to clients
 except via operator-side tooling that hashes stdin locally.
 """
 from __future__ import annotations
@@ -16,12 +16,15 @@ import time
 from pathlib import Path
 from typing import Any
 
+from .email_provider import EmailMessageSpec, EmailProvider, email_provider_from_env
 from .owner_control import OwnerControl
 
 COOKIE_NAME = "pfai_owner_session"
 AUTH_FAIL_MESSAGE = "authentication failed"
 SETUP_DISABLED_MESSAGE = "owner setup is disabled"
 WEAK_PASS_MESSAGE = "passcode does not meet strength requirements"
+OTP_SENT_MESSAGE = "If the email is authorized, a verification code was sent."
+OTP_FAIL_MESSAGE = "authentication failed"
 
 # Tunables (override via env for ops, not secrets)
 DEFAULT_SESSION_TTL = int(os.environ.get("PFAI_OWNER_SESSION_TTL", "28800"))  # 8h
@@ -30,6 +33,12 @@ MAX_FAILURES = int(os.environ.get("PFAI_OWNER_MAX_FAILURES", "5"))
 LOCKOUT_SECONDS = int(os.environ.get("PFAI_OWNER_LOCKOUT_SECONDS", "900"))
 PBKDF2_ITERATIONS = int(os.environ.get("PFAI_OWNER_PBKDF2_ITERATIONS", "260000"))
 MIN_PASSCODE_LEN = int(os.environ.get("PFAI_OWNER_MIN_PASSCODE_LEN", "12"))
+OTP_TTL_SECONDS = int(os.environ.get("PFAI_OTP_TTL_SECONDS", "300"))
+OTP_LENGTH = int(os.environ.get("PFAI_OTP_LENGTH", "6"))
+OTP_MAX_ATTEMPTS = int(os.environ.get("PFAI_OTP_MAX_ATTEMPTS", "5"))
+OTP_RESEND_COOLDOWN = int(os.environ.get("PFAI_OTP_RESEND_COOLDOWN", "60"))
+OTP_MAX_REQUESTS_PER_HOUR = int(os.environ.get("PFAI_OTP_MAX_REQUESTS_PER_HOUR", "10"))
+OTP_HASH_ITERATIONS = int(os.environ.get("PFAI_OTP_HASH_ITERATIONS", "120000"))
 
 
 class OwnerAuthService:
@@ -40,6 +49,7 @@ class OwnerAuthService:
         root: str = "data/security",
         session_ttl: int = DEFAULT_SESSION_TTL,
         session_abs_max: int = DEFAULT_SESSION_ABS_MAX,
+        email_provider: EmailProvider | None = None,
     ) -> None:
         self.owner = owner
         self.root = Path(root)
@@ -48,8 +58,10 @@ class OwnerAuthService:
         self.setup_lock_path = self.root / "owner_setup.lock"
         self.sessions_path = self.root / "owner_sessions.json"
         self.rate_path = self.root / "owner_auth_rate.json"
+        self.otp_path = self.root / "owner_otp_challenges.json"
         self.session_ttl = int(session_ttl)
         self.session_abs_max = int(session_abs_max)
+        self.email_provider = email_provider or email_provider_from_env()
         self._lock = threading.RLock()
         self._hydrate_env_from_store()
 
@@ -63,8 +75,19 @@ class OwnerAuthService:
             "email": email if authenticated else "",
             "session_ttl_seconds": self.session_ttl,
             "session_abs_max_seconds": self.session_abs_max,
-            "auth_methods": ["session_cookie", "x_owner_secret_header"],
-            "note": "Passcodes are never returned. Prefer a new production passcode before any deploy.",
+            "auth_methods": [
+                "email_otp",
+                "passcode",
+                "session_cookie",
+                "x_owner_secret_header",
+            ],
+            "otp": {
+                "ttl_seconds": OTP_TTL_SECONDS,
+                "length": OTP_LENGTH,
+                "resend_cooldown_seconds": OTP_RESEND_COOLDOWN,
+                "email_provider": type(self.email_provider).__name__,
+            },
+            "note": "Passcodes and OTPs are never returned. Prefer a new production passcode before any deploy.",
         }
 
     def setup_required(self) -> bool:
@@ -223,6 +246,210 @@ class OwnerAuthService:
         if not stored or not presented_secret:
             return False
         return self.verify_passcode(presented_secret, stored)
+
+    # --- Email OTP -----------------------------------------------------
+    @staticmethod
+    def generate_otp(*, length: int | None = None) -> str:
+        n = int(length or OTP_LENGTH)
+        n = max(4, min(12, n))
+        # Cryptographically secure decimal OTP (leading zeros preserved).
+        upper = 10**n
+        return f"{secrets.randbelow(upper):0{n}d}"
+
+    @staticmethod
+    def hash_otp(otp: str, *, salt: bytes | None = None, iterations: int = OTP_HASH_ITERATIONS) -> str:
+        salt = salt or secrets.token_bytes(16)
+        dk = hashlib.pbkdf2_hmac("sha256", otp.encode("utf-8"), salt, int(iterations))
+        return f"pbkdf2_sha256${int(iterations)}${salt.hex()}${dk.hex()}"
+
+    @staticmethod
+    def verify_otp_hash(otp: str, stored: str) -> bool:
+        if not otp or not stored or not stored.startswith("pbkdf2_sha256$"):
+            return False
+        try:
+            _, iters_s, salt_hex, hash_hex = stored.split("$", 3)
+            salt = bytes.fromhex(salt_hex)
+            dk = hashlib.pbkdf2_hmac("sha256", otp.encode("utf-8"), salt, int(iters_s))
+            return hmac.compare_digest(dk.hex(), hash_hex)
+        except Exception:
+            return False
+
+    def request_otp(self, email: str, *, client_key: str) -> dict[str, Any]:
+        """Issue an OTP challenge. Enumeration-resistant uniform response."""
+        email = (email or "").strip().lower()
+        client_key = (client_key or "unknown")[:128]
+        now = time.time()
+        challenge_id = secrets.token_urlsafe(24)
+        expires_in = OTP_TTL_SECONDS
+
+        # Uniform outer shape even when locked / rate-limited / wrong email.
+        uniform = {
+            "ok": True,
+            "challenge_id": challenge_id,
+            "expires_in": expires_in,
+            "message": OTP_SENT_MESSAGE,
+        }
+
+        if self._is_locked(client_key):
+            self.owner._audit("OTP_REQUEST_LOCKED", {"client": client_key})
+            return {**uniform, "locked": True}
+
+        if not self._otp_request_allowed(client_key, now):
+            self.owner._audit("OTP_REQUEST_RATE_LIMITED", {"client": client_key})
+            return uniform
+
+        configured_email = (self.owner.owner_email() or "").strip().lower()
+        email_ok = bool(
+            configured_email
+            and email
+            and self.owner_configured()
+            and hmac.compare_digest(email, configured_email)
+        )
+
+        # Always persist a challenge so timing/shape stay similar; only real
+        # challenges get a usable code hash + email send.
+        otp_plain = self.generate_otp() if email_ok else None
+        code_hash = self.hash_otp(otp_plain) if otp_plain else self.hash_otp(secrets.token_hex(8))
+
+        with self._lock:
+            state = self._load_json(self.otp_path, {"challenges": {}, "request_rate": {}})
+            challenges = state.setdefault("challenges", {})
+            # Invalidate prior unused challenges for this client (single active flow).
+            for cid, rec in list(challenges.items()):
+                if rec.get("client_key") == client_key and not rec.get("used"):
+                    rec["used"] = True
+                    rec["invalidated"] = True
+            challenges[challenge_id] = {
+                "code_hash": code_hash,
+                "email": configured_email if email_ok else "",
+                "created_at": now,
+                "expires_at": now + expires_in,
+                "attempts": 0,
+                "used": False,
+                "client_key": client_key,
+                "real": bool(email_ok),
+            }
+            self._record_otp_request(state, client_key, now)
+            self._prune_otp_challenges(state, now)
+            self._save_json(self.otp_path, state)
+
+        if email_ok and otp_plain:
+            send_result = self.email_provider.send(
+                EmailMessageSpec(
+                    to=configured_email,
+                    subject="PFAI owner verification code",
+                    body_text=(
+                        "Your PFAI owner verification code was requested.\n\n"
+                        f"Code: {otp_plain}\n\n"
+                        f"This code expires in {expires_in} seconds and can be used once.\n"
+                        "If you did not request this, ignore this message."
+                    ),
+                )
+            )
+            # Never include OTP or body in audit/API.
+            self.owner._audit(
+                "OTP_SENT" if send_result.get("ok") else "OTP_SEND_FAILED",
+                {
+                    "client": client_key,
+                    "provider": send_result.get("provider"),
+                    "send_ok": bool(send_result.get("ok")),
+                    "error": send_result.get("error"),
+                },
+            )
+        else:
+            self.owner._audit("OTP_REQUEST_UNIFORM", {"client": client_key, "email_present": bool(email)})
+
+        return uniform
+
+    def verify_otp(self, email: str, otp: str, challenge_id: str, *, client_key: str) -> dict[str, Any]:
+        email = (email or "").strip().lower()
+        otp = (otp or "").strip()
+        challenge_id = (challenge_id or "").strip()
+        client_key = (client_key or "unknown")[:128]
+
+        if self._is_locked(client_key):
+            self.owner._audit("OTP_VERIFY_LOCKED", {"client": client_key})
+            return {"ok": False, "error": OTP_FAIL_MESSAGE, "locked": True}
+
+        configured_email = (self.owner.owner_email() or "").strip().lower()
+        fail = {"ok": False, "error": OTP_FAIL_MESSAGE, "locked": False}
+
+        with self._lock:
+            state = self._load_json(self.otp_path, {"challenges": {}, "request_rate": {}})
+            challenges = state.setdefault("challenges", {})
+            rec = challenges.get(challenge_id)
+            now = time.time()
+            if not rec or rec.get("used") or float(rec.get("expires_at") or 0) < now:
+                self._register_failure(client_key)
+                self.owner._audit("OTP_VERIFY_FAIL", {"reason": "missing_or_expired", "client": client_key})
+                return {**fail, "locked": self._is_locked(client_key)}
+
+            attempts = int(rec.get("attempts") or 0)
+            if attempts >= OTP_MAX_ATTEMPTS:
+                rec["used"] = True
+                self._save_json(self.otp_path, state)
+                self._register_failure(client_key)
+                self.owner._audit("OTP_VERIFY_EXHAUSTED", {"client": client_key})
+                return {**fail, "locked": self._is_locked(client_key)}
+
+            rec["attempts"] = attempts + 1
+            email_match = bool(
+                configured_email
+                and email
+                and rec.get("real")
+                and hmac.compare_digest(email, configured_email)
+                and hmac.compare_digest(str(rec.get("email") or ""), configured_email)
+            )
+            code_ok = self.verify_otp_hash(otp, str(rec.get("code_hash") or ""))
+            if not (email_match and code_ok):
+                self._save_json(self.otp_path, state)
+                self._register_failure(client_key)
+                self.owner._audit("OTP_VERIFY_FAIL", {"reason": "mismatch", "client": client_key})
+                return {**fail, "locked": self._is_locked(client_key)}
+
+            # Single-use: mark consumed before issuing session.
+            rec["used"] = True
+            rec["consumed_at"] = now
+            self._save_json(self.otp_path, state)
+
+        self._clear_failures(client_key)
+        token = secrets.token_urlsafe(32)
+        self._put_session(token, configured_email)
+        self.owner._audit("OTP_AUTH_SUCCESS", {"email": configured_email, "client": client_key})
+        return {"ok": True, "email": configured_email, "token": token, "expires_in": self.session_ttl}
+
+    def _otp_request_allowed(self, client_key: str, now: float) -> bool:
+        with self._lock:
+            state = self._load_json(self.otp_path, {"challenges": {}, "request_rate": {}})
+            rate = state.get("request_rate", {}).get(client_key) or {}
+            last = float(rate.get("last_request_at") or 0)
+            if last and (now - last) < OTP_RESEND_COOLDOWN:
+                return False
+            window_start = float(rate.get("window_start") or 0)
+            count = int(rate.get("count") or 0)
+            if window_start and (now - window_start) < 3600 and count >= OTP_MAX_REQUESTS_PER_HOUR:
+                return False
+            return True
+
+    def _record_otp_request(self, state: dict[str, Any], client_key: str, now: float) -> None:
+        rate_map = state.setdefault("request_rate", {})
+        rate = rate_map.get(client_key) or {"window_start": now, "count": 0, "last_request_at": 0}
+        window_start = float(rate.get("window_start") or now)
+        if (now - window_start) >= 3600:
+            rate = {"window_start": now, "count": 0, "last_request_at": 0}
+        rate["count"] = int(rate.get("count") or 0) + 1
+        rate["last_request_at"] = now
+        rate_map[client_key] = rate
+
+    def _prune_otp_challenges(self, state: dict[str, Any], now: float) -> None:
+        challenges = state.get("challenges") or {}
+        keep: dict[str, Any] = {}
+        for cid, rec in challenges.items():
+            exp = float(rec.get("expires_at") or 0)
+            # Keep briefly after expiry for audit of attempt exhaustion; drop after 1h.
+            if exp + 3600 >= now:
+                keep[cid] = rec
+        state["challenges"] = keep
 
     # --- internals -----------------------------------------------------
     def _configured_hash(self) -> str:

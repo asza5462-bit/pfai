@@ -16,17 +16,39 @@ from .llm_reasoning import IntelligentReasoner
 
 def build_app(path='configs/default.json'):
     c=Config.load(path); audit=AuditLog(c['audit']['path']); policy=Policy(c['security']); web=WebTool(policy,audit); tools=ToolGateway(web,audit)
-    mc=c.get('model',{}); provider=mc.get('provider','echo')
-    if provider=='openai_compatible':
+    mc=dict(c.get('model',{}) or {}); provider=mc.get('provider','echo')
+    # Env overrides (PHASE 5): MODEL_PROVIDER / MODEL_NAME / MODEL_ENDPOINT etc.
+    import os as _os
+    env_provider = (_os.environ.get('MODEL_PROVIDER') or _os.environ.get('PFAI_MODEL_PROVIDER') or '').strip()
+    if env_provider:
+        provider = env_provider
+        mc['provider'] = provider
+    if _os.environ.get('MODEL_NAME') or _os.environ.get('PFAI_MODEL_NAME'):
+        mc['model'] = _os.environ.get('MODEL_NAME') or _os.environ.get('PFAI_MODEL_NAME')
+    if _os.environ.get('MODEL_ENDPOINT') or _os.environ.get('PFAI_MODEL_ENDPOINT'):
+        mc['base_url'] = _os.environ.get('MODEL_ENDPOINT') or _os.environ.get('PFAI_MODEL_ENDPOINT')
+    if provider in ('openai_compatible', 'local', 'open_weight'):
         # Prefer env-sourced secrets. `api_key` in JSON is legacy; if present it
         # should be an env var *name* only when `api_key_env` is set.
-        import os as _os
         key_env = mc.get('api_key_env')
         api_key = _os.environ.get(key_env, '') if key_env else ''
         if not api_key:
-            # Backward compatible: allow empty key for local unauthenticated gateways.
-            api_key = ''
-        model=OpenAICompatibleProvider(mc['base_url'],mc['model'],api_key)
+            api_key = _os.environ.get('MODEL_API_KEY') or _os.environ.get('PFAI_MODEL_API_KEY') or ''
+        if provider in ('local', 'open_weight'):
+            from .model_local import build_local_or_open_weight
+            model = build_local_or_open_weight(
+                provider,
+                base_url=mc.get('base_url', 'http://127.0.0.1:11434/v1'),
+                model=mc.get('model', 'local'),
+                api_key=api_key,
+                timeout=float(mc.get('timeout') or _os.environ.get('MODEL_TIMEOUT') or 60),
+                max_tokens=int(mc.get('max_tokens') or _os.environ.get('MODEL_MAX_TOKENS') or 2048),
+                temperature=float(mc.get('temperature') or _os.environ.get('MODEL_TEMPERATURE') or 0.2),
+                context_length=int(mc.get('context_length') or _os.environ.get('MODEL_CONTEXT_LENGTH') or 8192),
+                probe_on_init=True,
+            )
+        else:
+            model=OpenAICompatibleProvider(mc.get('base_url','http://127.0.0.1:11434/v1'),mc.get('model','local'),api_key)
     elif provider=='anthropic': model=AnthropicProvider(mc.get('model','claude-opus-5'),mc.get('base_url','https://api.anthropic.com/v1'),int(mc.get('max_tokens',2048)),mc.get('api_key_env','ANTHROPIC_API_KEY'))
     else: model=EchoProvider()
     ec=c.get('embeddings',{});

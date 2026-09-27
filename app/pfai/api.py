@@ -38,7 +38,7 @@ from .memory_system import LongTermMemory, MemorySystem
 from .knowledge_layer import KnowledgeLayer
 from .longevity.durable_learning import DurableSafeLearningPipeline, KnowledgeVersionStore, LearningAuditLog
 from .longevity.migration_runner import MigrationRunner
-from .longevity.migrations import register_platform_migrations
+from .longevity.migrations import register_platform_migrations, verify_platform_schema
 from .longevity.export_bundle import ExportBundleScaffold
 from .backup_manager import BackupManager
 from .memory import MemoryStore
@@ -278,9 +278,38 @@ def _platform_migration_backup() -> dict:
     return mgr.create(label='pre_migrate')
 
 
+def _local_model_adapter_check() -> dict:
+    """Honest readiness: adapter exists; runtime may be disconnected."""
+    try:
+        inst = PROVIDER_REGISTRY.create(
+            'local',
+            probe_on_init=True,
+            base_url=__import__('os').environ.get('MODEL_ENDPOINT')
+            or __import__('os').environ.get('PFAI_MODEL_ENDPOINT')
+            or 'http://127.0.0.1:11434/v1',
+        )
+        if hasattr(inst, 'readiness'):
+            ready = inst.readiness()
+            return {
+                'ok': True,  # adapter implemented
+                'connected': bool(ready.get('connected')),
+                'status': ready.get('status') or 'Adapter implemented, runtime not connected.',
+            }
+    except Exception as exc:
+        return {
+            'ok': True,
+            'connected': False,
+            'status': 'Adapter implemented, runtime not connected.',
+            'error': type(exc).__name__,
+        }
+    return {'ok': True, 'connected': False, 'status': 'Adapter implemented, runtime not connected.'}
+
+
 PLATFORM_MIGRATIONS_RUNNER = MigrationRunner(
     state_path='data/longevity/schema_version.json',
     backup_fn=_platform_migration_backup,
+    audit_path='data/longevity/migration_audit.jsonl',
+    verify_fn=verify_platform_schema,
 )
 register_platform_migrations(PLATFORM_MIGRATIONS_RUNNER)
 
@@ -298,6 +327,11 @@ PLATFORM_SELF_CHECK = SelfCheck({
     },
     'ltm_ready': lambda: {'ok': True, 'phase': 3},
     'planner_ready': lambda: {'ok': True, 'phase': 4},
+    'email_otp_ready': lambda: {
+        'ok': 'email_otp' in OWNER_AUTH.public_status().get('auth_methods', []),
+        'provider': type(OWNER_AUTH.email_provider).__name__,
+    },
+    'local_model_adapter': lambda: _local_model_adapter_check(),
 })
 PLATFORM_SELF_HEAL = SelfHeal(
     PLATFORM_SELF_CHECK,
@@ -542,6 +576,16 @@ class OwnerLoginBody(BaseModel):
     passcode: str
 
 
+class OwnerOtpRequestBody(BaseModel):
+    email: str
+
+
+class OwnerOtpVerifyBody(BaseModel):
+    email: str
+    otp: str
+    challenge_id: str
+
+
 @app.post('/owner/setup')
 def owner_setup(x: OwnerSetupBody, request: Request, response: Response):
     """First-time owner initialization only. Permanently disabled after success."""
@@ -568,6 +612,37 @@ def owner_login(x: OwnerLoginBody, request: Request, response: Response):
     result = OWNER_AUTH.login(x.email, x.passcode, client_key=_client_key(request))
     if not result.get('ok'):
         # Uniform failure (no email/passcode distinction); 429 when locked out.
+        status = 429 if result.get('locked') else 401
+        raise HTTPException(status, AUTH_FAIL_MESSAGE)
+    response.set_cookie(COOKIE_NAME, result['token'], **_secure_cookie_flags(request))
+    return {
+        'ok': True,
+        'email': result['email'],
+        'expires_in': result['expires_in'],
+        'authenticated': True,
+    }
+
+
+@app.post('/owner/otp/request')
+def owner_otp_request(x: OwnerOtpRequestBody, request: Request):
+    """Request Email OTP. Uniform response (enumeration-resistant). Never returns OTP."""
+    result = OWNER_AUTH.request_otp(x.email, client_key=_client_key(request))
+    # Strip any accidental sensitive keys; never surface OTP/body.
+    return {
+        'ok': True,
+        'challenge_id': result.get('challenge_id'),
+        'expires_in': result.get('expires_in'),
+        'message': result.get('message') or 'If the email is authorized, a verification code was sent.',
+    }
+
+
+@app.post('/owner/otp/verify')
+def owner_otp_verify(x: OwnerOtpVerifyBody, request: Request, response: Response):
+    """Verify Email OTP and establish HttpOnly owner session. Never echoes OTP."""
+    result = OWNER_AUTH.verify_otp(
+        x.email, x.otp, x.challenge_id, client_key=_client_key(request)
+    )
+    if not result.get('ok'):
         status = 429 if result.get('locked') else 401
         raise HTTPException(status, AUTH_FAIL_MESSAGE)
     response.set_cookie(COOKIE_NAME, result['token'], **_secure_cookie_flags(request))
@@ -946,6 +1021,23 @@ def platform_learning_audit(owner: str = Depends(require_owner), limit: int = 50
 
 @app.get('/platform/providers')
 def platform_providers(owner: str = Depends(require_owner)):
+    """Catalog + honest local/open-weight readiness (never fakes a live runtime)."""
+    local_ready = None
+    try:
+        local_inst = PROVIDER_REGISTRY.create(
+            'local', probe_on_init=True, base_url=__import__('os').environ.get('MODEL_ENDPOINT') or 'http://127.0.0.1:11434/v1'
+        )
+        if hasattr(local_inst, 'readiness'):
+            local_ready = local_inst.readiness()
+        else:
+            local_ready = {'status': 'Adapter implemented, runtime not connected.', 'connected': False}
+    except Exception as exc:
+        local_ready = {
+            'ok': False,
+            'connected': False,
+            'status': 'Adapter implemented, runtime not connected.',
+            'error': type(exc).__name__,
+        }
     return {
         'providers': [
             {
@@ -959,6 +1051,7 @@ def platform_providers(owner: str = Depends(require_owner)):
         ],
         'router': MODEL_ROUTER.describe(),
         'anthropic_required': False,
+        'local_open_weight': local_ready,
     }
 
 
@@ -1188,6 +1281,7 @@ def platform_migrations(owner: str = Depends(require_owner)):
             {'version': m.version, 'name': m.name, 'description': m.description}
             for m in PLATFORM_MIGRATIONS_RUNNER.plan()
         ],
+        'verify': PLATFORM_MIGRATIONS_RUNNER.verify_schema(),
     }
 
 

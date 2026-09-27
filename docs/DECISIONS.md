@@ -248,3 +248,15 @@
   - Schema bump to **3** with backup-first migration for skill version tables.
   - Additive `/platform/plan|skills*|tools|heal*|authz/audit` routes; reuse owner auth; no weight training.
 - Consequences: Privileged execution has one choke-point; skills/tools are versioned/rollback-capable; learning remains reversible and weight-free.
+
+## ADR-025 — PHASE 5 Email OTP + real local/open-weight adapters + migration audit
+
+- Status: Accepted (2026-09-27)
+- Context: PHASE 4 delivered authz/planner/skills; owner login was passcode-only; local/open_weight were Echo placeholders; schema target 3 was pending at runtime 1 in some environments.
+- Decision:
+  - Add `EmailProvider` port (`MockEmailProvider`, `SMTPEmailProvider`) configured via env (`PFAI_EMAIL_PROVIDER`, `PFAI_SMTP_*`); no commercial vendor forced.
+  - Owner Email OTP: cryptographically random, short-lived, single-use, PBKDF2-hashed at rest; resend cooldown + attempt limits; enumeration-resistant uniform responses; never log/return OTP; session via existing `pfai_owner_session` after verify. Passcode login + `X-Owner-Secret` preserved.
+  - `LocalModelProvider` / `OpenWeightModelProvider` real OpenAI-compatible HTTP adapters with honest readiness (`Adapter implemented, runtime not connected.` when probe fails). Config via `MODEL_PROVIDER` / `MODEL_NAME` / `MODEL_ENDPOINT` / timeout/tokens/temperature.
+  - MigrationRunner: intent/result audit, verify hook, backup-first, idempotent re-run, optional reversible downgrade (marker-safe). Schema target remains **3**.
+  - Continuous learning stays memory/knowledge/eval only; `allows_weight_mutation()==False`; no deploy; no secrets in source.
+- Consequences: Owner can authenticate via email OTP; local engines are pluggable without rewriting Orchestrator/Chat/Coding; schema upgrades are auditable and safe to re-run.

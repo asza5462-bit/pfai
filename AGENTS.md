@@ -71,8 +71,9 @@ python -m pytest tests/test_api_wiring.py tests/test_v81_continuous_enable_gate.
 - PHASE 2: `Orchestrator` + `ProviderRegistry`/`ModelRouter` wired; `/chat/*` preserved; `/orchestrate` additive
 - PHASE 3: deep LTM/Knowledge adapters, migration apply+backup, eval baselines, portable export (`/platform/ltm|eval|migrations|export*`)
 - PHASE 4: unified ToolPermission + AuthorizedExecutor, versioned skills, TaskPlanner, bounded heal; `/platform/plan|skills*|tools|heal*`
+- PHASE 5: Email OTP (`/owner/otp/*`) + EmailProvider; Local/OpenWeight adapters; migration audit/verify; schema target 3
 - Constraints: additive only; no Anthropic force; no auto fine-tune; no external deploy unless asked
-- See `docs/ARCHITECTURE.md`, `docs/LONGEVITY.md`, ADRs 008–024 in `docs/DECISIONS.md`
+- See `docs/ARCHITECTURE.md`, `docs/LONGEVITY.md`, ADRs 008–025 in `docs/DECISIONS.md`
 
 ## Longevity mission (20–30 years)
 

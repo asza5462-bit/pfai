@@ -78,22 +78,22 @@ class ProviderRegistry:
                 ProviderSpec(
                     provider_id="local",
                     kind="local",
-                    description="Open-weight / local model readiness slot (Echo until adapter bound)",
+                    description="Local OpenAI-compatible runtime adapter (Ollama/vLLM/llama.cpp)",
                     offline_capable=True,
                     requires_api_key=False,
                 ),
-                lambda **_: EchoProvider(),
+                lambda **kw: _make_local("local", **kw),
             )
         if "open_weight" not in self._specs:
             self.register(
                 ProviderSpec(
                     provider_id="open_weight",
                     kind="open_weight",
-                    description="Future open-weight adapter placeholder (safe Echo fallback)",
+                    description="Open-weight model adapter via OpenAI-compatible HTTP endpoint",
                     offline_capable=True,
                     requires_api_key=False,
                 ),
-                lambda **_: EchoProvider(),
+                lambda **kw: _make_local("open_weight", **kw),
             )
         if "anthropic" not in self._specs:
             self.register(
@@ -134,15 +134,25 @@ class ProviderRegistry:
 
 
 def _factory_kwargs(provider_id: str, cfg: dict[str, Any]) -> dict[str, Any]:
-    if provider_id == "openai_compatible":
+    if provider_id in ("openai_compatible", "local", "open_weight"):
         import os as _os
 
-        key_env = cfg.get("api_key_env")
-        api_key = _os.environ.get(key_env, "") if key_env else ""
+        from pfai.model_local import model_settings_from_env
+
+        settings = model_settings_from_env(cfg)
+        key_env = cfg.get("api_key_env") or settings.get("api_key_env")
+        api_key = settings.get("api_key") or ""
+        if key_env and not api_key:
+            api_key = _os.environ.get(str(key_env), "")
         return {
-            "base_url": cfg.get("base_url", "http://127.0.0.1:11434/v1"),
-            "model": cfg.get("model", "local"),
+            "base_url": cfg.get("base_url") or settings["base_url"],
+            "model": cfg.get("model") or settings["model"],
             "api_key": api_key,
+            "timeout": cfg.get("timeout", settings["timeout"]),
+            "max_tokens": cfg.get("max_tokens", settings["max_tokens"]),
+            "temperature": cfg.get("temperature", settings["temperature"]),
+            "context_length": cfg.get("context_length", settings["context_length"]),
+            "probe_on_init": cfg.get("probe_on_init", True),
         }
     if provider_id == "anthropic":
         return {
@@ -162,6 +172,12 @@ def _make_openai_compatible(**kwargs: Any) -> ModelProvider:
         kwargs.get("model", "local"),
         kwargs.get("api_key", ""),
     )
+
+
+def _make_local(provider_id: str, **kwargs: Any) -> ModelProvider:
+    from pfai.model_local import build_local_or_open_weight
+
+    return build_local_or_open_weight(provider_id, **kwargs)
 
 
 def _make_anthropic(**kwargs: Any) -> ModelProvider:

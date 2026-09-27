@@ -158,6 +158,7 @@ Guides upgrades of runtime, deps, DB, model APIs, OS, deploy env.
 | **2 (done)** | ProviderRegistry + ModelRouter + Orchestrator wiring; durable gated learning; additive `/orchestrate` |
 | **3 (done)** | Deep LTM/Knowledge adapters, richer eval baselines, migration apply (non-dry-run) with backups, portable export |
 | **4 (done)** | Unified Planner/Tools authorization, versioned skills/tools, Orchestrator plan mode, bounded auditable self-heal |
-| 5+ | Goal/education skill packs, planner/tool UX polish beyond Core |
+| **5 (done)** | Email OTP owner auth + EmailProvider; real local/open-weight adapters; migration audit/verify; schema apply in safe envs |
+| 6+ | Goal/education skill packs, planner/tool UX polish beyond Core |
 
 Do not skip phases. Do not replace FastAPI/Dashboard in foundation work.
