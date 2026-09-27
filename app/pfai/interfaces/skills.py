@@ -1,4 +1,4 @@
-"""Skill Registry contracts — metadata + invoke boundary for Coding/Education/etc."""
+"""Skill Registry contracts — metadata + invoke boundary with versioning."""
 from __future__ import annotations
 
 from dataclasses import dataclass, field
@@ -47,4 +47,28 @@ class SkillRegistryProtocol(Protocol):
         ...
 
     def invoke(self, name: str, args: dict[str, Any] | None = None, *, ctx: SkillContext | None = None) -> SkillResult:
+        ...
+
+
+@runtime_checkable
+class VersionedSkillRegistryProtocol(Protocol):
+    """Keep old skill versions runnable while new ones evolve."""
+
+    def register_version(self, skill: Skill, handler: Any) -> None:
+        ...
+
+    def get_version(self, name: str, version: str) -> Skill | None:
+        ...
+
+    def list_versions(self, name: str) -> list[Skill]:
+        ...
+
+    def invoke_version(
+        self,
+        name: str,
+        version: str,
+        args: dict[str, Any] | None = None,
+        *,
+        ctx: SkillContext | None = None,
+    ) -> SkillResult:
         ...

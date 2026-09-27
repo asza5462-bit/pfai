@@ -1,49 +1,42 @@
 # PFAI Architecture
 
-## High-level shape
+**Mission:** Long-Lived Adaptive AI Platform (20–30 year horizon).  
+See `docs/LONGEVITY.md` for the longevity foundation, coupling audit, and port map.
+
+## High-level shape (today + additive ports)
 
 ```
 Browser (RTL Dashboard + AI Command Chat + Coding Academy)
         │  HTTP + X-Owner-Secret
         ▼
-FastAPI (`pfai.api:app`)  — public contracts unchanged
+FastAPI (`pfai.api:app`)  — public contracts stable
   ├── /chat/*  → CommandAgent (ops brain)
   │                 └─ coding intents → CodingAgent
   ├── /coding/* → Coding Academy APIs
   ├── ToolRouter (ops + coding tools, Owner Gate on sensitive)
   └── Heart: runtime, continuous, sandbox, memory, curriculum JSON
 
-Target (additive Orchestrator — phased; PHASE 1 = contracts only):
-
-Chat / Control Center
-        │
-        ▼
-PFAI Orchestrator (coordination only; wraps existing brains)
-  ├── Context: MemorySystem + KnowledgeLayer
-  ├── Planner (ReasoningCore adapter)
-  ├── ModelRouter (role → provider; Local/Mock first; Anthropic optional)
-  ├── ToolRouter + SkillRegistry
-  ├── Coding / Education / Sandbox (kept)
-  ├── Evaluation + Self-check / Self-heal (gated)
-  └── Goals + Core runtime
+Longevity ports (PHASE 1 contracts; not all wired yet):
+  ProviderRegistry · ModelRouter · LTM · Knowledge Versioning
+  Safe Learning Pipeline · MigrationRunner · Export · Backup/DR
+  Evaluation compare · Compatibility Layer · Bounded Self-Heal
 ```
 
-## Platform contracts (PHASE 1)
+## Platform contracts
 
-| Contract | Package | Scaffold module | Target phase |
-|---|---|---|---|
-| OrchestratorRequest/Result | `pfai.interfaces` | `orchestrator.py` | 2 |
-| ModelRole / ModelRouter | `pfai.interfaces.model` | `model_router.py` | 2 |
-| MemorySystem | `pfai.interfaces.memory` | `memory_system.py` | 3 |
-| KnowledgeLayer | `pfai.interfaces.knowledge` | `knowledge_layer.py` | 3 |
-| TaskPlanner | `pfai.interfaces.planner` | `task_planner.py` | 4 |
-| Skill / SkillRegistry | `pfai.interfaces.skills` | `skills/registry.py` | 5 |
-| ToolPermission | `pfai.interfaces.tools` | (maps onto ToolRouter) | 4 |
-| EvaluationSuite | `pfai.interfaces.evaluation` | (wrap EvaluationLab) | 7 |
-| SelfCheck / SelfHeal | `pfai.interfaces.self_check` | `self_check.py` / `self_heal.py` | 7–8 |
-| GoalSystem | `pfai.interfaces.goals` | `goal_system.py` | 9 |
-
-PHASE 1 does **not** wire these into `api.py` or change Dashboard behavior.
+| Contract | Package | Notes |
+|---|---|---|
+| Orchestrator / roles / skills | `pfai.interfaces.*` | Additive orchestration surface |
+| Ports (storage/vector/embed/export) | `pfai.interfaces.ports` | Replaceable infrastructure |
+| LTM kinds | `pfai.interfaces.memory` | Model-agnostic structured memory |
+| Safe learning | `pfai.interfaces.learning` | No prod weight mutation |
+| Versioning | `pfai.interfaces.versioning` | Knowledge/config/skill/tool |
+| Migration | `pfai.interfaces.migration` | `PFAI_SCHEMA_VERSION` |
+| Backup/DR | `pfai.interfaces.backup` | Over existing managers |
+| Provider/Model registries | `pfai.interfaces.model` | Vendor-agnostic |
+| Eval compare | `pfai.interfaces.evaluation` | Before promote |
+| Compat layer | `pfai.interfaces.compat` | Future runtime/DB/provider upgrades |
+| Scaffolds | `pfai.longevity.*` | Non-wired reference implementations |
 
 ## Coding Intelligence stack
 
@@ -64,12 +57,13 @@ Curriculum data lives under `configs/coding/` (add tracks without rewriting the 
 
 ## LLM providers
 
-- Anthropic optional (`ANTHROPIC_API_KEY`)
-- OpenAI-compatible / local models via existing `openai_compatible` provider
-- Mock fallback for offline teaching/tool planning
+- **Core runs without any commercial vendor** (Echo / Mock / local openai_compatible)
+- Anthropic optional (`ANTHROPIC_API_KEY`) — never a Core requirement
+- New providers register via ProviderRegistry (scaffold in `pfai.longevity`)
 
 ## Safety
 
 - Sandbox: no secrets, no host FS, no network, rlimits
 - Sensitive ops remain Owner-gated
 - Fine-tuning never automatic on production
+- Self-heal is bounded and rollback-first

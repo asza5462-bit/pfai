@@ -1,25 +1,36 @@
-"""Self-heal scaffold (PHASE 1). Implementation in PHASE 8.
-
-All fixes require Owner approval; never silent production promotion / fine-tune.
-"""
+"""Self-heal scaffold — bounded, reversible, owner-gated (implementation later)."""
 from __future__ import annotations
 
-from typing import Any
+from pfai.interfaces.self_check import (
+    HealProposal,
+    HealResult,
+    SelfCheckReport,
+    SelfHealProtocol,
+)
 
-from pfai.interfaces.self_check import SelfCheckReport, SelfHealProtocol
-
-__all__ = ["SelfHealProtocol", "SelfHeal"]
+__all__ = ["SelfHealProtocol", "SelfHeal", "HealProposal", "HealResult"]
 
 PHASE = 8
 
 
 class SelfHeal:
-    """Placeholder — BackupManager / rollback adapters land in PHASE 8."""
+    """Placeholder — BackupManager / rollback adapters land in a later phase."""
 
-    def propose_fix(self, report: SelfCheckReport) -> dict[str, Any]:
-        raise NotImplementedError("SelfHeal proposal lands in PHASE 8")
+    def propose_fix(self, report: SelfCheckReport) -> HealProposal:
+        raise NotImplementedError("SelfHeal proposal lands in a later phase")
 
-    def apply_fix(self, proposal_id: str, *, approved: bool = False) -> dict[str, Any]:
+    def apply_fix(self, proposal_id: str, *, approved: bool = False) -> HealResult:
         if not approved:
-            return {"ok": False, "error": "owner approval required", "needs_approval": True}
-        raise NotImplementedError("SelfHeal apply lands in PHASE 8")
+            return HealResult(
+                ok=False,
+                proposal_id=proposal_id,
+                message="owner approval required",
+                meta={"needs_approval": True},
+            )
+        raise NotImplementedError("SelfHeal apply lands in a later phase")
+
+    def test_fix(self, proposal_id: str) -> HealResult:
+        raise NotImplementedError("SelfHeal test lands in a later phase")
+
+    def rollback_fix(self, proposal_id: str) -> HealResult:
+        raise NotImplementedError("SelfHeal rollback lands in a later phase")

@@ -70,3 +70,12 @@ python -m pytest tests/test_api_wiring.py tests/test_v81_continuous_enable_gate.
 - Do not start PHASE 2 until operator reviews the PHASE 1 report
 - Constraints: additive only; no Anthropic force; no auto fine-tune; no external deploy; no new auth in early phases
 - See `docs/ARCHITECTURE.md` and ADR-008..011 in `docs/DECISIONS.md`
+
+## Longevity mission (20–30 years)
+
+- PFAI = **Long-Lived Adaptive AI Platform** — see `docs/LONGEVITY.md`
+- Core must remain model/provider/storage agnostic via ports
+- Memory is structured & portable (not tied to one LLM)
+- Production learning ≠ automatic weight mutation
+- ADRs 012–020 capture longevity decisions
+- `pfai.longevity` scaffolds are not wired into runtime yet

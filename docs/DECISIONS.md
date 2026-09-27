@@ -105,3 +105,92 @@
   - Platform phases do not perform Vercel/Render/Railway/AWS deploys unless explicitly requested later.
   - No new authentication system in PHASE 1 (reuse Owner Gate header where needed).
 - Consequences: Self-heal / eval phases must propose + approve; deploy docs remain informational only.
+
+## ADR-012 — Long-Lived Adaptive AI Platform (20–30 year mission)
+
+- Status: Accepted (2026-09-27)
+- Context: Operator reframed PFAI from “production now” to a durable platform that must remain operable and evolvable for decades.
+- Decision:
+  - Treat PFAI as a Long-Lived Adaptive AI Platform: Durable, Modular, Portable, Auditable, Versioned, Recoverable, Extensible, Model-agnostic, Provider-agnostic.
+  - Prefer ports/adapters over hard-wired vendors; document coupling in `docs/LONGEVITY.md`.
+  - Keep FastAPI + Dashboard as the stable product surface; evolve internals behind interfaces.
+- Consequences: Longevity work is phased; PHASE 1 is foundation (contracts/docs/scaffolds) only.
+
+## ADR-013 — Replaceable Model / Provider / Embedding / Storage ports
+
+- Status: Accepted (2026-09-27)
+- Context: Today’s `app.py` branches on provider names; SQLite and Hash embeddings are concrete.
+- Decision:
+  - Define `ProviderRegistry`, `ModelRouter`, `EmbeddingPort`, `VectorStorePort`, `RelationalStorePort`, `StoragePort`, `BlobStorePort`, `ExportPort`.
+  - Core must run with offline Echo/Mock/local; Anthropic and any closed API are optional adapters only.
+  - Open-source/local models are first-class options.
+- Consequences: Future model/DB/vector/host swaps happen by new adapters + migrations, not rewrites.
+
+## ADR-014 — Model-agnostic Long-Term Memory
+
+- Status: Accepted (2026-09-27)
+- Context: Memory must survive model and vendor changes for decades.
+- Decision:
+  - Memory is structured, exportable data with kinds: episodic, semantic, procedural, user_preference, project_knowledge, learned_lesson, verified_knowledge, interaction_history.
+  - Vector indexes are optional accelerators; textual/structured records remain authoritative.
+  - Memory never stores secrets or depends on a specific LLM’s latent state.
+- Consequences: LTM adapters wrap existing MemoryStore; export/import required for portability.
+
+## ADR-015 — Safe Learning Pipeline (no unsupervised production corruption)
+
+- Status: Accepted (2026-09-27)
+- Context: Continuous learning exists; automatic weight changes in production are unacceptable.
+- Decision:
+  - Production learning path: Learning → Evaluation → Validation → Memory/Knowledge → Future Improvement.
+  - Sources: experiences, task outcomes, feedback, errors, corrections, verified knowledge, successful workflows.
+  - `allows_weight_mutation()` is False on Core safe pipeline; weight training stays offline/scaffolded + owner-gated.
+- Consequences: Bad lessons can be rejected/rolled back; system cannot silently poison itself.
+
+## ADR-016 — Knowledge / Config / Skill / Tool Versioning + Rollback
+
+- Status: Accepted (2026-09-27)
+- Context: Important knowledge and configs today lack uniform version metadata.
+- Decision:
+  - Versioned entities carry version, timestamp, source, confidence, status, provenance.
+  - Rollback restores a prior version via audited re-activation (new version row), not silent rewrite.
+  - Skills/tools keep prior versions invokable where feasible.
+- Consequences: Enables safe evolution and recovery when a change proves harmful.
+
+## ADR-017 — Schema Versioning + Migration Framework
+
+- Status: Accepted (2026-09-27)
+- Context: SQLite tables are created ad hoc (`CREATE TABLE IF NOT EXISTS`) without a platform schema number.
+- Decision:
+  - Introduce `PFAI_SCHEMA_VERSION` and `MigrationRunner` (dry-run default).
+  - Every breaking storage change ships a numbered migration with upgrade (and downgrade when practical).
+- Consequences: Database/engine swaps become planned migrations, not one-off scripts.
+
+## ADR-018 — Backup, Restore, DR, and Portable Export
+
+- Status: Accepted (2026-09-27)
+- Context: BackupManager and DisasterRecovery exist but are file/SQLite-specific; export is incomplete.
+- Decision:
+  - Formalize Backup/Restore/DR ports over existing modules.
+  - Require a portable export bundle (`pfai-export-v1`) so memory/knowledge are not locked to one provider or host.
+- Consequences: Later phases flesh out full export contents; DR remains owner-aware for destructive restore.
+
+## ADR-019 — Evaluation gates before adopting new versions
+
+- Status: Accepted (2026-09-27)
+- Context: Upgrades over decades need proof that old behavior still works.
+- Decision:
+  - Keep automated + regression tests as the first gate.
+  - Add `VersionComparisonProtocol` to compare candidate vs baseline before promote.
+  - Production-impacting promotes remain owner-gated.
+- Consequences: Model/config/skill changes can be refused on measured regression.
+
+## ADR-020 — Bounded Self-Heal + Future Compatibility Layer
+
+- Status: Accepted (2026-09-27)
+- Context: Self-healing without limits is a longevity hazard.
+- Decision:
+  - Heal loop: detect → diagnose → propose → apply_safe → test → rollback.
+  - Irreversible/high-risk changes never auto-apply.
+  - CompatibilityLayer tracks schema/provider/storage/python floors and guides upgrades of runtime, deps, DBs, model APIs, OS, and deploy environments.
+  - Do not assume any current technology survives 20 years.
+- Consequences: Diagnostics can be automatic; dangerous mutation cannot.

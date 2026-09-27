@@ -1,5 +1,21 @@
 # Agent Context Changelog
 
+## 2026-09-27 — Longevity PHASE 1: 20–30 year Architecture Foundation
+
+### Added
+- `docs/LONGEVITY.md` — mission, coupling audit, target architecture, phase boundary
+- Interfaces: `ports`, expanded `memory` (LTM kinds), `learning`, `versioning`, `migration`, `backup`, `compat`; expanded model registries + eval compare + bounded heal
+- Package `pfai/longevity/`: ProviderRegistry, SafeLearningPipeline, MigrationRunner, InMemoryVersionedStore, ExportBundleScaffold, CompatibilityLayer
+- ADRs 012–020
+- Tests `tests/test_v91_longevity_foundation.py`
+
+### Behavior
+- **No user-facing change** — FastAPI/Dashboard untouched; scaffolds not wired
+- Core remains runnable without Anthropic; safe learning forbids weight mutation
+
+### Verified
+- (fill after pytest + smoke)
+
 ## 2026-09-27 — PHASE 1: Orchestrator platform interfaces
 
 ### Added
