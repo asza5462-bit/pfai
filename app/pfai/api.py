@@ -34,6 +34,7 @@ from .code_execution_evaluator import SandboxedCodeEvaluator
 from .longevity.provider_registry import ProviderRegistry
 from .model_router import ModelRouter
 from .orchestrator import Orchestrator
+from .elite import EliteOrchestrator
 from .memory_system import LongTermMemory, MemorySystem
 from .knowledge_layer import KnowledgeLayer
 from .longevity.durable_learning import DurableSafeLearningPipeline, KnowledgeVersionStore, LearningAuditLog
@@ -489,6 +490,15 @@ ORCHESTRATOR = Orchestrator(
     self_heal=PLATFORM_SELF_HEAL,
     planner=PLATFORM_PLANNER,
 )
+ELITE = EliteOrchestrator(
+    root='data/longevity/elite',
+    executor=PLATFORM_EXECUTOR,
+    model_router=MODEL_ROUTER,
+    tool_router=TOOL_ROUTER,
+    experience_bridge=getattr(AUTONOMOUS_TRAINING, 'experience', None),
+    bootstrap_skills=True,
+)
+log.info('phase12 elite fabric ready skills=%s tools=%s', ELITE.skills.health().get('count'), len(ELITE.tools.catalog()))
 PLATFORM_SKILLS.register(
     Skill(name='platform_status', description='Orchestrator/platform status', permission=ToolPermission.READ, version='1'),
     lambda ctx=None, **_k: ORCHESTRATOR.status(),
@@ -1056,6 +1066,138 @@ class LearningBody(BaseModel):
 @app.get('/platform/status')
 def platform_status(owner: str = Depends(require_owner)):
     return ORCHESTRATOR.status()
+
+# --- PHASE 12 Elite Skills + Tool Fabric (owner-protected management) ---
+class EliteChatBody(BaseModel):
+    message: str
+    conversation_id: str = ''
+    context: dict = {}
+    attachments: list = []
+    requested_mode: str | None = None
+    approved: bool = False
+
+class EliteSkillActivateBody(BaseModel):
+    skill_id: str
+    version: str
+    approved: bool = False
+    mark_lkg: bool = False
+
+class EliteSkillRollbackBody(BaseModel):
+    skill_id: str
+    to_version: str | None = None
+    approved: bool = False
+
+class EliteMCPDiscoverBody(BaseModel):
+    tools: list = []
+
+class EliteMCPTrustBody(BaseModel):
+    external_id: str
+    approved: bool = False
+
+@app.post('/chat')
+def elite_unified_chat(x: EliteChatBody, owner: str = Depends(require_owner)):
+    """Unified PFAI AI chat contract (PHASE 12). Does not replace existing ask routes."""
+    if not (x.message or '').strip():
+        raise HTTPException(400, 'message is required')
+    result = ELITE.handle(
+        x.message,
+        conversation_id=x.conversation_id,
+        context=x.context,
+        attachments=x.attachments,
+        requested_mode=x.requested_mode,
+        approved=bool(x.approved),
+        actor=owner,
+    )
+    OWNER.authorize('ELITE_CHAT', f'{owner} elite chat mode={result.get("mode")} ok={result.get("ok")}')
+    return result
+
+@app.get('/platform/elite/status')
+def elite_status(owner: str = Depends(require_owner)):
+    return ELITE.status()
+
+@app.get('/platform/elite/skills')
+def elite_skills(owner: str = Depends(require_owner), category: str | None = None):
+    skills = ELITE.skills.list_skills(category=category)
+    return {'ok': True, 'skills': [s.to_dict() for s in skills], 'health': ELITE.skills.health()}
+
+@app.get('/platform/elite/skills/{skill_id}/versions')
+def elite_skill_versions(skill_id: str, owner: str = Depends(require_owner)):
+    return {
+        'ok': True,
+        'skill_id': skill_id,
+        'versions': [s.to_dict() for s in ELITE.skills.list_versions(skill_id)],
+        'pointer': ELITE.skills.active_pointer(skill_id),
+        'history': ELITE.skills.history.list_events(skill_id)[-20:],
+    }
+
+@app.post('/platform/elite/skills/activate')
+def elite_skill_activate(x: EliteSkillActivateBody, owner: str = Depends(require_owner)):
+    result = ELITE.skills.activate(
+        x.skill_id, x.version, approved=bool(x.approved), actor=owner, mark_lkg=bool(x.mark_lkg)
+    )
+    if result.get('needs_approval'):
+        raise HTTPException(403, result.get('error') or 'owner approval required')
+    OWNER.authorize('ELITE_SKILL_ACTIVATE', f'{owner} activate {x.skill_id}@{x.version}')
+    return result
+
+@app.post('/platform/elite/skills/rollback')
+def elite_skill_rollback(x: EliteSkillRollbackBody, owner: str = Depends(require_owner)):
+    result = ELITE.skills.rollback(
+        x.skill_id, approved=bool(x.approved), actor=owner, to_version=x.to_version
+    )
+    if result.get('needs_approval'):
+        raise HTTPException(403, result.get('error') or 'owner approval required')
+    OWNER.authorize('ELITE_SKILL_ROLLBACK', f'{owner} rollback {x.skill_id}')
+    return result
+
+@app.get('/platform/elite/tools')
+def elite_tools(owner: str = Depends(require_owner)):
+    return {'ok': True, 'tools': ELITE.tools.catalog()}
+
+@app.get('/platform/elite/mcp/tools')
+def elite_mcp_tools(owner: str = Depends(require_owner)):
+    return {'ok': True, 'tools': ELITE.mcp.list_tools()}
+
+@app.post('/platform/elite/mcp/discover')
+def elite_mcp_discover(x: EliteMCPDiscoverBody, owner: str = Depends(require_owner)):
+    from .elite.mcp_adapter import ExternalToolDescriptor
+    descs = []
+    for row in x.tools or []:
+        if not isinstance(row, dict) or not row.get('external_id'):
+            continue
+        descs.append(ExternalToolDescriptor(
+            external_id=str(row['external_id']),
+            name=str(row.get('name') or row['external_id']),
+            description=str(row.get('description') or ''),
+            input_schema=dict(row.get('input_schema') or {}),
+            output_schema=dict(row.get('output_schema') or {}),
+            trusted=False,
+        ))
+    result = ELITE.mcp.discover(descs)
+    OWNER.authorize('ELITE_MCP_DISCOVER', f'{owner} discovered {result.get("count")} external tools')
+    return result
+
+@app.post('/platform/elite/mcp/trust')
+def elite_mcp_trust(x: EliteMCPTrustBody, owner: str = Depends(require_owner)):
+    result = ELITE.mcp.approve_trust(x.external_id, approved=bool(x.approved), actor=owner)
+    if result.get('needs_approval'):
+        raise HTTPException(403, result.get('error') or 'owner approval required')
+    OWNER.authorize('ELITE_MCP_TRUST', f'{owner} trusted {x.external_id}')
+    return result
+
+@app.get('/platform/elite/learning')
+def elite_learning(owner: str = Depends(require_owner)):
+    return {
+        'ok': True,
+        'eligible': ELITE.learning.eligible_training_candidates()[:50],
+        'status': ELITE.status(),
+    }
+
+@app.post('/platform/elite/learning/export-training')
+def elite_learning_export(owner: str = Depends(require_owner), limit: int = 20):
+    result = ELITE.export_learning_to_training(limit=limit)
+    OWNER.authorize('ELITE_LEARNING_EXPORT', f'{owner} export learning={result.get("exported")}')
+    return result
 
 @app.post('/orchestrate')
 def orchestrate(x: OrchestrateBody, owner: str = Depends(require_owner)):

@@ -1,5 +1,22 @@
 # Agent Context Changelog
 
+## 2026-09-27 — PHASE 12: Elite AI Skills + Tool Fabric
+
+### Implemented
+- `pfai/elite/`: SkillRegistry2, elite skill library (~76 skills), discovery, composer
+- ToolFabric + MCP adapter (untrusted by default) + Sandbox
+- EliteOrchestrator unified `/chat` contract + owner APIs under `/platform/elite/*`
+- SelfCheckEngine, FailureRecovery, SkillLearningBridge
+- Tests: `test_v112_phase12_elite_fabric.py` (flows A–J)
+
+### Security
+- Skills/tools/models remain capabilities only
+- Privilege-escalation prompts rejected
+- Training isolation preserved; no auth/secrets mutation paths added
+
+### Not started
+- Phase 13, deploy, remote push
+
 ## 2026-09-27 — PHASE 11 FINAL: durable promotion/rollback history
 
 ### Root cause

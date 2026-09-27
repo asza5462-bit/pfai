@@ -113,6 +113,8 @@ Training is forbidden from modifying owner authentication, OTP, authorization, s
 - Owner verification: `GET /platform/learning/verification`
 - Raw chat remains ineligible; no synthetic inflation
 - Verified baseline remains PHASE 9: `model-v0001` / `dataset-v0002` (52 accepted), GPU false
+- PHASE 11 production-validated model-v0007 with promotion history rollback to model-v0001
+- PHASE 12 elite skills/tool fabric (`pfai/elite`) — see `docs/architecture/PHASE_12.md`
 
 ## PHASE 11 — production validation
 
