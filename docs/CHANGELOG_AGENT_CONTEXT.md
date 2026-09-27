@@ -16,7 +16,8 @@
 - Dev-shared passcodes treated as compromised before any deploy
 
 ### Verified
-- (fill after pytest)
+- pytest: **342 passed**
+- No plaintext passcodes in source/docs/frontend
 
 ## 2026-09-27 — Longevity PHASE 2: Orchestrator + ProviderRegistry
 

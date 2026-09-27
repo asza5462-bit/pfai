@@ -14,7 +14,8 @@ Last updated: 2026-09-27 (Longevity PHASE 2 Orchestrator)
 | Anthropic required | **false** |
 | Learning | Durable gated pipeline; no weight mutation |
 | Schema version | `PFAI_SCHEMA_VERSION = 1` |
-| Next | PHASE 3 — deepen LTM/Knowledge adapters + migration apply paths |
+| Owner auth | Session cookie + optional X-Owner-Secret; setup lock |
+| Owner email env | `PFAI_OWNER_EMAIL` (deploy as `szz5462@gmail.com`) |
 
 ## Verification
 
