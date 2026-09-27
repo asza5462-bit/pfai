@@ -450,6 +450,7 @@ class EliteOrchestrator:
             "model_router": bool(self.model_router),
             "web": self.web.status(),
             "sandbox": Sandbox(timeout=1.0).metadata(),
+            "EMAIL_NOTE": "see /platform/email/status",
         }
 
     def export_learning_to_training(self, limit: int = 20) -> dict[str, Any]:

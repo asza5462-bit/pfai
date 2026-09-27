@@ -271,7 +271,13 @@ def email_provider_from_env(*, allow_mock: bool | None = None) -> EmailProvider:
 
 
 def email_config_report(provider: EmailProvider | None = None) -> dict[str, Any]:
-    """Startup/config report without revealing secrets."""
+    """Startup/config report without revealing secrets.
+
+    EMAIL_DELIVERY_STATUS is derived from actual configuration only:
+      READY       — smtp/api fully configured for delivery
+      TEST_ONLY   — MockEmailProvider (dev/test)
+      NOT_CONFIGURED — missing/incomplete production config or fail-closed
+    """
     prov = provider or email_provider_from_env()
     ready = prov.readiness() if hasattr(prov, "readiness") else {"ok": False}
     kind = getattr(prov, "provider_id", None) or ready.get("provider") or type(prov).__name__
@@ -284,9 +290,16 @@ def email_config_report(provider: EmailProvider | None = None) -> dict[str, Any]
     elif kind in ("FailClosedEmailProvider", "unconfigured"):
         kind = "unconfigured"
     production_ready = bool(ready.get("production_ready")) and kind in ("smtp", "api")
+    if production_ready:
+        delivery_status = "READY"
+    elif kind == "mock":
+        delivery_status = "TEST_ONLY"
+    else:
+        delivery_status = "NOT_CONFIGURED"
     return {
         "EMAIL_PROVIDER": kind,
         "EMAIL_PRODUCTION_READY": production_ready,
+        "EMAIL_DELIVERY_STATUS": delivery_status,
         "EMAIL_REQUIRE_PRODUCTION": production_email_required(),
         "ok": bool(ready.get("ok")),
         "note": ready.get("note") or ready.get("error") or "",

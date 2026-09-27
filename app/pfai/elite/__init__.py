@@ -7,7 +7,12 @@ from pfai.elite.composer import SkillComposer
 from pfai.elite.tool_fabric import ToolFabric
 from pfai.elite.mcp_adapter import MCPAdapter
 from pfai.elite.sandbox import Sandbox
-from pfai.elite.web_fabric import WebInformationFabric, WEB_PROVIDER_UNAVAILABLE
+from pfai.elite.web_fabric import (
+    WebInformationFabric,
+    WEB_PROVIDER_UNAVAILABLE,
+    WebProviderRegistry,
+    WebResearchExecutor,
+)
 
 __all__ = [
     "EliteOrchestrator",
@@ -19,4 +24,6 @@ __all__ = [
     "Sandbox",
     "WebInformationFabric",
     "WEB_PROVIDER_UNAVAILABLE",
+    "WebProviderRegistry",
+    "WebResearchExecutor",
 ]

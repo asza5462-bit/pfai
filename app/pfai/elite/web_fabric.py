@@ -1,22 +1,25 @@
-"""PHASE 13 — Provider-agnostic Web / Information fabric.
+"""PHASE 13.1 — Provider-agnostic Web / Information fabric.
 
-Never fabricates search results. Missing providers report WEB_PROVIDER_UNAVAILABLE.
-Every external result preserves provenance and claim classification.
+Never fabricates search results. Missing providers report WEB_PROVIDER_UNAVAILABLE /
+WEB_FABRIC_STATUS=NOT_CONFIGURED. Includes SSRF protections, registry, and executor.
 """
 from __future__ import annotations
 
 import hashlib
+import ipaddress
 import json
 import os
 import re
+import socket
+import threading
 import time
 import urllib.error
 import urllib.parse
 import urllib.request
 from abc import ABC, abstractmethod
 from dataclasses import asdict, dataclass, field
-from typing import Any
 from html.parser import HTMLParser
+from typing import Any, Callable
 
 
 class ClaimKind:
@@ -28,6 +31,21 @@ class ClaimKind:
 
 
 WEB_PROVIDER_UNAVAILABLE = "WEB_PROVIDER_UNAVAILABLE"
+
+ALLOWED_CONTENT_TYPES = (
+    "text/html",
+    "text/plain",
+    "application/json",
+    "application/xhtml+xml",
+    "text/xml",
+    "application/xml",
+)
+
+_SECRET_REDACT_PATTERNS = (
+    re.compile(r"(?i)(api[_-]?key|token|password|secret|authorization)\s*[:=]\s*\S+"),
+    re.compile(r"(?i)bearer\s+[a-z0-9._\-]+"),
+    re.compile(r"-----BEGIN [A-Z ]*PRIVATE KEY-----.*?-----END [A-Z ]*PRIVATE KEY-----", re.S),
+)
 
 
 @dataclass
@@ -74,6 +92,63 @@ class ResearchResult:
             "error": self.error,
             "meta": dict(self.meta),
         }
+
+
+def redact_secrets(text: str) -> str:
+    out = text or ""
+    for pat in _SECRET_REDACT_PATTERNS:
+        out = pat.sub("[REDACTED]", out)
+    return out
+
+
+def validate_url_for_fetch(url: str, *, allow_private: bool = False) -> dict[str, Any]:
+    """URL validation + SSRF protections (scheme, host, private/local blocking)."""
+    raw = (url or "").strip()
+    if not raw:
+        return {"ok": False, "error": "empty_url"}
+    try:
+        parsed = urllib.parse.urlparse(raw)
+    except Exception:
+        return {"ok": False, "error": "invalid_url"}
+    if parsed.scheme not in ("http", "https"):
+        return {"ok": False, "error": "scheme_not_allowed"}
+    if not parsed.hostname:
+        return {"ok": False, "error": "missing_hostname"}
+    host = parsed.hostname.lower()
+    # Block obvious local/metadata names
+    blocked_hosts = {
+        "localhost",
+        "localhost.localdomain",
+        "metadata.google.internal",
+        "metadata",
+        "0.0.0.0",
+    }
+    if host in blocked_hosts or host.endswith(".local") or host.endswith(".internal"):
+        return {"ok": False, "error": "ssrf_blocked_host", "host": host}
+    # Resolve and check private ranges
+    try:
+        infos = socket.getaddrinfo(host, parsed.port or (443 if parsed.scheme == "https" else 80), type=socket.SOCK_STREAM)
+    except socket.gaierror:
+        return {"ok": False, "error": "dns_resolution_failed", "host": host}
+    addrs: list[str] = []
+    for info in infos:
+        sockaddr = info[4]
+        ip = sockaddr[0]
+        addrs.append(ip)
+        try:
+            ip_obj = ipaddress.ip_address(ip)
+        except ValueError:
+            continue
+        if not allow_private and (
+            ip_obj.is_private
+            or ip_obj.is_loopback
+            or ip_obj.is_link_local
+            or ip_obj.is_reserved
+            or ip_obj.is_multicast
+            or ip_obj.is_unspecified
+        ):
+            return {"ok": False, "error": "ssrf_blocked_private_ip", "host": host, "ip": ip}
+    return {"ok": True, "url": raw, "host": host, "resolved": sorted(set(addrs))[:8]}
 
 
 class WebSearchProvider(ABC):
@@ -130,43 +205,200 @@ class UnavailableWebFetchProvider(WebFetchProvider):
             "provider": self.provider_id,
         }
 
+    def readiness(self) -> dict[str, Any]:
+        return {
+            "ok": False,
+            "provider": self.provider_id,
+            "production_ready": False,
+            "error": WEB_PROVIDER_UNAVAILABLE,
+        }
+
+
+class MockWebSearchProvider(WebSearchProvider):
+    """Deterministic test-only search provider — never production-ready."""
+
+    provider_id = "mock"
+
+    def __init__(self, results: list[dict[str, Any]] | None = None) -> None:
+        self._results = list(results or [])
+        self.calls: list[dict[str, Any]] = []
+
+    def readiness(self) -> dict[str, Any]:
+        return {
+            "ok": True,
+            "provider": self.provider_id,
+            "production_ready": False,
+            "note": "test_only",
+        }
+
+    def search(self, query: str, *, limit: int = 5) -> dict[str, Any]:
+        self.calls.append({"query": query, "limit": limit})
+        rows = [
+            {
+                "url": r.get("url") or f"https://example.test/mock/{i}",
+                "title": r.get("title") or f"Mock result {i}",
+                "snippet": r.get("snippet") or f"Mock snippet for {query}",
+            }
+            for i, r in enumerate(self._results[: int(limit)] or [{"title": f"Mock:{query}"}])
+        ]
+        return {
+            "ok": True,
+            "query": query,
+            "results": rows[: int(limit)],
+            "provider": self.provider_id,
+            "retrieved_at": time.time(),
+            "test_only": True,
+        }
+
+
+class MockWebFetchProvider(WebFetchProvider):
+    """Deterministic test-only fetch provider — never production-ready."""
+
+    provider_id = "mock"
+
+    def __init__(self, pages: dict[str, str] | None = None) -> None:
+        self.pages = dict(pages or {})
+        self.calls: list[str] = []
+
+    def readiness(self) -> dict[str, Any]:
+        return {
+            "ok": True,
+            "provider": self.provider_id,
+            "production_ready": False,
+            "note": "test_only",
+        }
+
+    def fetch(self, url: str, *, max_bytes: int = 200_000) -> dict[str, Any]:
+        self.calls.append(url)
+        check = validate_url_for_fetch(url, allow_private=True)
+        # Mock may allow example.test fixtures without DNS; still reject private SSRF patterns in URL string
+        if "localhost" in (url or "").lower() or "127.0.0.1" in (url or ""):
+            return {"ok": False, "error": "ssrf_blocked_host", "url": url, "provider": self.provider_id}
+        body = self.pages.get(url) or f"<html><title>Mock</title><body>Mock body for {url}</body></html>"
+        raw = body.encode("utf-8")[: int(max_bytes)]
+        return {
+            "ok": True,
+            "url": url,
+            "final_url": url,
+            "status": 200,
+            "content_type": "text/html",
+            "text": redact_secrets(raw.decode("utf-8", errors="replace")),
+            "truncated": False,
+            "retrieved_at": time.time(),
+            "provider": self.provider_id,
+            "content_hash": hashlib.sha256(raw).hexdigest(),
+            "test_only": True,
+            "url_check": check,
+        }
+
+
+class _NoRedirect(urllib.request.HTTPRedirectHandler):
+    """Validate redirect targets before following (SSRF-safe)."""
+
+    def __init__(self, *, allow_private: bool = False, max_redirects: int = 3) -> None:
+        self.allow_private = allow_private
+        self.max_redirects = max_redirects
+        self.redirect_count = 0
+
+    def redirect_request(self, req, fp, code, msg, headers, newurl):  # type: ignore[override]
+        self.redirect_count += 1
+        if self.redirect_count > self.max_redirects:
+            raise urllib.error.URLError("too_many_redirects")
+        check = validate_url_for_fetch(newurl, allow_private=self.allow_private)
+        if not check.get("ok"):
+            raise urllib.error.URLError(f"ssrf_redirect_blocked:{check.get('error')}")
+        return urllib.request.HTTPRedirectHandler.redirect_request(self, req, fp, code, msg, headers, newurl)
+
 
 class HttpWebFetchProvider(WebFetchProvider):
-    """Real HTTP fetch — only used when explicitly configured/allowed."""
+    """Real HTTP fetch — only when explicitly configured/allowed. SSRF-hardened."""
 
     provider_id = "http_fetch"
 
-    def __init__(self, *, timeout: float = 15.0, user_agent: str = "PFAI-WebFabric/13") -> None:
+    def __init__(
+        self,
+        *,
+        timeout: float = 15.0,
+        user_agent: str = "PFAI-WebFabric/13.1",
+        allow_private: bool = False,
+        max_redirects: int = 3,
+        rate_limit_per_minute: int = 30,
+    ) -> None:
         self.timeout = float(timeout)
         self.user_agent = user_agent
+        self.allow_private = bool(allow_private)
+        self.max_redirects = int(max_redirects)
+        self.rate_limit_per_minute = int(rate_limit_per_minute)
+        self._lock = threading.RLock()
+        self._timestamps: list[float] = []
+        self._audit: list[dict[str, Any]] = []
 
     def readiness(self) -> dict[str, Any]:
         return {
             "ok": True,
             "provider": self.provider_id,
             "production_ready": True,
-            "note": "HTTP fetch enabled; network egress required",
+            "note": "HTTP fetch enabled; network egress + SSRF checks required",
+            "ssrf_protection": True,
         }
 
+    def _rate_ok(self) -> bool:
+        now = time.time()
+        with self._lock:
+            self._timestamps = [t for t in self._timestamps if now - t < 60]
+            if len(self._timestamps) >= self.rate_limit_per_minute:
+                return False
+            self._timestamps.append(now)
+            return True
+
     def fetch(self, url: str, *, max_bytes: int = 200_000) -> dict[str, Any]:
-        if not url or not str(url).startswith(("http://", "https://")):
-            return {"ok": False, "error": "invalid_url", "provider": self.provider_id}
+        check = validate_url_for_fetch(url, allow_private=self.allow_private)
+        if not check.get("ok"):
+            self._audit.append({"event": "fetch_denied", "error": check.get("error"), "url": url})
+            return {"ok": False, "error": check.get("error"), "url": url, "provider": self.provider_id}
+        if not self._rate_ok():
+            return {"ok": False, "error": "rate_limited", "url": url, "provider": self.provider_id}
         req = urllib.request.Request(
             url,
-            headers={"User-Agent": self.user_agent, "Accept": "text/html,application/json,text/plain"},
+            headers={
+                "User-Agent": self.user_agent,
+                "Accept": "text/html,application/json,text/plain,application/xhtml+xml",
+            },
             method="GET",
         )
+        opener = urllib.request.build_opener(
+            _NoRedirect(allow_private=self.allow_private, max_redirects=self.max_redirects)
+        )
         try:
-            with urllib.request.urlopen(req, timeout=self.timeout) as resp:
+            with opener.open(req, timeout=self.timeout) as resp:
+                content_type = (resp.headers.get("Content-Type") or "").split(";")[0].strip().lower()
+                if content_type and not any(content_type.startswith(a) for a in ALLOWED_CONTENT_TYPES):
+                    self._audit.append({"event": "content_type_denied", "content_type": content_type, "url": url})
+                    return {
+                        "ok": False,
+                        "error": "content_type_not_allowed",
+                        "content_type": content_type,
+                        "url": url,
+                        "provider": self.provider_id,
+                    }
+                final_url = getattr(resp, "geturl", lambda: url)()
+                if final_url != url:
+                    recheck = validate_url_for_fetch(final_url, allow_private=self.allow_private)
+                    if not recheck.get("ok"):
+                        return {
+                            "ok": False,
+                            "error": f"ssrf_final_url:{recheck.get('error')}",
+                            "url": url,
+                            "provider": self.provider_id,
+                        }
                 raw = resp.read(int(max_bytes) + 1)
                 truncated = len(raw) > int(max_bytes)
                 body = raw[: int(max_bytes)]
-                content_type = resp.headers.get("Content-Type", "")
-                text = body.decode("utf-8", errors="replace")
-                return {
+                text = redact_secrets(body.decode("utf-8", errors="replace"))
+                out = {
                     "ok": True,
                     "url": url,
-                    "final_url": getattr(resp, "geturl", lambda: url)(),
+                    "final_url": final_url,
                     "status": getattr(resp, "status", 200),
                     "content_type": content_type,
                     "text": text,
@@ -175,10 +407,17 @@ class HttpWebFetchProvider(WebFetchProvider):
                     "provider": self.provider_id,
                     "content_hash": hashlib.sha256(body).hexdigest(),
                 }
+                self._audit.append({"event": "fetch_ok", "url": url, "bytes": len(body)})
+                return out
         except urllib.error.HTTPError as exc:
             return {"ok": False, "error": f"http_{exc.code}", "url": url, "provider": self.provider_id}
+        except urllib.error.URLError as exc:
+            return {"ok": False, "error": str(getattr(exc, "reason", exc)), "url": url, "provider": self.provider_id}
         except Exception as exc:
             return {"ok": False, "error": type(exc).__name__, "url": url, "provider": self.provider_id}
+
+    def audit(self) -> list[dict[str, Any]]:
+        return list(self._audit)
 
 
 class DuckDuckGoHtmlSearchProvider(WebSearchProvider):
@@ -186,16 +425,16 @@ class DuckDuckGoHtmlSearchProvider(WebSearchProvider):
 
     provider_id = "ddg_html"
 
-    def __init__(self, *, timeout: float = 15.0) -> None:
+    def __init__(self, *, timeout: float = 15.0, fetch: WebFetchProvider | None = None) -> None:
         self.timeout = float(timeout)
-        self._fetch = HttpWebFetchProvider(timeout=timeout)
+        self._fetch = fetch or HttpWebFetchProvider(timeout=timeout)
 
     def readiness(self) -> dict[str, Any]:
         return {
             "ok": True,
             "provider": self.provider_id,
             "production_ready": True,
-            "note": "DuckDuckGo HTML scrape adapter; results may be sparse",
+            "note": "DuckDuckGo HTML scrape adapter; results may be sparse; vendor-agnostic optional adapter",
         }
 
     def search(self, query: str, *, limit: int = 5) -> dict[str, Any]:
@@ -221,6 +460,74 @@ class DuckDuckGoHtmlSearchProvider(WebSearchProvider):
         }
 
 
+class GenericHttpSearchProvider(WebSearchProvider):
+    """Generic configurable HTTP search adapter (JSON). Provider-agnostic."""
+
+    provider_id = "http_search"
+
+    def __init__(
+        self,
+        *,
+        endpoint: str,
+        timeout: float = 15.0,
+        api_key: str = "",
+        query_param: str = "q",
+    ) -> None:
+        self.endpoint = (endpoint or "").strip()
+        self.timeout = float(timeout)
+        self.api_key = api_key
+        self.query_param = query_param or "q"
+
+    def readiness(self) -> dict[str, Any]:
+        configured = bool(self.endpoint)
+        return {
+            "ok": configured,
+            "provider": self.provider_id,
+            "production_ready": configured,
+            "endpoint_configured": configured,
+            "note": "Generic HTTP search JSON adapter",
+        }
+
+    def search(self, query: str, *, limit: int = 5) -> dict[str, Any]:
+        if not self.endpoint:
+            return {"ok": False, "error": WEB_PROVIDER_UNAVAILABLE, "results": [], "provider": self.provider_id}
+        check = validate_url_for_fetch(self.endpoint)
+        if not check.get("ok"):
+            return {"ok": False, "error": check.get("error"), "results": [], "provider": self.provider_id}
+        url = self.endpoint + ("&" if "?" in self.endpoint else "?") + urllib.parse.urlencode(
+            {self.query_param: query, "limit": int(limit)}
+        )
+        headers = {"Accept": "application/json", "User-Agent": "PFAI-WebFabric/13.1"}
+        if self.api_key:
+            headers["Authorization"] = f"Bearer {self.api_key}"
+        req = urllib.request.Request(url, headers=headers, method="GET")
+        try:
+            with urllib.request.urlopen(req, timeout=self.timeout) as resp:
+                raw = resp.read(500_000)
+                data = json.loads(raw.decode("utf-8", errors="replace"))
+            rows = data if isinstance(data, list) else data.get("results") or data.get("items") or []
+            results = []
+            for row in rows[: int(limit)]:
+                if not isinstance(row, dict):
+                    continue
+                results.append(
+                    {
+                        "url": str(row.get("url") or row.get("link") or ""),
+                        "title": str(row.get("title") or ""),
+                        "snippet": str(row.get("snippet") or row.get("description") or "")[:400],
+                    }
+                )
+            return {
+                "ok": True,
+                "query": query,
+                "results": results,
+                "provider": self.provider_id,
+                "retrieved_at": time.time(),
+            }
+        except Exception as exc:
+            return {"ok": False, "error": type(exc).__name__, "results": [], "provider": self.provider_id}
+
+
 class _TextExtractor(HTMLParser):
     def __init__(self) -> None:
         super().__init__()
@@ -244,7 +551,7 @@ class SourceParser:
     def parse(self, fetched: dict[str, Any]) -> dict[str, Any]:
         if not fetched.get("ok"):
             return {"ok": False, "error": fetched.get("error") or "fetch_failed", "text": "", "title": ""}
-        text = str(fetched.get("text") or "")
+        text = redact_secrets(str(fetched.get("text") or ""))
         content_type = str(fetched.get("content_type") or "")
         title = ""
         if "html" in content_type.lower() or "<html" in text[:500].lower():
@@ -306,7 +613,6 @@ class SourceVerifier:
                 seen_hashes.add(key_h)
             if key_u:
                 seen_urls.add(key_u)
-            # Freshness heuristic
             age = time.time() - (c.retrieved_at or time.time())
             if age < 3600:
                 c.freshness = "fresh"
@@ -338,14 +644,12 @@ class ResearchPlanner:
 
 def _parse_ddg_results(html: str, *, limit: int = 5) -> list[dict[str, Any]]:
     results: list[dict[str, Any]] = []
-    # DuckDuckGo HTML result anchors
     for m in re.finditer(
         r'class="result__a"[^>]*href="([^"]+)"[^>]*>(.*?)</a>',
         html or "",
         flags=re.I | re.S,
     ):
         href = urllib.parse.unquote(m.group(1))
-        # DDG sometimes wraps uddg=
         if "uddg=" in href:
             qs = urllib.parse.parse_qs(urllib.parse.urlparse(href).query)
             href = (qs.get("uddg") or [href])[0]
@@ -353,14 +657,63 @@ def _parse_ddg_results(html: str, *, limit: int = 5) -> list[dict[str, Any]]:
         results.append({"url": href, "title": title, "snippet": ""})
         if len(results) >= limit:
             break
-    # Snippets
     snippets = re.findall(r'class="result__snippet"[^>]*>(.*?)</(?:a|td|div)', html or "", flags=re.I | re.S)
     for i, sn in enumerate(snippets[: len(results)]):
         results[i]["snippet"] = re.sub(r"<[^>]+>", "", sn).strip()[:400]
     return results
 
 
-def web_providers_from_env() -> tuple[WebSearchProvider, WebFetchProvider]:
+class WebProviderRegistry:
+    """Catalog of search/fetch providers — configuration selects which is active."""
+
+    def __init__(self) -> None:
+        self._search: dict[str, Callable[[], WebSearchProvider]] = {}
+        self._fetch: dict[str, Callable[[], WebFetchProvider]] = {}
+        self.bootstrap_defaults()
+
+    def bootstrap_defaults(self) -> None:
+        self._search.setdefault("unavailable", UnavailableWebSearchProvider)
+        self._search.setdefault("mock", MockWebSearchProvider)
+        self._search.setdefault("ddg", lambda: DuckDuckGoHtmlSearchProvider())
+        self._search.setdefault("ddg_html", lambda: DuckDuckGoHtmlSearchProvider())
+        self._search.setdefault(
+            "http_search",
+            lambda: GenericHttpSearchProvider(endpoint=os.environ.get("PFAI_WEB_SEARCH_ENDPOINT", "")),
+        )
+        self._fetch.setdefault("unavailable", UnavailableWebFetchProvider)
+        self._fetch.setdefault("mock", MockWebFetchProvider)
+        self._fetch.setdefault("http", lambda: HttpWebFetchProvider())
+        self._fetch.setdefault("http_fetch", lambda: HttpWebFetchProvider())
+
+    def register_search(self, provider_id: str, factory: Callable[[], WebSearchProvider]) -> None:
+        self._search[provider_id] = factory
+
+    def register_fetch(self, provider_id: str, factory: Callable[[], WebFetchProvider]) -> None:
+        self._fetch[provider_id] = factory
+
+    def list_search(self) -> list[str]:
+        return sorted(self._search)
+
+    def list_fetch(self) -> list[str]:
+        return sorted(self._fetch)
+
+    def create_search(self, provider_id: str) -> WebSearchProvider:
+        factory = self._search.get(provider_id)
+        if not factory:
+            return UnavailableWebSearchProvider()
+        return factory()
+
+    def create_fetch(self, provider_id: str) -> WebFetchProvider:
+        factory = self._fetch.get(provider_id)
+        if not factory:
+            return UnavailableWebFetchProvider()
+        return factory()
+
+
+def web_providers_from_env(
+    registry: WebProviderRegistry | None = None,
+) -> tuple[WebSearchProvider, WebFetchProvider]:
+    reg = registry or WebProviderRegistry()
     search_kind = (os.environ.get("PFAI_WEB_SEARCH_PROVIDER") or "").strip().lower()
     fetch_kind = (os.environ.get("PFAI_WEB_FETCH_PROVIDER") or "").strip().lower()
     allow_network = (os.environ.get("PFAI_WEB_ALLOW_NETWORK") or "").strip().lower() in (
@@ -369,21 +722,36 @@ def web_providers_from_env() -> tuple[WebSearchProvider, WebFetchProvider]:
         "yes",
         "on",
     )
+    timeout = float(os.environ.get("PFAI_WEB_TIMEOUT", "15") or 15)
 
-    search: WebSearchProvider
-    if search_kind in ("ddg", "ddg_html", "duckduckgo") and allow_network:
-        search = DuckDuckGoHtmlSearchProvider(
-            timeout=float(os.environ.get("PFAI_WEB_TIMEOUT", "15") or 15)
+    # Explicit mock for tests
+    if search_kind == "mock":
+        search: WebSearchProvider = MockWebSearchProvider()
+    elif search_kind in ("ddg", "ddg_html", "duckduckgo") and allow_network:
+        search = DuckDuckGoHtmlSearchProvider(timeout=timeout)
+    elif search_kind in ("http", "http_search") and allow_network:
+        search = GenericHttpSearchProvider(
+            endpoint=os.environ.get("PFAI_WEB_SEARCH_ENDPOINT", ""),
+            timeout=timeout,
+            api_key=os.environ.get("PFAI_WEB_SEARCH_API_KEY", ""),
+            query_param=os.environ.get("PFAI_WEB_SEARCH_QUERY_PARAM", "q"),
         )
+    elif search_kind and search_kind not in ("", "unavailable", "none") and allow_network:
+        search = reg.create_search(search_kind)
     else:
         search = UnavailableWebSearchProvider()
 
-    fetch: WebFetchProvider
-    if fetch_kind in ("http", "http_fetch") and allow_network:
-        fetch = HttpWebFetchProvider(timeout=float(os.environ.get("PFAI_WEB_TIMEOUT", "15") or 15))
-    elif search_kind in ("ddg", "ddg_html", "duckduckgo") and allow_network:
-        # Search implies fetch capability for result bodies when allowed
-        fetch = HttpWebFetchProvider(timeout=float(os.environ.get("PFAI_WEB_TIMEOUT", "15") or 15))
+    if fetch_kind == "mock":
+        fetch: WebFetchProvider = MockWebFetchProvider()
+    elif fetch_kind in ("http", "http_fetch") and allow_network:
+        fetch = HttpWebFetchProvider(
+            timeout=timeout,
+            allow_private=(os.environ.get("PFAI_WEB_ALLOW_PRIVATE") or "").lower() in ("1", "true"),
+        )
+    elif search_kind in ("ddg", "ddg_html", "duckduckgo") and allow_network and not fetch_kind:
+        fetch = HttpWebFetchProvider(timeout=timeout)
+    elif fetch_kind and fetch_kind not in ("", "unavailable", "none") and allow_network:
+        fetch = reg.create_fetch(fetch_kind)
     else:
         fetch = UnavailableWebFetchProvider()
 
@@ -401,14 +769,23 @@ def web_config_report(
         f = f or f2
     sr = s.readiness()
     fr = f.readiness()
-    available = bool(sr.get("ok")) or bool(fr.get("ok"))
+    sid = getattr(s, "provider_id", "unknown")
+    fid = getattr(f, "provider_id", "unknown")
+    if sid == "mock" or fid == "mock":
+        status = "TEST_ONLY"
+    elif bool(sr.get("production_ready")) or bool(fr.get("production_ready")):
+        status = "READY"
+    else:
+        status = "NOT_CONFIGURED"
     return {
-        "WEB_SEARCH_PROVIDER": getattr(s, "provider_id", "unknown"),
-        "WEB_FETCH_PROVIDER": getattr(f, "provider_id", "unknown"),
-        "WEB_PROVIDER_AVAILABLE": available,
-        "WEB_STATUS": "READY" if available else WEB_PROVIDER_UNAVAILABLE,
+        "WEB_SEARCH_PROVIDER": sid,
+        "WEB_FETCH_PROVIDER": fid,
+        "WEB_PROVIDER_AVAILABLE": status == "READY",
+        "WEB_STATUS": WEB_PROVIDER_UNAVAILABLE if status == "NOT_CONFIGURED" else status,
+        "WEB_FABRIC_STATUS": status,
         "search_production_ready": bool(sr.get("production_ready")),
         "fetch_production_ready": bool(fr.get("production_ready")),
+        "ssrf_protection": True,
         "note": sr.get("note") or fr.get("note") or sr.get("error") or fr.get("error") or "",
     }
 
@@ -424,9 +801,11 @@ class WebInformationFabric:
         parser: SourceParser | None = None,
         verifier: SourceVerifier | None = None,
         planner: ResearchPlanner | None = None,
+        registry: WebProviderRegistry | None = None,
     ) -> None:
+        self.registry = registry or WebProviderRegistry()
         if search is None or fetch is None:
-            s, f = web_providers_from_env()
+            s, f = web_providers_from_env(self.registry)
             search = search or s
             fetch = fetch or f
         self.search_provider = search
@@ -434,6 +813,7 @@ class WebInformationFabric:
         self.parser = parser or SourceParser()
         self.verifier = verifier or SourceVerifier()
         self.planner = planner or ResearchPlanner()
+        self._audit: list[dict[str, Any]] = []
 
     def status(self) -> dict[str, Any]:
         return web_config_report(self.search_provider, self.fetch_provider)
@@ -441,6 +821,7 @@ class WebInformationFabric:
     def research(self, query: str, *, limit: int = 5, fetch_top: int = 2) -> ResearchResult:
         plan = self.planner.plan(query)
         search_out = self.search_provider.search(query, limit=limit)
+        self._audit.append({"event": "search", "ok": search_out.get("ok"), "provider": search_out.get("provider")})
         if not search_out.get("ok"):
             return ResearchResult(
                 ok=False,
@@ -457,7 +838,7 @@ class WebInformationFabric:
         for i, row in enumerate(results):
             url = str(row.get("url") or "")
             title = str(row.get("title") or "")
-            snippet = str(row.get("snippet") or "")
+            snippet = redact_secrets(str(row.get("snippet") or ""))
             cid = f"cite-{hashlib.sha256(f'{url}:{i}'.encode()).hexdigest()[:12]}"
             content_hash = hashlib.sha256((snippet or title or url).encode()).hexdigest()
             citations.append(
@@ -485,14 +866,13 @@ class WebInformationFabric:
                     }
                 )
 
-        # Optional deeper fetch
         for row in results[: max(0, int(fetch_top))]:
             url = str(row.get("url") or "")
             if not url:
                 continue
             fetched = self.fetch_provider.fetch(url)
+            self._audit.append({"event": "fetch", "ok": fetched.get("ok"), "url": url})
             if not fetched.get("ok"):
-                # Do not invent content; note failure on citation meta
                 continue
             parsed = self.parser.parse(fetched)
             if not parsed.get("ok"):
@@ -521,7 +901,6 @@ class WebInformationFabric:
             f"Research for {query!r}: {len(unique_cites)} sources. "
             + ("; ".join(summary_bits) if summary_bits else "No titles.")
         )
-        # Distinguish model inference: we only summarize source titles — mark as SOURCE-DERIVED
         claims.append(
             {
                 "statement": summary,
@@ -542,3 +921,23 @@ class WebInformationFabric:
             provider=str(search_out.get("provider") or ""),
             meta={"plan": plan, "search_count": len(results)},
         )
+
+    def audit(self) -> list[dict[str, Any]]:
+        return list(self._audit)
+
+
+class WebResearchExecutor:
+    """Thin executor over WebInformationFabric for skill/tool orchestration."""
+
+    def __init__(self, fabric: WebInformationFabric | None = None) -> None:
+        self.fabric = fabric or WebInformationFabric()
+
+    def execute(self, query: str, *, limit: int = 5, fetch_top: int = 1) -> dict[str, Any]:
+        result = self.fabric.research(query, limit=limit, fetch_top=fetch_top)
+        out = result.to_dict()
+        out["WEB_FABRIC_STATUS"] = self.fabric.status().get("WEB_FABRIC_STATUS")
+        out["audit"] = self.fabric.audit()[-10:]
+        return out
+
+    def status(self) -> dict[str, Any]:
+        return self.fabric.status()
