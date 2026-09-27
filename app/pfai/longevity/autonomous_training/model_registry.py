@@ -355,8 +355,14 @@ class ModelRegistry:
         previous_id = current.get("model_id") if current else None
         # Before switching: optionally preserve current ACTIVE as LKG (never delete checkpoints).
         # Rollback paths set preserve_outgoing_as_lkg=False so a failed candidate is not promoted to LKG.
+        # Do not replace an existing LKG with an internal_active (non production_ready) predecessor.
         if preserve_outgoing_as_lkg and previous_id and previous_id != model_id:
-            self.mark_lkg(previous_id, slot=slot, reason="preserved_before_activation")
+            existing_lkg = self.last_known_good(slot)
+            prev = self.get(previous_id) or {}
+            prev_ready = bool((prev.get("meta") or {}).get("production_ready"))
+            if prev_ready or not existing_lkg:
+                self.mark_lkg(previous_id, slot=slot, reason="preserved_before_activation")
+            # else: keep existing LKG (typically production last-known-good)
         with self._lock:
             db = self._conn()
             try:
