@@ -214,6 +214,15 @@ def _env_bool(name: str, default: bool = False) -> bool:
     return str(raw).strip().lower() in ("1", "true", "yes", "on")
 
 
+def _env_first(*names: str, default: str = "") -> str:
+    """Read the first non-empty environment variable from aliases (no secrets logged)."""
+    for name in names:
+        val = os.environ.get(name)
+        if val is not None and str(val).strip() != "":
+            return str(val).strip()
+    return default
+
+
 def production_email_required() -> bool:
     """True when silent Mock fallback is forbidden."""
     if _env_bool("PFAI_EMAIL_REQUIRE_PRODUCTION", False):
@@ -223,7 +232,7 @@ def production_email_required() -> bool:
 
 
 def email_provider_from_env(*, allow_mock: bool | None = None) -> EmailProvider:
-    kind = (os.environ.get("PFAI_EMAIL_PROVIDER") or "").strip().lower()
+    kind = _env_first("PFAI_EMAIL_PROVIDER", "EMAIL_PROVIDER", default="").lower()
     require_prod = production_email_required()
     if allow_mock is None:
         allow_mock = not require_prod
@@ -238,13 +247,15 @@ def email_provider_from_env(*, allow_mock: bool | None = None) -> EmailProvider:
 
     if kind == "smtp":
         provider = SMTPEmailProvider(
-            host=os.environ.get("PFAI_SMTP_HOST", ""),
-            port=int(os.environ.get("PFAI_SMTP_PORT", "587") or 587),
-            username=os.environ.get("PFAI_SMTP_USER", ""),
-            password=os.environ.get("PFAI_SMTP_PASSWORD", ""),
-            from_addr=os.environ.get("PFAI_SMTP_FROM", "") or os.environ.get("PFAI_SMTP_USER", ""),
-            use_tls=(os.environ.get("PFAI_SMTP_TLS", "true").lower() in ("1", "true", "yes")),
-            timeout=float(os.environ.get("PFAI_SMTP_TIMEOUT", "20") or 20),
+            host=_env_first("PFAI_SMTP_HOST", "SMTP_HOST"),
+            port=int(_env_first("PFAI_SMTP_PORT", "SMTP_PORT", default="587") or 587),
+            username=_env_first("PFAI_SMTP_USER", "SMTP_USERNAME", "SMTP_USER"),
+            password=_env_first("PFAI_SMTP_PASSWORD", "SMTP_PASSWORD"),
+            from_addr=_env_first("PFAI_SMTP_FROM", "SMTP_FROM")
+            or _env_first("PFAI_SMTP_USER", "SMTP_USERNAME", "SMTP_USER"),
+            use_tls=_env_first("PFAI_SMTP_TLS", "SMTP_TLS", default="true").lower()
+            in ("1", "true", "yes"),
+            timeout=float(_env_first("PFAI_SMTP_TIMEOUT", "SMTP_TIMEOUT", default="20") or 20),
         )
         ready = provider.readiness()
         if require_prod and not ready.get("production_ready"):
@@ -253,12 +264,12 @@ def email_provider_from_env(*, allow_mock: bool | None = None) -> EmailProvider:
 
     if kind == "api":
         provider = APIEmailProvider(
-            endpoint=os.environ.get("PFAI_EMAIL_API_ENDPOINT", ""),
-            api_key=os.environ.get("PFAI_EMAIL_API_KEY", ""),
-            from_addr=os.environ.get("PFAI_EMAIL_FROM", "") or os.environ.get("PFAI_SMTP_FROM", ""),
-            timeout=float(os.environ.get("PFAI_EMAIL_API_TIMEOUT", "20") or 20),
-            auth_header=os.environ.get("PFAI_EMAIL_API_AUTH_HEADER", "Authorization"),
-            auth_scheme=os.environ.get("PFAI_EMAIL_API_AUTH_SCHEME", "Bearer"),
+            endpoint=_env_first("PFAI_EMAIL_API_ENDPOINT", "EMAIL_API_ENDPOINT"),
+            api_key=_env_first("PFAI_EMAIL_API_KEY", "EMAIL_API_KEY"),
+            from_addr=_env_first("PFAI_EMAIL_FROM", "EMAIL_FROM", "PFAI_SMTP_FROM", "SMTP_FROM"),
+            timeout=float(_env_first("PFAI_EMAIL_API_TIMEOUT", default="20") or 20),
+            auth_header=_env_first("PFAI_EMAIL_API_AUTH_HEADER", default="Authorization"),
+            auth_scheme=_env_first("PFAI_EMAIL_API_AUTH_SCHEME", default="Bearer"),
         )
         ready = provider.readiness()
         if require_prod and not ready.get("production_ready"):

@@ -85,6 +85,41 @@ class TestEmailProvidersPhase13(unittest.TestCase):
         blob = str(report)
         self.assertNotIn("api_key", blob.lower().replace("api_key_configured", ""))
 
+    def test_smtp_env_aliases_without_secrets_in_report(self):
+        with mock.patch.dict(
+            os.environ,
+            {
+                "PFAI_ENV": "dev",
+                "PFAI_EMAIL_PROVIDER": "smtp",
+                "SMTP_HOST": "smtp.example.test",
+                "SMTP_PORT": "587",
+                "SMTP_USERNAME": "user",
+                "SMTP_PASSWORD": "do-not-leak",
+                "SMTP_FROM": "noreply@example.test",
+                "SMTP_TLS": "true",
+            },
+            clear=False,
+        ):
+            # Clear canonical names so aliases are exercised
+            for k in (
+                "PFAI_SMTP_HOST",
+                "PFAI_SMTP_PORT",
+                "PFAI_SMTP_USER",
+                "PFAI_SMTP_PASSWORD",
+                "PFAI_SMTP_FROM",
+            ):
+                os.environ.pop(k, None)
+            p = email_provider_from_env()
+            self.assertIsInstance(p, SMTPEmailProvider)
+            report = email_config_report(p)
+            self.assertEqual(report["EMAIL_DELIVERY_STATUS"], "READY")
+            self.assertNotIn("do-not-leak", str(report))
+
+    def test_mock_never_ready(self):
+        report = email_config_report(MockEmailProvider())
+        self.assertEqual(report["EMAIL_DELIVERY_STATUS"], "TEST_ONLY")
+        self.assertFalse(report["EMAIL_PRODUCTION_READY"])
+
     def test_otp_not_in_api_response_shape(self):
         tmp = tempfile.mkdtemp()
         owner = OwnerControl(email_env="PFAI_OWNER_EMAIL_T13", secret_env="PFAI_OWNER_SECRET_T13")
@@ -103,6 +138,7 @@ class TestEmailProvidersPhase13(unittest.TestCase):
         st = oa.public_status()
         self.assertIn("email_config", st)
         self.assertIn("EMAIL_PROVIDER", st["email_config"])
+        self.assertEqual(st["email_config"]["EMAIL_DELIVERY_STATUS"], "TEST_ONLY")
 
 
 class TestModelRouterPhase13(unittest.TestCase):

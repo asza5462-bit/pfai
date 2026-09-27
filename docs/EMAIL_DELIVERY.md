@@ -1,65 +1,64 @@
-# Email Delivery Configuration (Phase 13.1)
+# Email Delivery Configuration (Phase 13.2 — configuration readiness)
 
 Provider-agnostic Email OTP delivery. Credentials **never** belong in source code,
-logs, API responses, or frontend storage.
+logs, API responses, git, or frontend storage.
 
-## EMAIL_DELIVERY_STATUS (derived, never forced)
+## Status vocabulary (derived — never forced)
 
 | Status | Meaning |
 |--------|---------|
-| `READY` | `smtp` or `api` provider fully configured (`host`/`endpoint` + `from` + secrets as required) |
-| `TEST_ONLY` | `MockEmailProvider` selected (dev/test only) |
-| `NOT_CONFIGURED` | Fail-closed / incomplete production configuration |
+| `READY` | Real `smtp` or `api` provider fully configured |
+| `TEST_ONLY` | `MockEmailProvider` (dev/tests only — **not** production) |
+| `NOT_CONFIGURED` | Production requested but provider incomplete → fail-closed |
+| `READY_BOUNDED` | *(not used for email; see sandbox)* |
 
-Inspect via `email_config_report()` or `GET /platform/email/status` (owner-gated).
+Inspect: `email_config_report()` → `EMAIL_DELIVERY_STATUS`, or owner `GET /platform/email/status`.
 
-## Environment variables
+## Production SMTP template (environment / secret store only)
 
-### Provider selection
+Set these in the deployment secret store (values omitted on purpose):
 
-| Variable | Values | Notes |
-|----------|--------|-------|
-| `PFAI_EMAIL_PROVIDER` | `mock` \| `smtp` \| `api` | Default unset → mock in non-production |
-| `PFAI_ENV` / `ENV` | `production` / `prod` / `staging` | Enables fail-closed (no silent mock) |
-| `PFAI_EMAIL_REQUIRE_PRODUCTION` | `1`/`true` | Force fail-closed even outside prod env labels |
+```bash
+PFAI_ENV=production
+PFAI_EMAIL_PROVIDER=smtp
 
-### SMTP (`PFAI_EMAIL_PROVIDER=smtp`)
+# Owner identity (OTP recipient must match)
+PFAI_OWNER_EMAIL=                 # alias docs name: OWNER_EMAIL
 
-| Variable | Required | Notes |
-|----------|----------|-------|
-| `PFAI_SMTP_HOST` | yes | SMTP hostname |
-| `PFAI_SMTP_PORT` | no | Default `587` |
-| `PFAI_SMTP_USER` | usually | Login username |
-| `PFAI_SMTP_PASSWORD` | usually | **Secret** — env/secret store only |
-| `PFAI_SMTP_FROM` | yes | From address (falls back to USER) |
-| `PFAI_SMTP_TLS` | no | Default `true` |
-| `PFAI_SMTP_TIMEOUT` | no | Default `20` |
+# SMTP — canonical names
+PFAI_SMTP_HOST=                   # alias: SMTP_HOST
+PFAI_SMTP_PORT=587                # alias: SMTP_PORT
+PFAI_SMTP_USER=                   # alias: SMTP_USERNAME
+PFAI_SMTP_PASSWORD=               # alias: SMTP_PASSWORD  (SECRET)
+PFAI_SMTP_FROM=                   # alias: SMTP_FROM
+PFAI_SMTP_TLS=true                # alias: SMTP_TLS
+```
 
-### Generic HTTP API (`PFAI_EMAIL_PROVIDER=api`)
+Optional generic HTTP API instead of SMTP:
 
-| Variable | Required | Notes |
-|----------|----------|-------|
-| `PFAI_EMAIL_API_ENDPOINT` | yes | Provider-agnostic POST JSON endpoint |
-| `PFAI_EMAIL_API_KEY` | yes | **Secret** |
-| `PFAI_EMAIL_FROM` | yes | From address |
-| `PFAI_EMAIL_API_TIMEOUT` | no | Default `20` |
-| `PFAI_EMAIL_API_AUTH_HEADER` | no | Default `Authorization` |
-| `PFAI_EMAIL_API_AUTH_SCHEME` | no | Default `Bearer` |
+```bash
+PFAI_EMAIL_PROVIDER=api
+PFAI_EMAIL_API_ENDPOINT=
+PFAI_EMAIL_API_KEY=               # SECRET
+PFAI_EMAIL_FROM=
+```
 
-### OTP security knobs (non-secret)
+After configuration, confirm **`EMAIL_DELIVERY_STATUS=READY`**.  
+Mock must never report READY.
 
-| Variable | Default |
-|----------|---------|
-| `PFAI_OTP_TTL_SECONDS` | `300` |
-| `PFAI_OTP_LENGTH` | `6` |
-| `PFAI_OTP_MAX_ATTEMPTS` | `5` |
-| `PFAI_OTP_RESEND_COOLDOWN` | `60` |
-| `PFAI_OTP_MAX_REQUESTS_PER_HOUR` | `10` |
+## Fail-closed production behavior
+
+When `PFAI_ENV` is `production`/`prod`/`staging` (or `PFAI_EMAIL_REQUIRE_PRODUCTION=1`):
+
+- `mock` / missing provider → `FailClosedEmailProvider` → `EMAIL_DELIVERY_STATUS=NOT_CONFIGURED`
+- Incomplete SMTP/API → same fail-closed path
+- No silent fallback to Mock
 
 ## Security invariants
 
-- OTP values never returned in API responses, never logged, never stored plaintext (PBKDF2 hash).
-- Single-use, expiry, attempt limits, resend cooldown, lockout preserved.
-- Enumeration-resistant uniform OTP request responses.
-- Production refuses silent Mock fallback (`FailClosedEmailProvider`).
-- Owner-only authorization unchanged.
+- OTP never in logs, API responses, localStorage, or source
+- Hashed single-use OTP, expiry, attempt limits, resend cooldown, lockout
+- Enumeration-resistant request responses
+- Owner-only authorization unchanged
+
+See also: `app/.env.example` (placeholders only).

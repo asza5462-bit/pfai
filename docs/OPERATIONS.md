@@ -93,8 +93,9 @@ Promotion to active **never** happens automatically. Use owner-authenticated API
 | `PFAI_OWNER_SESSION_TTL` | Optional | Owner session seconds |
 | `PFAI_OWNER_MAX_FAILURES` | Optional | Auth lockout threshold |
 | `PFAI_OWNER_LOCKOUT_SECONDS` | Optional | Auth lockout duration |
-| `PFAI_EMAIL_PROVIDER` | Optional | `mock` (default) or `smtp` for Email OTP |
-| `PFAI_SMTP_HOST` / `PORT` / `USER` / `PASSWORD` / `FROM` | Optional | SMTP OTP delivery (env secrets only) |
+| `PFAI_EMAIL_PROVIDER` | Optional | `mock` (default) / `smtp` / `api` for Email OTP — see `docs/EMAIL_DELIVERY.md` |
+| `PFAI_SMTP_HOST` / `PORT` / `USER` / `PASSWORD` / `FROM` | Optional | SMTP OTP delivery (env secrets only); aliases `SMTP_HOST`, `SMTP_PORT`, `SMTP_USERNAME`, `SMTP_PASSWORD`, `SMTP_FROM`, `SMTP_TLS` |
+| `PFAI_WEB_ALLOW_NETWORK` + `PFAI_WEB_*` | Optional | Web fabric — see `docs/WEB_FABRIC.md`; stays NOT_CONFIGURED until set |
 | `PFAI_OTP_TTL_SECONDS` / `RESEND_COOLDOWN` / `MAX_ATTEMPTS` | Optional | OTP lifetime / cooldown / attempts |
 | `MODEL_PROVIDER` / `MODEL_NAME` / `MODEL_ENDPOINT` | Optional | Local/open-weight/openai_compatible selection |
 | `MODEL_TIMEOUT` / `MAX_TOKENS` / `TEMPERATURE` / `CONTEXT_LENGTH` | Optional | Local adapter generation settings |

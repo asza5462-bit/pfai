@@ -1,52 +1,62 @@
-# Web Fabric (Phase 13.1)
+# Web Fabric Configuration (Phase 13.2 — configuration readiness)
 
-Provider-agnostic search/fetch/research subsystem. **Never fabricates** web results.
+Provider-agnostic search/fetch. **Never fabricates** results. No mandatory commercial vendor.
 
-## WEB_FABRIC_STATUS (derived)
+## Status vocabulary (derived — never forced)
 
 | Status | Meaning |
 |--------|---------|
-| `READY` | Real search and/or fetch provider configured with network explicitly allowed |
-| `TEST_ONLY` | `MockWebSearchProvider` / `MockWebFetchProvider` selected |
-| `NOT_CONFIGURED` | Default — reports `WEB_PROVIDER_UNAVAILABLE` (no fake results) |
+| `READY` | Network explicitly allowed **and** a real search/fetch provider configured |
+| `TEST_ONLY` | Mock web providers selected for tests |
+| `NOT_CONFIGURED` | Default / no real provider — `WEB_PROVIDER_UNAVAILABLE` |
+| `READY_BOUNDED` | *(not used for web; see sandbox)* |
 
-## Interfaces
+Do **not** mark READY merely because interfaces exist.
 
-- `WebSearchProvider` / `WebFetchProvider`
-- `WebProviderRegistry` — catalogs factories (`mock`, `ddg`, `http_search`, `http_fetch`, `unavailable`)
-- `WebResearchExecutor` — skill/tool-facing execute + audit
-- `WebInformationFabric` — search → fetch → parse → verify → summarize with provenance
-- Claim kinds: `FACT`, `SOURCE-DERIVED CLAIM`, `MODEL INFERENCE`, `USER-PROVIDED INFORMATION`, `UNCERTAIN RESULT`
+## Environment-only production template
 
-## Environment variables
+```bash
+# Explicit opt-in to outbound network (required for READY)
+PFAI_WEB_ALLOW_NETWORK=1
 
-| Variable | Purpose |
-|----------|---------|
-| `PFAI_WEB_ALLOW_NETWORK` | Must be `1`/`true` to enable any real network provider |
-| `PFAI_WEB_SEARCH_PROVIDER` | `mock` \| `ddg` / `ddg_html` \| `http` / `http_search` |
-| `PFAI_WEB_FETCH_PROVIDER` | `mock` \| `http` / `http_fetch` |
-| `PFAI_WEB_SEARCH_ENDPOINT` | Generic HTTP search JSON endpoint (optional) |
-| `PFAI_WEB_SEARCH_API_KEY` | Optional secret for generic search |
-| `PFAI_WEB_SEARCH_QUERY_PARAM` | Default `q` |
-| `PFAI_WEB_TIMEOUT` | Default `15` |
-| `PFAI_WEB_ALLOW_PRIVATE` | Default off — enabling private IPs is strongly discouraged |
+# Search provider (pick one — none are mandatory vendors)
+#   ddg / ddg_html  — optional HTML search adapter
+#   http / http_search — generic JSON search endpoint you control
+PFAI_WEB_SEARCH_PROVIDER=http_search
+PFAI_WEB_SEARCH_ENDPOINT=         # your search API URL
+# PFAI_WEB_SEARCH_API_KEY=        # SECRET if required — never commit
+# PFAI_WEB_SEARCH_QUERY_PARAM=q
 
-No commercial vendor is mandatory. Optional DDG HTML adapter is a configuration choice, not a hard dependency.
+# Fetch provider
+PFAI_WEB_FETCH_PROVIDER=http_fetch
+PFAI_WEB_TIMEOUT=15
+PFAI_WEB_ALLOW_PRIVATE=0          # keep 0 — SSRF private/local blocking
+```
 
-## Safety controls
+Minimal optional public-HTML search (still no vendor lock-in):
 
-- URL scheme allowlist (`http`/`https` only)
-- DNS resolution + private/loopback/link-local/metadata host blocking (SSRF)
-- Redirect validation (max redirects; re-check each hop)
-- Content-type allowlist
-- Max response size / timeouts
-- Rate limiting on HTTP fetch
-- Secret/token redaction in fetched text
-- Audit events on deny/ok
+```bash
+PFAI_WEB_ALLOW_NETWORK=1
+PFAI_WEB_SEARCH_PROVIDER=ddg
+PFAI_WEB_FETCH_PROVIDER=http_fetch
+```
 
-## Owner checklist
+If unset / network denied → keep **`WEB_FABRIC_STATUS=NOT_CONFIGURED`**.
 
-1. Decide whether outbound web is allowed in this deployment.
-2. Set `PFAI_WEB_ALLOW_NETWORK=1` only if intended.
-3. Choose search/fetch providers via env — never embed credentials in code.
-4. Confirm `/platform/web/status` shows `WEB_FABRIC_STATUS=READY` only after real config.
+Confirm via `web_config_report()` or owner `GET /platform/web/status`.
+
+## Security controls (verified in code + tests)
+
+| Control | Present |
+|---------|---------|
+| SSRF protection (scheme/host/DNS) | yes |
+| Private / loopback / metadata blocking | yes |
+| Redirect validation (re-check each hop) | yes |
+| Timeouts | yes |
+| Response-size limits | yes |
+| Content-type restrictions | yes |
+| Secret / token redaction | yes |
+| Rate limiting (HTTP fetch) | yes |
+| Audit logging | yes |
+
+See also: `app/.env.example`, `docs/SANDBOX_SECURITY.md`.
