@@ -23,7 +23,31 @@ Health check:
 curl -s http://127.0.0.1:8000/health
 ```
 
-## Continuous learning worker
+## Command Chat
+
+Owner-authenticated conversational control plane:
+
+```bash
+curl -X POST http://127.0.0.1:8000/chat/message \
+  -H "Content-Type: application/json" \
+  -H "X-Owner-Secret: YOUR_SECRET" \
+  -d '{"message":"حلل حالة النظام"}'
+```
+
+Useful routes:
+
+| Method | Path | Purpose |
+|---|---|---|
+| POST | `/chat/message` | Send command to Brain |
+| POST | `/chat/approve/{pending_id}` | Approve sensitive tool |
+| POST | `/chat/reject/{pending_id}` | Reject sensitive tool |
+| GET | `/chat/tools` | Tool catalog |
+| GET | `/chat/audit` | Executable command audit |
+| GET/POST | `/chat/memory/*` | Search / remember / forget / correct |
+
+Without `ANTHROPIC_API_KEY`, Mock provider plans tools for UI/dev testing. Set the key only in platform secrets for live Claude planning/composition.
+
+Sensitive tools (continuous start/stop, remember/forget/correct, …) never execute until owner approval.
 
 ```bash
 cd app

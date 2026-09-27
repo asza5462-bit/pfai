@@ -49,6 +49,39 @@ class MemoryStore:
                 pass
         return self._like_search(query,limit)
 
+    def get(self, memory_id: int):
+        with self._lock:
+            row=self.db.execute('SELECT id,kind,content,source,confidence,created_at FROM memories WHERE id=?',(int(memory_id),)).fetchone()
+        if not row: return None
+        return dict(id=row[0],kind=row[1],content=row[2],source=row[3],confidence=row[4],created_at=row[5])
+
+    def update(self, memory_id: int, content: str, confidence: float | None = None):
+        """Correct an existing durable memory row. Returns False if missing."""
+        with self._lock:
+            row=self.db.execute('SELECT id FROM memories WHERE id=?',(int(memory_id),)).fetchone()
+            if not row: return False
+            if confidence is None:
+                self.db.execute('UPDATE memories SET content=? WHERE id=?',(content,int(memory_id)))
+            else:
+                self.db.execute('UPDATE memories SET content=?, confidence=? WHERE id=?',(content,float(confidence),int(memory_id)))
+            self.db.commit()
+        return True
+
+    def forget(self, memory_id: int) -> bool:
+        """Permanently remove a memory row (owner-gated at the API/agent layer)."""
+        with self._lock:
+            cur=self.db.execute('DELETE FROM memories WHERE id=?',(int(memory_id),))
+            self.db.commit()
+            return cur.rowcount > 0
+
+    def list_by_kind(self, kind: str, limit: int = 50):
+        with self._lock:
+            rows=self.db.execute(
+                'SELECT id,kind,content,source,confidence,created_at FROM memories WHERE kind=? ORDER BY id DESC LIMIT ?',
+                (kind, int(limit)),
+            ).fetchall()
+        return [dict(id=r[0],kind=r[1],content=r[2],source=r[3],confidence=r[4],created_at=r[5]) for r in rows]
+
     def close(self):
         self.db.close()
 

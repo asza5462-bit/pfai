@@ -45,5 +45,13 @@ Application code lives under `app/`. Package import root is `pfai` (set `PYTHONP
 cd app
 pip install -r requirements.txt
 python -c "from pfai.api import app; print('ok', app.title)"
-python -m pytest tests/test_api_wiring.py tests/test_v81_continuous_enable_gate.py -q
+python -m pytest tests/test_api_wiring.py tests/test_v81_continuous_enable_gate.py tests/test_v88_command_chat.py -q
 ```
+
+## Command Chat (Brain ↔ Heart)
+
+- UI: Dashboard section `AI Command Chat` (`static/index.html` + `static/assets/chat.js`)
+- Brain: `command_agent.py` + `tool_router.py` + `command_memory.py`
+- Heart: existing runtime/services via Tool Router callbacks in `api.py`
+- Sensitive tools require Owner approval (`/chat/approve/{id}`)
+- Without `ANTHROPIC_API_KEY`, Mock provider drives planning for local tests

@@ -1,0 +1,342 @@
+"""Command Chat Agent — the Brain of PFAI.
+
+Chat → Agent → Tool Router → Heart (core/services) → Result → Chat
+
+Does NOT mutate model weights. Learning = memory/feedback/approved knowledge.
+Sensitive heart mutations require explicit owner approval.
+"""
+from __future__ import annotations
+
+import json
+import os
+import re
+from typing import Any
+
+from .command_audit import CommandAuditLog
+from .command_memory import CommandMemoryService
+from .model_anthropic import AnthropicProvider
+from .model_mock import MockCommandProvider
+from .tool_router import ToolRouter
+from .logging_setup import setup_logging
+
+log = setup_logging("pfai.command_agent")
+
+STATUSES = (
+    "thinking",
+    "planning",
+    "calling_tool",
+    "executing",
+    "waiting_for_approval",
+    "completed",
+    "failed",
+)
+
+
+class CommandAgent:
+    def __init__(
+        self,
+        router: ToolRouter,
+        memory: CommandMemoryService,
+        audit: CommandAuditLog,
+        model=None,
+    ):
+        self.router = router
+        self.memory = memory
+        self.audit = audit
+        self.model = model
+        self.mock = MockCommandProvider()
+
+    def provider_name(self) -> str:
+        if self._anthropic_ready():
+            return f"anthropic:{getattr(self.model, 'model', 'claude')}"
+        return "mock-command"
+
+    def _anthropic_ready(self) -> bool:
+        if not isinstance(self.model, AnthropicProvider):
+            return False
+        env = getattr(self.model, "api_key_env", "ANTHROPIC_API_KEY")
+        return bool(os.environ.get(env))
+
+    def handle(self, message: str, *, owner: str, conversation_id: str | None = None, language: str | None = None) -> dict:
+        timeline: list[dict] = []
+        message = (message or "").strip()
+        if not message:
+            return {"ok": False, "error": "message is required", "timeline": timeline}
+
+        lang = language or _detect_lang(message)
+        cid = self.memory.ensure_conversation(conversation_id)
+        self.memory.add_message(cid, "user", message, status="completed")
+
+        def mark(status: str, detail: str | None = None, **extra):
+            step = {"status": status, "detail": detail, **extra}
+            timeline.append(step)
+            return step
+
+        mark("thinking", "Loading relevant PFAI memory and safety context")
+        mem_ctx = self.memory.context_block(message)
+        dialog = self.memory.recent_dialog(cid, limit=6)
+
+        # Correction conversational shortcut
+        if _is_correction_offer(message, dialog):
+            return self._handle_correction_capture(cid, owner, message, lang, timeline, mark)
+
+        mark("planning", f"Planning with provider={self.provider_name()}")
+        try:
+            planned = self._plan(message, mem_ctx, dialog)
+        except Exception as exc:
+            mark("failed", str(exc))
+            reply = _fail_reply(lang, str(exc))
+            self.memory.add_message(cid, "assistant", reply, status="failed", meta={"timeline": timeline})
+            return {"ok": False, "conversation_id": cid, "reply": reply, "timeline": timeline, "provider": self.provider_name()}
+
+        tool_results: list[dict] = []
+        pending_payload = None
+
+        for step in planned:
+            tool = step.get("tool")
+            args = step.get("args") or {}
+            if not tool:
+                continue
+            mark("calling_tool", f"Selected tool {tool}", tool=tool)
+            if self.router.requires_approval(tool):
+                pid = self.memory.create_pending(cid, tool, args, reason=step.get("reason") or message)
+                pending_payload = {
+                    "pending_id": pid,
+                    "tool": tool,
+                    "args": args,
+                    "reason": step.get("reason") or f"Owner approval required for {tool}",
+                }
+                mark("waiting_for_approval", pending_payload["reason"], pending_id=pid, tool=tool)
+                self.audit.record(
+                    actor=owner, command=message, tool=tool, status="waiting_for_approval",
+                    required_approval=True, approved=False, conversation_id=cid, pending_id=pid,
+                )
+                tool_results.append({"ok": False, "needs_approval": True, "tool": tool, "args": args, "pending_id": pid})
+                # Stop before executing any further mutating tools in the same turn
+                break
+
+            mark("executing", f"Executing {tool} via heart", tool=tool)
+            result = self.router.execute(tool, args, approved=False)
+            tool_results.append(result)
+            self.audit.record(
+                actor=owner, command=message, tool=tool,
+                status="completed" if result.get("ok") else "failed",
+                result=result.get("result") if result.get("ok") else None,
+                required_approval=False, approved=None, conversation_id=cid,
+                error=result.get("error"),
+            )
+            if not result.get("ok"):
+                mark("failed", result.get("error") or "tool failed", tool=tool)
+
+        if pending_payload:
+            reply = _approval_reply(lang, pending_payload)
+            final_status = "waiting_for_approval"
+        else:
+            mark("thinking", "Composing answer from tool results + memory")
+            reply = self._compose(message, tool_results, mem_ctx, lang)
+            final_status = "completed" if all(t.get("ok") or t.get("needs_approval") for t in tool_results) or not tool_results else (
+                "completed" if any(t.get("ok") for t in tool_results) else "failed"
+            )
+            if final_status == "completed":
+                mark("completed", "Turn finished")
+            else:
+                mark("failed", "One or more tools failed")
+
+        self.memory.add_message(
+            cid, "assistant", reply, status=final_status,
+            meta={"timeline": timeline, "tools": tool_results, "pending": pending_payload, "provider": self.provider_name()},
+        )
+        return {
+            "ok": final_status in {"completed", "waiting_for_approval"},
+            "conversation_id": cid,
+            "reply": reply,
+            "timeline": timeline,
+            "tools": tool_results,
+            "pending": pending_payload,
+            "provider": self.provider_name(),
+            "memory_used": mem_ctx,
+            "status": final_status,
+            "language": lang,
+        }
+
+    def approve(self, pending_id: str, *, owner: str) -> dict:
+        item = self.memory.get_pending(pending_id)
+        if not item:
+            return {"ok": False, "error": "pending action not found"}
+        if item["status"] != "waiting_for_approval":
+            return {"ok": False, "error": f"pending action status is {item['status']}"}
+        self.memory.resolve_pending(pending_id, "approved", owner)
+        timeline = [{"status": "executing", "detail": f"Owner approved {item['tool']}", "tool": item["tool"]}]
+        result = self.router.execute(item["tool"], item.get("args") or {}, approved=True)
+        status = "completed" if result.get("ok") else "failed"
+        timeline.append({"status": status, "detail": None if result.get("ok") else result.get("error"), "tool": item["tool"]})
+        self.audit.record(
+            actor=owner, command=f"approve:{pending_id}", tool=item["tool"], status=status,
+            result=result.get("result") if result.get("ok") else None,
+            required_approval=True, approved=True, conversation_id=item["conversation_id"],
+            pending_id=pending_id, error=result.get("error"),
+        )
+        reply = (
+            f"تمت الموافقة وتنفيذ `{item['tool']}`. النتيجة: {_short(result)}"
+            if _detect_lang(item.get("reason") or "") == "ar"
+            else f"Approved and executed `{item['tool']}`. Result: {_short(result)}"
+        )
+        self.memory.add_message(
+            item["conversation_id"], "assistant", reply, status=status,
+            meta={"timeline": timeline, "tools": [result], "pending_id": pending_id},
+        )
+        return {
+            "ok": result.get("ok", False),
+            "conversation_id": item["conversation_id"],
+            "reply": reply,
+            "timeline": timeline,
+            "tools": [result],
+            "status": status,
+            "pending_id": pending_id,
+        }
+
+    def reject(self, pending_id: str, *, owner: str) -> dict:
+        item = self.memory.get_pending(pending_id)
+        if not item:
+            return {"ok": False, "error": "pending action not found"}
+        self.memory.resolve_pending(pending_id, "rejected", owner)
+        self.audit.record(
+            actor=owner, command=f"reject:{pending_id}", tool=item["tool"], status="rejected",
+            required_approval=True, approved=False, conversation_id=item["conversation_id"], pending_id=pending_id,
+        )
+        reply = f"تم رفض تنفيذ `{item['tool']}` بواسطة المالك." 
+        self.memory.add_message(item["conversation_id"], "assistant", reply, status="completed", meta={"pending_id": pending_id, "rejected": True})
+        return {"ok": True, "conversation_id": item["conversation_id"], "reply": reply, "status": "rejected", "pending_id": pending_id}
+
+    # -- planning / compose --------------------------------------------
+    def _plan(self, message: str, mem_ctx: str, dialog: list[dict]) -> list[dict]:
+        allowed = [t["name"] for t in self.router.catalog()]
+        if self._anthropic_ready():
+            catalog = json.dumps(self.router.catalog(), ensure_ascii=False)
+            prompt = (
+                "You are the PFAI Command Agent brain. Choose zero or more tools to accomplish the owner request. "
+                "Return ONLY JSON: {\"tools\":[{\"tool\":\"name\",\"args\":{},\"reason\":\"...\"}],\"reply_hint\":\"...\"}. "
+                "Never invent tool names. Sensitive tools will still require owner approval after you select them. "
+                "Do not request weight training or secret access.\n"
+                f"Allowed tools: {catalog}\n"
+                f"Durable memory:\n{mem_ctx}\n"
+                f"Recent dialog: {json.dumps(dialog[-4:], ensure_ascii=False)}\n"
+                f"Owner message: {message}\n"
+            )
+            raw = self.model.generate(prompt, system="PFAI secure command planner. JSON only.")
+            data = _extract_json_obj(raw)
+            if data and isinstance(data.get("tools"), list):
+                out = []
+                for t in data["tools"]:
+                    name = (t or {}).get("tool")
+                    if name in allowed:
+                        out.append({"tool": name, "args": (t or {}).get("args") or {}, "reason": (t or {}).get("reason") or ""})
+                if out:
+                    return out
+        return self.mock.plan_tools(message, allowed)
+
+    def _compose(self, message: str, tool_results: list[dict], mem_ctx: str, lang: str) -> str:
+        if self._anthropic_ready():
+            prompt = (
+                "Compose a concise bilingual-capable operator reply for PFAI Command Chat. "
+                "Use the tool results; do not invent metrics. Prefer the owner's language.\n"
+                f"Language hint: {lang}\nMessage: {message}\nMemory:\n{mem_ctx}\n"
+                f"Tool results: {json.dumps(tool_results, ensure_ascii=False, default=str)[:6000]}\n"
+            )
+            try:
+                return self.model.generate(prompt, system="PFAI operator assistant. Be precise and safety-aware.")
+            except Exception as exc:
+                log.warning("anthropic compose failed: %s", exc)
+        return self.mock.compose_reply(message, tool_results, mem_ctx, language=lang)
+
+    def _handle_correction_capture(self, cid, owner, message, lang, timeline, mark) -> dict:
+        mark("thinking", "Owner correction flow")
+        # If message itself contains the correction after a prompt, save pending remember
+        content = message
+        for prefix in ("التصحيح:", "التصحيح :", "correction:", "Correction:"):
+            if prefix.lower() in message.lower():
+                content = message.split(":", 1)[-1].strip()
+                break
+        # Ask for explicit content if this is only a complaint
+        if re.search(r"غير صحيح|wrong|incorrect", message, re.I) and len(content) < 40:
+            mark("waiting_for_approval", "Awaiting correction text from owner")
+            reply = (
+                "ما التصحيح الذي تريد حفظه؟ أرسل نص التصحيح بوضوح، ثم سأطلب موافقتك قبل تسجيله في ذاكرة PFAI."
+                if lang == "ar"
+                else "What correction should I save? Send the corrected statement clearly; I will ask for your approval before writing it to PFAI memory."
+            )
+            self.memory.add_message(cid, "assistant", reply, status="waiting_for_approval", meta={"timeline": timeline})
+            return {
+                "ok": True, "conversation_id": cid, "reply": reply, "timeline": timeline,
+                "status": "waiting_for_approval", "provider": self.provider_name(), "language": lang,
+            }
+        pid = self.memory.create_pending(cid, "save_owner_correction", {"content": content}, reason="Save owner correction")
+        mark("waiting_for_approval", "Owner approval required to persist correction", pending_id=pid)
+        self.audit.record(
+            actor=owner, command=message, tool="save_owner_correction", status="waiting_for_approval",
+            required_approval=True, approved=False, conversation_id=cid, pending_id=pid,
+        )
+        pending = {"pending_id": pid, "tool": "save_owner_correction", "args": {"content": content}, "reason": "Save owner correction"}
+        reply = _approval_reply(lang, pending)
+        self.memory.add_message(cid, "assistant", reply, status="waiting_for_approval", meta={"timeline": timeline, "pending": pending})
+        return {
+            "ok": True, "conversation_id": cid, "reply": reply, "timeline": timeline,
+            "pending": pending, "status": "waiting_for_approval", "provider": self.provider_name(), "language": lang,
+        }
+
+
+def _detect_lang(text: str) -> str:
+    if re.search(r"[\u0600-\u06FF]", text or ""):
+        return "ar"
+    return "en"
+
+
+def _is_correction_offer(message: str, dialog: list[dict]) -> bool:
+    if re.search(r"غير صحيح|incorrect|wrong analysis|هذا التحليل", message or "", re.I):
+        return True
+    if dialog:
+        last = dialog[-1]
+        if last.get("role") == "assistant" and "التصحيح" in (last.get("content") or ""):
+            return True
+        if last.get("role") == "assistant" and "correction" in (last.get("content") or "").lower():
+            return True
+    return False
+
+
+def _approval_reply(lang: str, pending: dict) -> str:
+    if lang == "en":
+        return (
+            f"Action `{pending['tool']}` requires your Owner approval before execution.\n"
+            f"Pending ID: {pending['pending_id']}\n"
+            f"Reason: {pending.get('reason')}\n"
+            "Approve or reject from the chat approval controls."
+        )
+    return (
+        f"الإجراء `{pending['tool']}` يحتاج موافقة المالك قبل التنفيذ.\n"
+        f"معرّف الانتظار: {pending['pending_id']}\n"
+        f"السبب: {pending.get('reason')}\n"
+        "استخدم أزرار الموافقة/الرفض في المحادثة."
+    )
+
+
+def _fail_reply(lang: str, err: str) -> str:
+    return f"Failed to plan command: {err}" if lang == "en" else f"فشل التخطيط للأمر: {err}"
+
+
+def _short(result: dict) -> str:
+    try:
+        return json.dumps(result, ensure_ascii=False, default=str)[:800]
+    except Exception:
+        return str(result)[:800]
+
+
+def _extract_json_obj(text: str) -> dict | None:
+    if not text:
+        return None
+    start, end = text.find("{"), text.rfind("}")
+    if start < 0 or end <= start:
+        return None
+    try:
+        return json.loads(text[start : end + 1])
+    except json.JSONDecodeError:
+        return None

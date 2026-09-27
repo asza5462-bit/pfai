@@ -1,5 +1,23 @@
 # Agent Context Changelog
 
+## 2026-09-27 — AI Command Chat (Brain ↔ Heart)
+
+### Added
+- `command_agent.py`, `tool_router.py`, `command_memory.py`, `command_audit.py`, `model_mock.py`
+- API `/chat/*` + `/assets/chat.js`
+- Dashboard section **AI Command Chat** (default nav entry)
+- Tests `tests/test_v88_command_chat.py`
+
+### Behavior
+- Chat → Agent → Tool Router → PFAI core services → reply + timeline statuses
+- Sensitive tools wait for Owner Gate approval
+- Memory persists conversations, preferences, decisions, corrections (SQLite)
+- No automatic model-weight mutation from chat learning
+
+### Verified
+- 279 pytest tests passed
+- Live Mock chat: Arabic system analysis, English health check, continuous_start approval gate, audit log
+
 ## 2026-09-27 — Phases 2–7: memory, continuous gates, production, Docker
 
 ### Added

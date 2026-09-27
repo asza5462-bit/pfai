@@ -20,6 +20,10 @@ from .research_gate import ResearchGate
 from .config import Config
 from .continuous_gate import continuous_gate_status, is_continuous_enabled
 from .logging_setup import setup_logging
+from .command_audit import CommandAuditLog
+from .command_memory import CommandMemoryService
+from .tool_router import ToolRouter
+from .command_agent import CommandAgent
 from . import __version__
 
 log = setup_logging('pfai.api')
@@ -57,6 +61,99 @@ CODE_LEARNING=CodeLearningPipeline(runtime.model,CONTINUOUS,CODE_EVAL,research_g
     n=int(_CODE_CFG.get('candidates', 5)), max_repairs=int(_CODE_CFG.get('max_repairs', 4)),
     adversarial_rounds=int(_CODE_CFG.get('adversarial_rounds', 2)), auto_repair=bool(_CODE_CFG.get('auto_repair', True)))
 STATIC=Path(__file__).parent/'static'
+
+# --- Command Chat brain (Agent) ↔ heart (core services) -----------------
+COMMAND_AUDIT = CommandAuditLog('data/security/command_audit.jsonl')
+COMMAND_MEMORY = CommandMemoryService(runtime.memory, 'data/command_chat.sqlite3')
+
+def _tool_propose_improvement(topic: str = ''):
+    status = continuous_gate_status()
+    return {
+        'topic': topic or 'general',
+        'suggestions': [
+            'Keep continuous learning on memory/feedback only unless owner explicitly starts weight training offline.',
+            'Review /metrics errors and regression queue before promoting any candidate.',
+            'Confirm owner secret rotation and research allowlist remain deny-by-default.',
+        ],
+        'continuous_gate': status,
+        'note': 'Suggestion only — no production mutation performed.',
+    }
+
+def _tool_remember_knowledge(kind: str = 'approved_knowledge', content: str = ''):
+    if not str(content).strip():
+        raise ValueError('content is required')
+    mid = COMMAND_MEMORY.remember(kind, content.strip(), source='command_chat_approved')
+    return {'memory_id': mid, 'kind': kind}
+
+def _tool_forget_memory(memory_id: int):
+    ok = COMMAND_MEMORY.forget(int(memory_id))
+    if not ok:
+        raise ValueError('memory not found')
+    return {'forgotten': True, 'memory_id': int(memory_id)}
+
+def _tool_correct_memory(memory_id: int, content: str = ''):
+    if not str(content).strip():
+        raise ValueError('content is required')
+    ok = COMMAND_MEMORY.correct(int(memory_id), content.strip())
+    if not ok:
+        raise ValueError('memory not found')
+    return {'corrected': True, 'memory_id': int(memory_id)}
+
+def _tool_save_owner_correction(content: str = ''):
+    if not str(content).strip():
+        raise ValueError('content is required')
+    mid = COMMAND_MEMORY.remember('correction', content.strip(), source='owner_correction', confidence=0.95)
+    return {'memory_id': mid, 'kind': 'correction'}
+
+def _tool_continuous_start():
+    if not is_continuous_enabled():
+        raise RuntimeError('continuous training disabled by config/env gate')
+    return CONTINUOUS.start()
+
+def _tool_continuous_resume():
+    if not is_continuous_enabled():
+        raise RuntimeError('continuous training disabled by config/env gate')
+    return CONTINUOUS.resume()
+
+TOOL_ROUTER = ToolRouter({
+    'health_check': lambda: runtime.health(extra={'continuous': continuous_gate_status()}),
+    'system_status': lambda: {
+        'health': runtime.health(extra={'continuous': continuous_gate_status()}),
+        'metrics': runtime.metrics.snapshot(),
+        'deployments': runtime.deploy.history(),
+        'recovery': {'history_valid': RECOVERY.verify_history(), 'drills': RECOVERY.history()},
+        'continuous_gate': continuous_gate_status(),
+        'version': __version__,
+    },
+    'metrics_snapshot': lambda: runtime.metrics.snapshot(),
+    'modules_list': lambda: {'modules': [
+        'reasoning','memory','vector_memory','rag','command_chat','command_agent','tool_router',
+        'command_memory','continuous_learning_orchestrator','code_learning_pipeline'
+    ]},
+    'continuous_status': lambda: {**CONTINUOUS.status(), 'gate': continuous_gate_status(), 'auto_promote': False},
+    'deployments_list': lambda: {'items': runtime.deploy.history()},
+    'knowledge_search': lambda q='', limit=5: {'results': runtime.store.search(q, int(limit or 5))},
+    'memory_search': lambda q='', limit=5: {'results': COMMAND_MEMORY.relevant(q, int(limit or 5))},
+    'recovery_verify': lambda: {'valid': RECOVERY.verify_history(), 'history_path': str(RECOVERY.history_path)},
+    'research_verify': lambda: {
+        'valid': RESEARCH_GATE.verify_chain(), 'ledger_path': str(RESEARCH_GATE.ledger),
+        'network_enabled': RESEARCH_GATE.policy.network,
+        'allowed_domains': sorted(RESEARCH_GATE.policy.domains),
+    },
+    'regression_pending': lambda: {'items': REGRESSIONS.pending()},
+    'chat_audit_recent': lambda limit=20: {'items': COMMAND_AUDIT.recent(int(limit or 20))},
+    'propose_improvement': _tool_propose_improvement,
+    'continuous_start': _tool_continuous_start,
+    'continuous_pause': CONTINUOUS.pause,
+    'continuous_resume': _tool_continuous_resume,
+    'continuous_stop': lambda: CONTINUOUS.stop('stopped via command chat'),
+    'remember_knowledge': _tool_remember_knowledge,
+    'forget_memory': _tool_forget_memory,
+    'correct_memory': _tool_correct_memory,
+    'save_owner_correction': _tool_save_owner_correction,
+})
+COMMAND_AGENT = CommandAgent(TOOL_ROUTER, COMMAND_MEMORY, COMMAND_AUDIT, model=runtime.model)
+log.info('command chat brain ready provider_probe=%s', COMMAND_AGENT.provider_name())
 
 @app.middleware('http')
 async def request_log_middleware(request: Request, call_next):
@@ -357,3 +454,94 @@ def recovery_drill(x: RecoveryDrillRequest, owner:str=Depends(require_owner)):
         raise HTTPException(409, str(e))
     OWNER.authorize('RECOVERY_DRILL', f'{owner} ran a recovery drill on {x.snapshot.strip()}')
     return {'record': rec.__dict__ if hasattr(rec, '__dict__') else {'snapshot':rec.snapshot,'started_at':rec.started_at,'finished_at':rec.finished_at,'duration_ms':rec.duration_ms,'verified':rec.verified,'restored':rec.restored,'integrity_ok':rec.integrity_ok,'state_rows':rec.state_rows,'error':rec.error}}
+
+
+# --- Command Chat API (Brain ↔ Heart) ---------------------------------
+class ChatMessage(BaseModel):
+    message: str
+    conversation_id: str | None = None
+    language: str | None = None
+
+class ChatMemoryWrite(BaseModel):
+    kind: str = 'approved_knowledge'
+    content: str
+    confidence: float = 0.8
+
+class ChatMemoryCorrect(BaseModel):
+    content: str
+    confidence: float = 0.9
+
+@app.get('/chat/tools')
+def chat_tools(owner: str = Depends(require_owner)):
+    return {'provider': COMMAND_AGENT.provider_name(), 'tools': TOOL_ROUTER.catalog()}
+
+@app.get('/chat/conversations')
+def chat_conversations(owner: str = Depends(require_owner), limit: int = 30):
+    return {'items': COMMAND_MEMORY.list_conversations(limit)}
+
+@app.get('/chat/conversations/{conversation_id}')
+def chat_conversation(conversation_id: str, owner: str = Depends(require_owner)):
+    return {
+        'conversation_id': conversation_id,
+        'messages': COMMAND_MEMORY.get_messages(conversation_id),
+    }
+
+@app.post('/chat/message')
+def chat_message(x: ChatMessage, owner: str = Depends(require_owner)):
+    if not x.message.strip():
+        raise HTTPException(400, 'message is required')
+    result = COMMAND_AGENT.handle(x.message.strip(), owner=owner, conversation_id=x.conversation_id, language=x.language)
+    OWNER.authorize('CHAT_COMMAND', f'{owner} chat turn status={result.get("status")}')
+    return result
+
+@app.post('/chat/approve/{pending_id}')
+def chat_approve(pending_id: str, owner: str = Depends(require_owner)):
+    result = COMMAND_AGENT.approve(pending_id, owner=owner)
+    if not result.get('ok') and result.get('error'):
+        raise HTTPException(404 if 'not found' in result['error'] else 409, result['error'])
+    OWNER.authorize('CHAT_APPROVE', f'{owner} approved pending {pending_id}')
+    return result
+
+@app.post('/chat/reject/{pending_id}')
+def chat_reject(pending_id: str, owner: str = Depends(require_owner)):
+    result = COMMAND_AGENT.reject(pending_id, owner=owner)
+    if not result.get('ok') and result.get('error'):
+        raise HTTPException(404, result['error'])
+    OWNER.authorize('CHAT_REJECT', f'{owner} rejected pending {pending_id}')
+    return result
+
+@app.get('/chat/audit')
+def chat_audit(owner: str = Depends(require_owner), limit: int = 50):
+    return {'items': COMMAND_AUDIT.recent(limit)}
+
+@app.get('/chat/memory/search')
+def chat_memory_search(q: str, owner: str = Depends(require_owner), limit: int = 8):
+    return {'results': COMMAND_MEMORY.relevant(q, limit)}
+
+@app.post('/chat/memory/remember')
+def chat_memory_remember(x: ChatMemoryWrite, owner: str = Depends(require_owner)):
+    mid = COMMAND_MEMORY.remember(x.kind, x.content, source=f'owner:{owner}', confidence=x.confidence)
+    OWNER.authorize('CHAT_MEMORY_REMEMBER', f'{owner} remembered kind={x.kind} id={mid}')
+    return {'ok': True, 'memory_id': mid}
+
+@app.post('/chat/memory/forget/{memory_id}')
+def chat_memory_forget(memory_id: int, owner: str = Depends(require_owner)):
+    if not COMMAND_MEMORY.forget(memory_id):
+        raise HTTPException(404, 'memory not found')
+    OWNER.authorize('CHAT_MEMORY_FORGET', f'{owner} forgot memory {memory_id}')
+    return {'ok': True, 'forgotten': memory_id}
+
+@app.post('/chat/memory/correct/{memory_id}')
+def chat_memory_correct(memory_id: int, x: ChatMemoryCorrect, owner: str = Depends(require_owner)):
+    if not COMMAND_MEMORY.correct(memory_id, x.content, confidence=x.confidence):
+        raise HTTPException(404, 'memory not found')
+    OWNER.authorize('CHAT_MEMORY_CORRECT', f'{owner} corrected memory {memory_id}')
+    return {'ok': True, 'memory_id': memory_id}
+
+@app.get('/assets/{asset_path:path}')
+def dashboard_assets(asset_path: str):
+    target = (STATIC / 'assets' / asset_path).resolve()
+    root = (STATIC / 'assets').resolve()
+    if not str(target).startswith(str(root)) or not target.is_file():
+        raise HTTPException(404, 'asset not found')
+    return FileResponse(target)

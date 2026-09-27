@@ -32,6 +32,18 @@
 - Decision: Document placeholders only; runtime reads env vars.
 - Consequences: Deploy platforms must inject secrets; local `.env` is gitignored.
 
+## ADR-006 — Command Chat Brain ↔ Heart via Tool Router
+
+- Status: Accepted (2026-09-27)
+- Context: Operator wants a central AI command chat that can operate PFAI safely.
+- Decision:
+  - Add CommandAgent + ToolRouter + CommandMemory + CommandAudit.
+  - Heart access only through registered tool callbacks (no ad-hoc filesystem writes from the model).
+  - Sensitive tools require Owner approval before execution.
+  - Use Anthropic when `ANTHROPIC_API_KEY` is present; otherwise MockCommandProvider.
+  - Phase-1 learning for chat = memory/feedback/approved knowledge/corrections — not automatic weight training.
+- Consequences: Dashboard gains AI Command Chat; existing APIs remain intact.
+
 ## ADR-005 — Durable agent memory in docs/
 
 - Status: Accepted (2026-09-27)
