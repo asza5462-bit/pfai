@@ -6,7 +6,7 @@ from typing import Any, Callable, Protocol, runtime_checkable
 
 
 # Monotonic platform schema number. Bump only with an accompanying migration.
-PFAI_SCHEMA_VERSION = 2
+PFAI_SCHEMA_VERSION = 3
 
 
 @dataclass

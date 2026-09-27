@@ -232,3 +232,19 @@
   - `PlatformEvaluation` adds longevity suites + durable baselines; compare still owner-gated for promote.
   - Additive owner-gated `/platform/ltm|knowledge/versions|eval|migrations|export*` routes; `/chat/*` + Dashboard unchanged.
 - Consequences: Memory/knowledge are portable and versioned; schema upgrades are backup-gated; Core still never requires Anthropic or weight mutation.
+
+## ADR-024 — PHASE 4 unified Planner/Tools authorization + versioned skills + bounded heal
+
+- Status: Accepted (2026-09-27)
+- Context: ToolRouter used legacy risk strings; SkillRegistry had no versions; TaskPlanner was a stub; self-heal mostly re-checked.
+- Decision:
+  - Introduce `ActionPermissionGate` + `AuthorizedExecutor` + authz audit (distinct from legacy escalation `PermissionGate` ledger).
+  - Map ToolRouter risks → `ToolPermission`; HIGH_RISK_WRITE+ always needs explicit owner `approved=True` (server-side only).
+  - Versioned `SkillRegistry` with activate/rollback + schema compatibility checks; handlers stay in-process.
+  - Real `TaskPlanner` over ReasoningCore: capped steps/tool calls; forbidden unsafe actions; every step through AuthorizedExecutor.
+  - Orchestrator `mode=plan` integrates memory/knowledge/eval/learn/tools/skills.
+  - Self-heal: detect→diagnose→propose→owner approve→apply_safe→test→rollback; only registered safe actions; durable heal audit.
+  - Providers: add `local` / `open_weight` readiness slots (Echo fallback); Anthropic remains optional.
+  - Schema bump to **3** with backup-first migration for skill version tables.
+  - Additive `/platform/plan|skills*|tools|heal*|authz/audit` routes; reuse owner auth; no weight training.
+- Consequences: Privileged execution has one choke-point; skills/tools are versioned/rollback-capable; learning remains reversible and weight-free.

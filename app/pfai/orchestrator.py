@@ -1,8 +1,8 @@
-"""PFAI Orchestrator — central planning/execution layer (PHASE 2).
+"""PFAI Orchestrator — central planning/execution layer (PHASE 4).
 
-Coordinates Command Chat, Coding AI, Skills, LTM, Knowledge, Evaluation,
-Self-check and bounded Self-heal. Does not bypass Owner Gate. Never mutates
-model weights or core security/architecture autonomously.
+Coordinates Command Chat, Coding AI, Planner, Skills, Tools, LTM, Knowledge,
+Evaluation, Learning, Self-check and bounded Self-heal.
+Does not bypass Owner Gate. Never mutates model weights or core security/architecture.
 """
 from __future__ import annotations
 
@@ -13,7 +13,6 @@ from pfai.interfaces.learning import LearningSource
 from pfai.interfaces.memory import MemoryKind, MemoryRecord
 from pfai.interfaces.orchestrator import OrchestratorProtocol
 from pfai.interfaces.types import OrchestratorRequest, OrchestratorResult, TimelineStatus
-from pfai.interfaces.tools import ToolPermission
 from pfai.model_router import ModelRouter
 from pfai.skills.registry import SkillRegistry
 
@@ -25,7 +24,7 @@ __all__ = [
     "Orchestrator",
 ]
 
-PHASE = 2
+PHASE = 4
 
 
 class Orchestrator:
@@ -42,6 +41,7 @@ class Orchestrator:
         evaluation: Any = None,
         self_check: Any = None,
         self_heal: Any = None,
+        planner: Any = None,
         wired: bool = True,
     ) -> None:
         self.model_router = model_router
@@ -54,9 +54,10 @@ class Orchestrator:
         self.evaluation = evaluation
         self.self_check = self_check
         self.self_heal = self_heal
+        self.planner = planner
         self._wired = wired and any(
             x is not None
-            for x in (command_agent, coding_agent, learning, self_check, model_router)
+            for x in (command_agent, coding_agent, learning, self_check, model_router, planner)
         )
 
     def handle(self, request: OrchestratorRequest) -> OrchestratorResult:
@@ -87,11 +88,12 @@ class Orchestrator:
                 return self._run_knowledge(request, timeline)
             if mode in ("skill", "skills"):
                 return self._run_skill(request, timeline)
+            if mode in ("plan", "planner"):
+                return self._run_plan(request, timeline)
             if mode.startswith("coding") or _looks_coding(goal):
                 return self._run_coding(request, timeline)
             if mode in ("ops", "general", "chat", ""):
                 return self._run_command(request, timeline)
-            # default: command chat brain
             return self._run_command(request, timeline)
         except Exception as exc:
             timeline.append(TimelineStatus("failed", str(exc)))
@@ -103,6 +105,7 @@ class Orchestrator:
             "wired": self._wired,
             "has_command": self.command_agent is not None,
             "has_coding": self.coding_agent is not None,
+            "has_planner": self.planner is not None,
             "has_skills": len(self.skills.list_skills()) if self.skills else 0,
             "has_ltm": self.ltm is not None,
             "has_learning": self.learning is not None,
@@ -118,6 +121,40 @@ class Orchestrator:
                 else {"weight_training_allowed_now": False}
             ),
         }
+
+    def _run_plan(self, request: OrchestratorRequest, timeline: list[TimelineStatus]) -> OrchestratorResult:
+        if self.planner is None:
+            return OrchestratorResult(ok=False, error="planner not connected", timeline=timeline)
+        ctx = request.context or {}
+        approved = bool(ctx.get("approved"))
+        actions = ctx.get("actions")
+        plan = self.planner.plan(request.goal, actions=actions)
+        timeline.append(TimelineStatus("planning", f"steps={len(plan.steps)}"))
+        if ctx.get("plan_only"):
+            return OrchestratorResult(
+                ok=True,
+                reply="plan created",
+                timeline=timeline + [TimelineStatus("completed", "plan_only")],
+                meta={"plan_id": plan.plan_id, "steps": [{"id": s.id, "action": s.action} for s in plan.steps]},
+            )
+        ran = self.planner.run(plan, approved=approved, actor=request.user_id or "", verify=bool(ctx.get("verify", True)))
+        for s in ran.steps:
+            timeline.append(TimelineStatus(s.status, s.action, meta={"error": s.error, "result": s.result}))
+        needs = ran.status == "waiting_for_approval"
+        return OrchestratorResult(
+            ok=ran.status in ("verified", "completed", "unverified") and not needs,
+            needs_approval=needs,
+            approval_id=ran.plan_id if needs else None,
+            reply=f"plan {ran.status}",
+            timeline=timeline + [TimelineStatus("completed" if ran.status.startswith("verif") or ran.status == "completed" else ran.status, ran.plan_id)],
+            meta={
+                "plan_id": ran.plan_id,
+                "status": ran.status,
+                "verification": ran.verification,
+                "steps": [{"id": s.id, "action": s.action, "status": s.status, "error": s.error} for s in ran.steps],
+            },
+            error=None if ran.status != "failed" else "plan failed",
+        )
 
     def _run_command(self, request: OrchestratorRequest, timeline: list[TimelineStatus]) -> OrchestratorResult:
         if self.command_agent is None:
@@ -145,7 +182,6 @@ class Orchestrator:
 
     def _run_coding(self, request: OrchestratorRequest, timeline: list[TimelineStatus]) -> OrchestratorResult:
         if self.coding_agent is None:
-            # fall back to command agent which may delegate
             return self._run_command(request, timeline)
         timeline.append(TimelineStatus("calling_tool", "coding_agent"))
         owner = (request.context or {}).get("owner") or request.user_id or "owner"
@@ -164,26 +200,34 @@ class Orchestrator:
         name = (request.context or {}).get("skill") or ""
         args = (request.context or {}).get("args") or {}
         approved = bool((request.context or {}).get("approved"))
+        version = (request.context or {}).get("version")
+        actor = request.user_id or (request.context or {}).get("owner") or ""
         if not name:
-            catalog = [{"name": s.name, "permission": s.permission.value, "version": s.version} for s in self.skills.list_skills()]
+            catalog = [
+                {"name": s.name, "permission": s.permission.value, "version": s.version}
+                for s in self.skills.list_skills()
+            ]
             timeline.append(TimelineStatus("completed", "skill catalog"))
             return OrchestratorResult(ok=True, reply="skill catalog", timeline=timeline, meta={"skills": catalog})
         timeline.append(TimelineStatus("executing", f"skill:{name}"))
-        result = self.skills.invoke(name, args, approved=approved)
+        if version:
+            result = self.skills.invoke_version(name, str(version), args, approved=approved, actor=actor)
+        else:
+            result = self.skills.invoke(name, args, approved=approved, actor=actor)
         if result.meta.get("needs_approval"):
             return OrchestratorResult(
                 ok=False,
                 needs_approval=True,
                 reply="owner approval required for skill",
                 timeline=timeline + [TimelineStatus("waiting_for_approval", name)],
-                meta={"skill": name, "permission": result.meta.get("permission")},
+                meta={"skill": name, "permission": result.meta.get("permission"), "version": result.meta.get("version")},
                 error=result.error,
             )
         return OrchestratorResult(
             ok=result.ok,
             reply=result.reply or (str(result.output) if result.output is not None else ""),
             timeline=timeline + [TimelineStatus("completed" if result.ok else "failed", name)],
-            meta={"skill": name, "output": result.output},
+            meta={"skill": name, "output": result.output, "version": result.meta.get("version")},
             error=result.error,
         )
 

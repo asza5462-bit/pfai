@@ -16,7 +16,6 @@ def _upgrade_v2_longevity_foundation(conn: Any) -> None:
     root = Path("data/longevity")
     root.mkdir(parents=True, exist_ok=True)
     (root / ".phase3").write_text("ltm+knowledge+migration\n", encoding="utf-8")
-    # Ensure LTM versions schema exists even before LongTermMemory is constructed.
     import sqlite3
 
     db_path = root / "ltm_versions.sqlite3"
@@ -43,7 +42,46 @@ def _upgrade_v2_longevity_foundation(conn: Any) -> None:
         db.commit()
     finally:
         db.close()
-    _ = conn  # reserved for future RelationalStorePort
+    _ = conn
+
+
+def _upgrade_v3_skill_tool_versions(conn: Any) -> None:
+    """PHASE 4: durable skill version metadata + authz/heal audit dirs."""
+    root = Path("data/longevity")
+    root.mkdir(parents=True, exist_ok=True)
+    (root / ".phase4").write_text("planner+skills+heal+authz\n", encoding="utf-8")
+    import sqlite3
+
+    db_path = root / "skill_versions.sqlite3"
+    db = sqlite3.connect(db_path)
+    try:
+        db.executescript(
+            """
+            CREATE TABLE IF NOT EXISTS skill_versions (
+                name TEXT NOT NULL,
+                version TEXT NOT NULL,
+                description TEXT,
+                permission TEXT,
+                status TEXT,
+                changelog TEXT,
+                min_schema_version INTEGER,
+                offline_ok INTEGER,
+                provider_kinds TEXT,
+                meta TEXT,
+                created_at TEXT,
+                PRIMARY KEY (name, version)
+            );
+            CREATE TABLE IF NOT EXISTS skill_active (
+                name TEXT PRIMARY KEY,
+                version TEXT NOT NULL,
+                updated_at TEXT
+            );
+            """
+        )
+        db.commit()
+    finally:
+        db.close()
+    _ = conn
 
 
 PLATFORM_MIGRATIONS: list[Migration] = [
@@ -52,6 +90,12 @@ PLATFORM_MIGRATIONS: list[Migration] = [
         name="longevity_ltm_foundation",
         upgrade=_upgrade_v2_longevity_foundation,
         description="PHASE 3: durable LTM versions table + longevity data root",
+    ),
+    Migration(
+        version=3,
+        name="skill_tool_versioning",
+        upgrade=_upgrade_v3_skill_tool_versions,
+        description="PHASE 4: skill version tables + planner/heal durability markers",
     ),
 ]
 

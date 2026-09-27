@@ -73,6 +73,28 @@ class ProviderRegistry:
                 ),
                 _make_openai_compatible,
             )
+        if "local" not in self._specs:
+            self.register(
+                ProviderSpec(
+                    provider_id="local",
+                    kind="local",
+                    description="Open-weight / local model readiness slot (Echo until adapter bound)",
+                    offline_capable=True,
+                    requires_api_key=False,
+                ),
+                lambda **_: EchoProvider(),
+            )
+        if "open_weight" not in self._specs:
+            self.register(
+                ProviderSpec(
+                    provider_id="open_weight",
+                    kind="open_weight",
+                    description="Future open-weight adapter placeholder (safe Echo fallback)",
+                    offline_capable=True,
+                    requires_api_key=False,
+                ),
+                lambda **_: EchoProvider(),
+            )
         if "anthropic" not in self._specs:
             self.register(
                 ProviderSpec(

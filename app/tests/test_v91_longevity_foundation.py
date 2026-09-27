@@ -104,7 +104,7 @@ class TestLongevityContracts(unittest.TestCase):
         self.assertEqual(kv.provenance.actor, "owner")
 
     def test_schema_version_and_migration_dry_run(self):
-        self.assertEqual(PFAI_SCHEMA_VERSION, 2)
+        self.assertEqual(PFAI_SCHEMA_VERSION, 3)
         runner = MigrationRunner(current=1)
         runner.register(Migration(version=2, name="example_future", description="not applied yet"))
         # target beyond current schema constant still plans registered steps up to target
@@ -163,7 +163,7 @@ class TestLongevityContracts(unittest.TestCase):
         self.assertIsInstance(layer, CompatibilityLayerProtocol)
         report = layer.check()
         self.assertTrue(report.python_ok)
-        self.assertEqual(layer.schema_version(), 2)
+        self.assertEqual(layer.schema_version(), 3)
         self.assertIn("echo", layer.supported_provider_kinds())
         self.assertIn("sqlite", layer.supported_storage_kinds())
 

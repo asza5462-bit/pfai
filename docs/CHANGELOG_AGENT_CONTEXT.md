@@ -1,5 +1,28 @@
 # Agent Context Changelog
 
+## 2026-09-27 — Longevity PHASE 4: Planner / Authz / Skills / Heal
+
+### Added
+- `authorized_execution.py` — ActionPermissionGate, AuthorizedExecutor, AuthorizationAudit
+- ToolRouter → ToolPermission mapping via AuthorizedExecutor
+- Versioned SkillRegistry (activate/rollback/compatibility)
+- Real TaskPlanner (ReasoningCore adapter, caps, forbidden actions)
+- Orchestrator `mode=plan`; bounded auditable SelfHeal
+- Providers: `local`, `open_weight` readiness (Echo fallback)
+- Schema **3** migration (skill version tables); routes `/platform/plan|skills*|tools|heal*|authz/audit`
+- Tests `test_v95_phase4_platform.py`; ADR-024
+
+### Behavior
+- HIGH_RISK_WRITE+ always requires explicit owner approval
+- No weight training; learning via durable pipeline only
+- Legacy PermissionGate escalation ledger preserved
+- `/chat/*`, `/coding/*`, Dashboard, owner auth unchanged
+
+### Verified
+- pytest: **374 passed**
+- Smoke: `/health`, `/`, `/system`, `/metrics`, `/platform/plan`, chat, coding tracks
+- No deploy; no git remote; no secrets added
+
 ## 2026-09-27 — Longevity PHASE 3: LTM / Knowledge / Migrations / Export
 
 ### Added

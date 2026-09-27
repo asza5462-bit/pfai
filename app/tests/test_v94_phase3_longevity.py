@@ -118,15 +118,15 @@ class TestPhase3MigrationExport(unittest.TestCase):
         state = self.root / "schema.json"
         runner = MigrationRunner(current=1, state_path=str(state), backup_fn=backup)
         register_platform_migrations(runner)
-        self.assertEqual(PFAI_SCHEMA_VERSION, 2)
+        self.assertEqual(PFAI_SCHEMA_VERSION, 3)
         report = runner.run(dry_run=False)
         self.assertTrue(report.ok, report.error)
-        self.assertEqual(runner.current_version(), 2)
+        self.assertEqual(runner.current_version(), 3)
         self.assertTrue(backups)
         self.assertTrue((self.root / "backups" / backups[0]["path"]).exists())
         # Persisted
         runner2 = MigrationRunner(state_path=str(state), backup_fn=backup)
-        self.assertEqual(runner2.current_version(), 2)
+        self.assertEqual(runner2.current_version(), 3)
 
     def test_migration_without_backup_fn_fails_apply(self):
         runner = MigrationRunner(current=1, state_path=str(self.root / "s.json"), backup_fn=None)
@@ -249,8 +249,9 @@ class TestPhase3API(unittest.TestCase):
         health = self.client.get("/health")
         self.assertEqual(health.status_code, 200)
         plat = health.json().get("platform") or {}
-        self.assertEqual(plat.get("phase"), 3)
+        self.assertEqual(plat.get("phase"), 4)
         self.assertTrue(plat.get("ltm"))
+        self.assertTrue(plat.get("planner"))
         self.assertEqual(plat.get("anthropic_required"), False)
         # Dashboard intact
         self.assertEqual(self.client.get("/").status_code, 200)

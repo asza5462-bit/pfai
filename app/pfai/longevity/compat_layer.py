@@ -53,7 +53,7 @@ class CompatibilityLayer:
         return PFAI_SCHEMA_VERSION
 
     def supported_provider_kinds(self) -> list[str]:
-        return ["echo", "mock", "openai_compatible", "anthropic", "local", "custom"]
+        return ["echo", "mock", "openai_compatible", "local", "open_weight", "anthropic", "custom"]
 
     def supported_storage_kinds(self) -> list[str]:
         return ["sqlite", "json_files", "filesystem_blobs"]  # future: postgres, s3-compatible, etc.

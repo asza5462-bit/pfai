@@ -45,6 +45,8 @@ from .memory import MemoryStore
 from .platform_evaluation import PlatformEvaluation
 from .self_check import SelfCheck, SelfHeal
 from .longevity.compat_layer import CompatibilityLayer
+from .authorized_execution import AuthorizedExecutor, AuthorizationAudit, PermissionGate
+from .task_planner import TaskPlanner
 from .interfaces.types import OrchestratorRequest
 from .interfaces.memory import MemoryKind, MemoryRecord
 from .interfaces.skills import Skill
@@ -175,6 +177,10 @@ CODING_TOOL_SPECS = list(DEFAULT_TOOLS) + [
     ToolSpec('coding_knowledge', 'Search coding knowledge base', 'read', False, {'q': 'string', 'limit': 'int?'}),
 ]
 
+# PHASE 4: shared authorization choke-point (server-side only)
+PLATFORM_AUTHZ_AUDIT = AuthorizationAudit('data/longevity/authz_audit.jsonl')
+PLATFORM_EXECUTOR = AuthorizedExecutor(PermissionGate(), PLATFORM_AUTHZ_AUDIT)
+
 TOOL_ROUTER = ToolRouter({
     'health_check': lambda: runtime.health(extra={'continuous': continuous_gate_status()}),
     'system_status': lambda: {
@@ -190,7 +196,8 @@ TOOL_ROUTER = ToolRouter({
         'reasoning','memory','vector_memory','rag','command_chat','command_agent','tool_router',
         'command_memory','continuous_learning_orchestrator','code_learning_pipeline',
         'coding_agent','coding_tutor','coding_curriculum','coding_academy',
-        'orchestrator','provider_registry','model_router','safe_learning','long_term_memory'
+        'orchestrator','provider_registry','model_router','safe_learning','long_term_memory',
+        'permission_gate','task_planner','skill_registry'
     ]},
     'continuous_status': lambda: {**CONTINUOUS.status(), 'gate': continuous_gate_status(), 'auto_promote': False},
     'deployments_list': lambda: {'items': runtime.deploy.history()},
@@ -221,7 +228,7 @@ TOOL_ROUTER = ToolRouter({
     'coding_progress': lambda owner='owner': CODING_PROFILES.progress(owner),
     'coding_projects': lambda level='': {'projects': CODING_CURRICULUM.projects(level or None)},
     'coding_knowledge': lambda q='', limit=8: {'results': CODING_CURRICULUM.knowledge_search(q, int(limit or 8))},
-}, specs=CODING_TOOL_SPECS)
+}, specs=CODING_TOOL_SPECS, executor=PLATFORM_EXECUTOR)
 COMMAND_AGENT = CommandAgent(TOOL_ROUTER, COMMAND_MEMORY, COMMAND_AUDIT, model=runtime.model)
 COMMAND_AGENT.coding_agent = CODING_AGENT
 log.info('command chat brain ready provider_probe=%s', COMMAND_AGENT.provider_name())
@@ -290,9 +297,56 @@ PLATFORM_SELF_CHECK = SelfCheck({
         'providers': [p.provider_id for p in PROVIDER_REGISTRY.list_providers()],
     },
     'ltm_ready': lambda: {'ok': True, 'phase': 3},
+    'planner_ready': lambda: {'ok': True, 'phase': 4},
 })
-PLATFORM_SELF_HEAL = SelfHeal(PLATFORM_SELF_CHECK)
-PLATFORM_SKILLS = SkillRegistry()
+PLATFORM_SELF_HEAL = SelfHeal(
+    PLATFORM_SELF_CHECK,
+    audit_path='data/longevity/heal_audit.jsonl',
+    authz_audit=PLATFORM_AUTHZ_AUDIT,
+)
+PLATFORM_SELF_HEAL.register_safe_action(
+    'clear_transient_cache',
+    lambda: {'ok': True, 'cleared': ['eval_ephemeral']},
+)
+PLATFORM_SELF_HEAL.register_safe_action(
+    'rerun_eval_smoke',
+    lambda: {'ok': PLATFORM_EVAL.run_suite('smoke').ok},
+)
+PLATFORM_SELF_HEAL.register_safe_action(
+    'compat_recheck',
+    lambda: {'ok': PLATFORM_COMPAT.check().python_ok},
+)
+PLATFORM_SKILLS = SkillRegistry(
+    path='data/longevity/skill_versions.sqlite3',
+    executor=PLATFORM_EXECUTOR,
+)
+
+def _planner_learn_ingest(goal: str, approved: bool = False, actor: str = ''):
+    _ = approved, actor
+    if PLATFORM_LEARNING.allows_weight_mutation():
+        return {'ok': False, 'error': 'weight mutation forbidden'}
+    cand = PLATFORM_LEARNING.ingest('feedback', goal, meta={'via': 'planner'})
+    return {'ok': True, 'candidate_id': cand.candidate_id, 'status': str(cand.status)}
+
+def _planner_eval_runner(suite: str):
+    report = PLATFORM_EVAL.run_suite(suite)
+    return {'ok': report.ok, 'passed': report.passed, 'failed': report.failed, 'suite': report.suite}
+
+PLATFORM_PLANNER = TaskPlanner(
+    executor=PLATFORM_EXECUTOR,
+    max_steps=8,
+    max_tool_calls=8,
+    tool_runner=lambda name, args, approved=False, actor='': TOOL_ROUTER.execute(name, args, approved=approved, actor=actor),
+    skill_runner=lambda name, args, approved=False, actor='': (
+        (lambda r: {'ok': r.ok, 'output': r.output, 'error': r.error, 'needs_approval': bool((r.meta or {}).get('needs_approval'))})(
+            PLATFORM_SKILLS.invoke(name, args, approved=approved, actor=actor)
+        )
+    ),
+    memory_query=lambda q: [{'id': h.record_id, 'content': h.content} for h in PLATFORM_LTM.query(query=q, limit=5)],
+    knowledge_query=lambda q: [h.__dict__ for h in PLATFORM_KNOWLEDGE.search(q, limit=5)],
+    eval_runner=_planner_eval_runner,
+    learn_ingest=_planner_learn_ingest,
+)
 
 
 def _export_knowledge_rows():
@@ -350,17 +404,23 @@ ORCHESTRATOR = Orchestrator(
     evaluation=PLATFORM_EVAL,
     self_check=PLATFORM_SELF_CHECK,
     self_heal=PLATFORM_SELF_HEAL,
+    planner=PLATFORM_PLANNER,
 )
 PLATFORM_SKILLS.register(
     Skill(name='platform_status', description='Orchestrator/platform status', permission=ToolPermission.READ, version='1'),
     lambda ctx=None, **_k: ORCHESTRATOR.status(),
+)
+PLATFORM_SKILLS.register_version(
+    Skill(name='platform_status', description='Orchestrator/platform status v2', permission=ToolPermission.READ, version='2'),
+    lambda ctx=None, **_k: {**ORCHESTRATOR.status(), 'skill_version': '2'},
+    activate=False,
 )
 PLATFORM_SKILLS.register(
     Skill(name='learning_readiness', description='Fine-tune readiness (no training)', permission=ToolPermission.READ, version='1'),
     lambda ctx=None, **_k: PLATFORM_LEARNING.training_readiness(),
 )
 log.info(
-    'orchestrator ready providers=%s roles=%s anthropic_required=false phase=3',
+    'orchestrator ready providers=%s roles=%s anthropic_required=false phase=4',
     [p.provider_id for p in PROVIDER_REGISTRY.list_providers()],
     MODEL_ROUTER.available_roles(),
 )
@@ -567,7 +627,9 @@ def health():
             'schema_pending': PLATFORM_MIGRATIONS_RUNNER.status().get('pending_count', 0),
             'ltm': True,
             'eval_suites': len(PLATFORM_EVAL.list_suites()),
-            'phase': 3,
+            'planner': True,
+            'skill_versions': True,
+            'phase': 4,
         },
     })
 
@@ -1165,6 +1227,172 @@ def platform_export_import(x: ImportBody, owner: str = Depends(require_owner)):
     if not x.dry_run:
         OWNER.authorize('PLATFORM_IMPORT', f'{owner} imported bundle dry_run=false')
     return result
+
+
+# --- PHASE 4: Planner / Skills versions / Tools catalog / Heal ---
+class PlanBody(BaseModel):
+    goal: str
+    actions: list[str] | None = None
+    approved: bool = False
+    plan_only: bool = False
+    verify: bool = True
+
+
+class SkillActivateBody(BaseModel):
+    name: str
+    version: str
+
+
+class HealApplyBody(BaseModel):
+    proposal_id: str
+    approved: bool = False
+
+
+@app.post('/platform/plan')
+def platform_plan(x: PlanBody, owner: str = Depends(require_owner)):
+    if not x.goal.strip():
+        raise HTTPException(400, 'goal is required')
+    # Ignore any client-supplied role flags — owner comes from require_owner only.
+    req = OrchestratorRequest(
+        goal=x.goal.strip(),
+        mode='plan',
+        user_id=owner,
+        context={'actions': x.actions, 'approved': bool(x.approved), 'plan_only': bool(x.plan_only), 'verify': bool(x.verify), 'owner': owner},
+    )
+    result = ORCHESTRATOR.handle(req)
+    OWNER.authorize('PLATFORM_PLAN', f'{owner} plan ok={result.ok} needs_approval={result.needs_approval}')
+    return {
+        'ok': result.ok,
+        'reply': result.reply,
+        'needs_approval': result.needs_approval,
+        'approval_id': result.approval_id,
+        'meta': result.meta,
+        'timeline': [{'status': t.status, 'detail': t.detail} for t in result.timeline],
+        'error': result.error,
+    }
+
+
+@app.get('/platform/plan/{plan_id}')
+def platform_plan_get(plan_id: str, owner: str = Depends(require_owner)):
+    _ = owner
+    plan = PLATFORM_PLANNER.get(plan_id)
+    if not plan:
+        raise HTTPException(404, 'plan not found')
+    return {
+        'plan_id': plan.plan_id,
+        'goal': plan.goal,
+        'status': plan.status,
+        'verification': plan.verification,
+        'steps': [{'id': s.id, 'action': s.action, 'status': s.status, 'error': s.error} for s in plan.steps],
+    }
+
+
+@app.get('/platform/skills')
+def platform_skills_list(owner: str = Depends(require_owner)):
+    _ = owner
+    return {
+        'skills': [
+            {
+                'name': s.name,
+                'version': s.version,
+                'permission': s.permission.value,
+                'description': s.description,
+                'active_version': PLATFORM_SKILLS.active_version(s.name),
+            }
+            for s in PLATFORM_SKILLS.list_skills()
+        ]
+    }
+
+
+@app.get('/platform/skills/{name}/versions')
+def platform_skill_versions(name: str, owner: str = Depends(require_owner)):
+    _ = owner
+    return {
+        'name': name,
+        'active_version': PLATFORM_SKILLS.active_version(name),
+        'versions': [
+            {'name': s.name, 'version': s.version, 'permission': s.permission.value, 'description': s.description}
+            for s in PLATFORM_SKILLS.list_versions(name)
+        ],
+    }
+
+
+@app.post('/platform/skills/activate')
+def platform_skills_activate(x: SkillActivateBody, owner: str = Depends(require_owner)):
+    result = PLATFORM_SKILLS.activate(x.name, x.version, approved=True, actor=owner)
+    if not result.get('ok'):
+        raise HTTPException(404 if 'not found' in (result.get('error') or '') else 400, result.get('error') or 'activate failed')
+    OWNER.authorize('PLATFORM_SKILL_ACTIVATE', f'{owner} activated {x.name}@{x.version}')
+    return result
+
+
+@app.post('/platform/skills/rollback')
+def platform_skills_rollback(x: SkillActivateBody, owner: str = Depends(require_owner)):
+    result = PLATFORM_SKILLS.rollback(x.name, x.version, approved=True, actor=owner)
+    if not result.get('ok'):
+        raise HTTPException(404 if 'not found' in (result.get('error') or '') else 400, result.get('error') or 'rollback failed')
+    OWNER.authorize('PLATFORM_SKILL_ROLLBACK', f'{owner} rolled back {x.name} to {x.version}')
+    return result
+
+
+@app.get('/platform/tools')
+def platform_tools_catalog(owner: str = Depends(require_owner)):
+    _ = owner
+    return {'tools': TOOL_ROUTER.catalog()}
+
+
+@app.post('/platform/heal/propose')
+def platform_heal_propose(owner: str = Depends(require_owner)):
+    _ = owner
+    report = PLATFORM_SELF_CHECK.run_checks()
+    proposal = PLATFORM_SELF_HEAL.propose_fix(report)
+    return {
+        'proposal_id': proposal.proposal_id,
+        'diagnosis': proposal.diagnosis,
+        'safe': proposal.safe,
+        'reversible': proposal.reversible,
+        'steps': proposal.steps,
+        'requires_owner': proposal.requires_owner,
+        'risk': proposal.risk,
+        'meta': proposal.meta,
+    }
+
+
+@app.post('/platform/heal/apply')
+def platform_heal_apply(x: HealApplyBody, owner: str = Depends(require_owner)):
+    # Explicit approved flag required for high-risk heal; server ignores client role claims.
+    approved = bool(x.approved)
+    applied = PLATFORM_SELF_HEAL.apply_fix(x.proposal_id, approved=approved)
+    if applied.meta.get('needs_approval'):
+        raise HTTPException(401, 'owner approval required')
+    if not applied.ok:
+        raise HTTPException(409, applied.message or 'heal apply failed')
+    tested = PLATFORM_SELF_HEAL.test_fix(x.proposal_id)
+    if not tested.ok:
+        rolled = PLATFORM_SELF_HEAL.rollback_fix(x.proposal_id)
+        OWNER.authorize('PLATFORM_HEAL_ROLLBACK', f'{owner} heal failed test; rolled back {x.proposal_id}')
+        return {'ok': False, 'applied': applied.meta, 'tested': tested.meta, 'rollback': rolled.meta}
+    OWNER.authorize('PLATFORM_HEAL_APPLY', f'{owner} applied heal {x.proposal_id}')
+    return {'ok': True, 'applied': applied.meta, 'tested': tested.meta}
+
+
+@app.post('/platform/heal/rollback')
+def platform_heal_rollback(proposal_id: str, owner: str = Depends(require_owner)):
+    rolled = PLATFORM_SELF_HEAL.rollback_fix(proposal_id)
+    OWNER.authorize('PLATFORM_HEAL_ROLLBACK', f'{owner} rolled back heal {proposal_id}')
+    return {'ok': rolled.ok, 'message': rolled.message, 'meta': rolled.meta}
+
+
+@app.get('/platform/heal/audit')
+def platform_heal_audit(limit: int = 50, owner: str = Depends(require_owner)):
+    _ = owner
+    return {'items': PLATFORM_SELF_HEAL.recent_audit(limit)}
+
+
+@app.get('/platform/authz/audit')
+def platform_authz_audit(limit: int = 50, owner: str = Depends(require_owner)):
+    _ = owner
+    return {'items': PLATFORM_AUTHZ_AUDIT.recent(limit)}
 
 
 # --- Command Chat API (Brain ↔ Heart) ---------------------------------
