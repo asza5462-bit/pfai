@@ -86,7 +86,6 @@ class SkillLearningBridge:
             "skill_version": skill_version,
             "model_version": model_version,
             "source": "elite_orchestrator",
-            "timestamp": time.time(),
         }
         blob = json.dumps(content).lower()
         if self._contains_secrets(blob):
@@ -96,7 +95,8 @@ class SkillLearningBridge:
             if any(x in (task or "").lower() for x in ("rm -rf", "curl | sh", "base64 -d")):
                 return {"ok": False, "error": "untrusted_executable_payload_blocked"}
         h = self._hash(content)
-        row = {**content, "content_hash": h, "ts": content["timestamp"]}
+        now = time.time()
+        row = {**content, "timestamp": now, "ts": now, "content_hash": h}
         with self._lock:
             if h in self._seen:
                 return {"ok": True, "duplicate": True, "content_hash": h}
