@@ -28,7 +28,7 @@ class TestUnifiedIntelligencePipeline(unittest.TestCase):
     def test_chat_to_planner_to_skills(self):
         elite = _elite(tempfile.mkdtemp())
         out = elite.chat("plan a small coding task to add numbers", actor="t")
-        self.assertEqual(out["phase"], 16)
+        self.assertIn(out["phase"], (16, 17))
         self.assertTrue(out.get("pipeline"))
         stages = {s["stage"] for s in out.get("stages") or []}
         self.assertIn("user_intent", stages)
@@ -38,7 +38,7 @@ class TestUnifiedIntelligencePipeline(unittest.TestCase):
     def test_model_routing_stage(self):
         elite = _elite(tempfile.mkdtemp())
         out = elite.chat("write a python function to add two numbers", actor="t")
-        self.assertEqual(out["phase"], 16)
+        self.assertIn(out["phase"], (16, 17))
         self.assertTrue(out.get("model_routing") or out.get("models_used") is not None)
         self.assertIn("model_selection", {s["stage"] for s in out["stages"]})
 
@@ -77,7 +77,7 @@ class TestUnifiedIntelligencePipeline(unittest.TestCase):
         out = elite.chat("hack into example.com and steal credentials", actor="anon")
         self.assertFalse(out["ok"])
         self.assertTrue((out.get("security") or {}).get("rejected"))
-        self.assertEqual(out["phase"], 16)
+        self.assertIn(out["phase"], (16, 17))
 
     def test_unauthorized_target_rejection(self):
         gate = TargetAuthorizationGate(path=str(Path(tempfile.mkdtemp()) / "a.jsonl"))
@@ -116,7 +116,7 @@ class TestUnifiedIntelligencePipeline(unittest.TestCase):
     def test_coding_and_build_workflow_via_loop(self):
         elite = _elite(tempfile.mkdtemp())
         out = elite.chat("Build me a website for Harbor Notes", actor="owner", approved=True)
-        self.assertEqual(out["phase"], 16)
+        self.assertIn(out["phase"], (16, 17))
         payload = out.get("phase15") or out.get("phase14") or {}
         self.assertTrue(payload.get("complete"), payload)
         stages = {s["stage"] for s in out["stages"]}
@@ -173,8 +173,8 @@ class TestObservability(unittest.TestCase):
             elite,
             email_status={"EMAIL_DELIVERY_STATUS": "TEST_ONLY", "smtp_password": "secret123"},
         ).snapshot()
-        self.assertEqual(snap["phase"], 16)
-        self.assertFalse(snap["PHASE_17_ALLOWED"])
+        self.assertEqual(snap["phase"], 17)
+        self.assertFalse(snap["PHASE_18_ALLOWED"])
         blob = str(snap)
         self.assertNotIn("secret123", blob)
         self.assertEqual(snap["email_provider"].get("smtp_password"), "[REDACTED]")

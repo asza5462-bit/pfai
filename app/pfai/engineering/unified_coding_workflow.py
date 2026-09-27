@@ -169,6 +169,9 @@ class UnifiedCodingWorkflow:
                 "vulnerabilit",
                 "secure code",
                 "authorized test",
+                "for security",
+                "application for security",
+                "analyze this api",
             )
         ):
             return "security_review"

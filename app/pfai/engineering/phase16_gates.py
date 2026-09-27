@@ -116,8 +116,8 @@ def evaluate_phase16_gates(*, full_tests: dict[str, Any] | None = None) -> dict[
         out = loop.run("plan a small coding task", actor="t")
         evidence["loop_phase"] = out.get("phase")
         evidence["loop_has_pipeline"] = bool(out.get("pipeline"))
-        if out.get("phase") != 16:
-            blockers.append("loop_phase_not_16")
+        if out.get("phase") not in (16, 17):
+            blockers.append("loop_phase_not_16_or_17")
         if not out.get("pipeline"):
             blockers.append("loop_pipeline_missing")
         # Offensive reject

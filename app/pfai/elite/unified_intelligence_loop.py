@@ -81,15 +81,15 @@ class UnifiedIntelligenceLoop:
             result["loop_id"] = loop_id
             result["pipeline"] = PIPELINE_STAGES
             result["stages"] = stages
-            result["phase"] = 16
+            result["phase"] = 17
             result["latency_seconds"] = time.time() - started
-            result["PHASE_17_ALLOWED"] = False
+            result["PHASE_18_ALLOWED"] = False
             return result
 
         # Core path: existing EliteOrchestrator (authorization inside)
         mark("intent_classification", deferred_to="elite_orchestrator")
         mark("planning", deferred_to="elite_orchestrator")
-        mark("authorization", note="ActionPermissionGate/AuthorizedExecutor — never bypassed")
+        mark("authorization", note="ActionPermissionGate/AuthorizedExecutor/ScopeEnforcement — never bypassed")
 
         out = self.orch.handle(
             message,
@@ -119,7 +119,7 @@ class UnifiedIntelligenceLoop:
         training_note = {
             "auto_started": False,
             "optional": True,
-            "note": "Autonomous training requires separate eligibility + quality gate; LKG preserved",
+            "note": "Autonomous training requires separate eligibility + quality gate; LKG preserved; cannot alter security controls",
         }
         mark("optional_autonomous_training", **training_note)
         mark(
@@ -136,16 +136,15 @@ class UnifiedIntelligenceLoop:
         )
 
         out = dict(out)
-        out["phase"] = 16
+        out["phase"] = 17
         out["loop_id"] = loop_id
         out["pipeline"] = list(PIPELINE_STAGES)
         out["stages"] = stages
         out["learning_candidate"] = learn
-        out["PHASE_17_ALLOWED"] = False
+        out["PHASE_18_ALLOWED"] = False
         out["latency_seconds"] = time.time() - started
-        # Ensure reject responses also report phase 16
         if (out.get("security") or {}).get("rejected"):
-            out["phase"] = 16
+            out["phase"] = 17
         return out
 
     def _detect_meta_intent(self, message: str) -> str | None:

@@ -67,15 +67,25 @@ class EliteOrchestrator:
         self.skill_metrics = SkillEvaluationLedger(path=str(self.root / "skill_evaluations.jsonl"))
         self.audit_path = self.root / "elite_audit.jsonl"
         self._lock = threading.RLock()
-        self._boot = {"skills": None, "tools": None, "phase14": None, "phase15": None, "phase16": True}
+        self._boot = {
+            "skills": None,
+            "tools": None,
+            "phase14": None,
+            "phase15": None,
+            "phase16": True,
+            "phase17": None,
+        }
         if bootstrap_skills:
             from pfai.engineering.phase14_skills import register_phase14_skills
             from pfai.engineering.phase15_skills import register_phase15_skills
+            from pfai.engineering.phase17_skills import register_phase17_skills
 
             self._boot["skills"] = register_elite_skills(self.skills, activate=True)
             self._boot["phase14"] = register_phase14_skills(self.skills, activate=True)
             self._boot["phase15"] = register_phase15_skills(self.skills, activate=True)
+            self._boot["phase17"] = register_phase17_skills(self.skills, activate=True)
             self._boot["tools"] = self.tools.bootstrap_safe_tools()
+            self._boot["security_tools"] = self.tools.bootstrap_security_tools()
         from pfai.elite.unified_intelligence_loop import UnifiedIntelligenceLoop
 
         self.intelligence = UnifiedIntelligenceLoop(self)
@@ -220,7 +230,7 @@ class EliteOrchestrator:
                 "execution_id": execution_id,
                 "mode": mode,
                 "security": {"rejected": True},
-                "phase": 16,
+                "phase": 17,
             }
 
         # Reject unauthorized offensive / third-party attack language
@@ -248,7 +258,7 @@ class EliteOrchestrator:
                 "execution_id": execution_id,
                 "mode": mode,
                 "security": {"rejected": True, "offensive_blocked": True},
-                "phase": 16,
+                "phase": 17,
             }
 
         # Task planner (lightweight)
@@ -311,6 +321,33 @@ class EliteOrchestrator:
         elif any(
             w in lowered
             for w in (
+                "security development lifecycle",
+                "build this application securely",
+                "secure sdlc",
+            )
+        ):
+            from pfai.engineering.security_ops import SecurityDevelopmentLifecycle
+
+            sdlc = SecurityDevelopmentLifecycle()
+            phase15_result = sdlc.run_for_project(
+                message,
+                project_path=str(ctx.get("project_path") or ""),
+                approved=approved,
+                actor=actor,
+                target_id=str(ctx.get("target_id") or ""),
+                auto_remediate=bool(ctx.get("auto_remediate") or ctx.get("auto_apply")),
+            )
+            phase14_result = phase15_result
+            timeline.append(
+                {
+                    "event": "security_sdlc",
+                    "ok": phase15_result.get("ok"),
+                    "security_ready": phase15_result.get("security_ready"),
+                }
+            )
+        elif any(
+            w in lowered
+            for w in (
                 "review this project for security",
                 "security problems",
                 "find security weaknesses",
@@ -319,6 +356,12 @@ class EliteOrchestrator:
                 "check my application for security",
                 "fix the vulnerabilities",
                 "remediat",
+                "review this application for security",
+                "analyze this api",
+                "generate a safe remediation",
+                "apply the approved remediation",
+                "retest the application",
+                "create a security regression test",
             )
         ):
             from pfai.engineering.unified_coding_workflow import UnifiedCodingWorkflow
@@ -598,11 +641,11 @@ class EliteOrchestrator:
             "sandbox_metadata": sandbox_meta,
             "timeline": timeline,
             "latency_seconds": time.time() - started,
-            "phase": 16,
+            "phase": 17,
             "phase14": phase14_result,
             "phase15": phase15_result,
             "optional_future_training": True,
-            "PHASE_17_ALLOWED": False,
+            "PHASE_18_ALLOWED": False,
         }
         self._audit("elite_handle", execution_id=execution_id, mode=mode, status=status, actor=actor)
         return out
@@ -612,12 +655,14 @@ class EliteOrchestrator:
         from pfai.engineering.phase14_skills import phase14_status
         from pfai.engineering.phase15_gates import phase15_status
         from pfai.engineering.phase16_gates import phase16_status
+        from pfai.engineering.phase17_gates import phase17_status
 
         p14 = phase14_status()
         p15 = phase15_status()
         p16 = phase16_status()
+        p17 = phase17_status()
         return {
-            "phase": 16,
+            "phase": 17,
             "skills": self.skills.health(),
             "tools": {
                 "count": len(self.tools.catalog()),
@@ -635,10 +680,12 @@ class EliteOrchestrator:
             "phase14": p14,
             "phase15": p15,
             "phase16": p16,
+            "phase17": p17,
             "PHASE_14_ALLOWED": bool(p14.get("PHASE_14_ALLOWED")),
             "PHASE_15_ALLOWED": bool(p15.get("PHASE_15_ALLOWED")),
             "PHASE_16_ALLOWED": bool(p16.get("PHASE_16_ALLOWED")),
-            "PHASE_17_ALLOWED": False,
+            "PHASE_17_ALLOWED": bool(p17.get("PHASE_17_ALLOWED")),
+            "PHASE_18_ALLOWED": False,
             "skill_metrics": self.skill_metrics.summary(),
             "unified_intelligence_loop": True,
         }

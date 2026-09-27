@@ -1178,6 +1178,18 @@ def phase16_platform_status(owner: str = Depends(require_owner)):
     st['PHASE_17_ALLOWED'] = False
     return {'ok': True, **st}
 
+@app.get('/platform/phase17/status')
+def phase17_platform_status(owner: str = Depends(require_owner)):
+    from .engineering import phase17_status
+    st = phase17_status()
+    st['elite'] = {
+        'skill_count': ELITE.skills.health().get('count'),
+        'phase17_boot': (ELITE._boot or {}).get('phase17'),
+        'security_tools': (ELITE._boot or {}).get('security_tools'),
+    }
+    st['PHASE_18_ALLOWED'] = False
+    return {'ok': True, **st}
+
 @app.get('/platform/observability')
 def platform_observability(owner: str = Depends(require_owner)):
     from .elite.platform_observability import PlatformObservability
@@ -1241,6 +1253,56 @@ def phase16_chat(x: Phase16ChatBody, owner: str = Depends(require_owner)):
         allow_training_ops=bool(x.allow_training_ops),
     )
     OWNER.authorize('PHASE16_CHAT', f'{owner} ok={result.get("ok")} phase={result.get("phase")}')
+    return result
+
+class Phase17TargetBody(BaseModel):
+    name: str
+    target_type: str = 'local_application'
+    environment: str = 'staging'
+    authorization_scope: str = ''
+    allowed_domains: list[str] | None = None
+    allowed_hosts: list[str] | None = None
+    allowed_ports: list[int] | None = None
+    allowed_paths: list[str] | None = None
+    testing_methods: list[str] | None = None
+    approval_reference: str = ''
+    authorize_now: bool = False
+    expiration: float = 0
+
+@app.post('/platform/phase17/targets')
+def phase17_register_target(x: Phase17TargetBody, owner: str = Depends(require_owner)):
+    from .engineering import TargetRegistry
+    reg = TargetRegistry()
+    result = reg.register(
+        name=x.name,
+        target_type=x.target_type,
+        owner=owner,
+        environment=x.environment,
+        authorization_scope=x.authorization_scope,
+        allowed_domains=x.allowed_domains,
+        allowed_hosts=x.allowed_hosts,
+        allowed_ports=x.allowed_ports,
+        allowed_paths=x.allowed_paths,
+        testing_methods=x.testing_methods,
+        approval_reference=x.approval_reference,
+        authorize_now=bool(x.authorize_now),
+        expiration=float(x.expiration or 0),
+        actor=owner,
+    )
+    OWNER.authorize('PHASE17_TARGET', f'{owner} register ok={result.get("ok")}')
+    return result
+
+@app.post('/platform/phase17/sdlc')
+def phase17_sdlc(x: Phase15WorkflowBody, owner: str = Depends(require_owner)):
+    from .engineering import SecurityDevelopmentLifecycle
+    result = SecurityDevelopmentLifecycle().run_for_project(
+        x.message,
+        project_path=x.project_path,
+        approved=bool(x.approved),
+        actor=owner,
+        auto_remediate=bool(x.auto_apply),
+    )
+    OWNER.authorize('PHASE17_SDLC', f'{owner} security_ready={result.get("security_ready")}')
     return result
 
 @app.post('/platform/phase14/build')

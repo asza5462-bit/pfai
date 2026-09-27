@@ -359,3 +359,97 @@ class ToolFabric:
             r = self.register(d, handler, activate=True)
             defs.append(r)
         return {"ok": True, "tools": defs}
+
+    def bootstrap_security_tools(self) -> dict[str, Any]:
+        """PHASE 17 defensive security tools — authorization/scope still required at call sites."""
+        defs = []
+
+        def _code_review(project_path: str = "", **_k: Any) -> dict[str, Any]:
+            from pfai.engineering.web_security_engine import WebApplicationSecurityEngine
+
+            if not project_path:
+                return {"ok": False, "error": "project_path_required"}
+            return WebApplicationSecurityEngine().analyze_source(project_path)
+
+        def _headers_check(headers: dict | None = None, **_k: Any) -> dict[str, Any]:
+            from pfai.engineering.web_security_engine import WebApplicationSecurityEngine
+
+            return WebApplicationSecurityEngine().analyze_headers(headers or {})
+
+        def _dependency_audit(project_path: str = "", **_k: Any) -> dict[str, Any]:
+            from pfai.engineering.project_inspector import ProjectInspector
+
+            if not project_path:
+                return {"ok": False, "error": "project_path_required"}
+            insp = ProjectInspector(project_path).inspect()
+            return {
+                "ok": True,
+                "manifests": (insp.get("dependencies") or {}).get("manifests"),
+                "packages": (insp.get("dependencies") or {}).get("packages"),
+            }
+
+        def _scope_check(target_id: str = "", method: str = "static_analysis", actor: str = "", resource: str = "", approved: bool = False, **_k: Any) -> dict[str, Any]:
+            from pfai.engineering.scope_enforcement import ScopeEnforcementLayer
+
+            return ScopeEnforcementLayer().enforce(
+                target_id=target_id,
+                operation=method,
+                method=method,
+                actor=actor,
+                approved=approved,
+                resource=resource,
+            )
+
+        def _remediation(project_path: str = "", approved: bool = False, actor: str = "", auto_apply: bool = False, **_k: Any) -> dict[str, Any]:
+            from pfai.engineering.project_workspace import ProjectWorkspace
+            from pfai.engineering.remediation import RemediationLoop
+
+            if not project_path:
+                return {"ok": False, "error": "project_path_required"}
+            return RemediationLoop(ProjectWorkspace(project_path)).run(
+                approved=approved, actor=actor, auto_apply=auto_apply
+            )
+
+        def _retest(project_path: str = "", **_k: Any) -> dict[str, Any]:
+            from pfai.engineering.web_security_engine import WebApplicationSecurityEngine
+
+            if not project_path:
+                return {"ok": False, "error": "project_path_required"}
+            return WebApplicationSecurityEngine().analyze_source(project_path)
+
+        catalog = [
+            ("security_code_review", "Static secure code review", _code_review, {"required": ["project_path"], "properties": {"project_path": {"type": "string"}}}, ToolPermission.READ.value, "low", False),
+            ("security_headers_check", "Analyze provided security headers", _headers_check, {"properties": {"headers": {"type": "object"}}}, ToolPermission.READ.value, "low", False),
+            ("security_dependency_audit", "Dependency manifest inventory", _dependency_audit, {"required": ["project_path"], "properties": {"project_path": {"type": "string"}}}, ToolPermission.READ.value, "low", False),
+            ("security_scope_check", "Scope enforcement check", _scope_check, {"properties": {"target_id": {"type": "string"}, "method": {"type": "string"}}}, ToolPermission.READ.value, "low", False),
+            ("security_remediation", "Apply authorized remediation", _remediation, {"required": ["project_path"], "properties": {"project_path": {"type": "string"}}}, ToolPermission.LOW_RISK_WRITE.value, "medium", True),
+            ("security_retest", "Retest project after remediation", _retest, {"required": ["project_path"], "properties": {"project_path": {"type": "string"}}}, ToolPermission.READ.value, "low", False),
+            ("security_scan", "Bounded static security scan alias", _code_review, {"required": ["project_path"], "properties": {"project_path": {"type": "string"}}}, ToolPermission.READ.value, "medium", False),
+        ]
+        for tool_id, desc, handler, schema, perm, risk, owner_req in catalog:
+            d = ToolDefinition(
+                tool_id=tool_id,
+                name=tool_id,
+                description=desc,
+                version="1.0.0",
+                input_schema=schema,
+                output_schema={"required": ["ok"]},
+                capabilities=[tool_id, "security", "phase17"],
+                permissions_required=perm,
+                required_permissions=[perm],
+                risk_level=risk,
+                owner_approval_required=owner_req,
+                network_access=False,
+                filesystem_access=True,
+                secret_access=False,
+                timeout=30.0,
+                resource_limits={"max_output_bytes": 256_000},
+                audit_policy="always",
+                tool_status_class=ToolStatusClass.REAL_PRODUCTION_TOOL.value,
+                enabled=True,
+                health="healthy",
+                provenance={"phase": 17},
+            )
+            r = self.register(d, handler, activate=True)
+            defs.append(r)
+        return {"ok": True, "tools": defs}

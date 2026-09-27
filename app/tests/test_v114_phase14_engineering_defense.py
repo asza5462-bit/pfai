@@ -155,7 +155,7 @@ class TestUnifiedChatPhase14(unittest.TestCase):
             bootstrap_skills=True,
         )
         out = elite.handle("Build me a website for Lake Cafe", actor="owner", approved=True)
-        self.assertIn(out["phase"], (14, 15, 16))
+        self.assertIn(out["phase"], (14, 15, 16, 17))
         self.assertIsNotNone(out.get("phase14") or out.get("phase15"))
         payload = out.get("phase15") or out.get("phase14")
         self.assertTrue(payload.get("complete"), payload)

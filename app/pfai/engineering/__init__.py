@@ -1,4 +1,4 @@
-"""PHASE 14/15 — Application Engineering & Authorized Cyber Defense Fabric."""
+"""PHASE 14–17 — Application Engineering & Authorized Cyber Defense Fabric."""
 
 from pfai.engineering.application_builder import ApplicationBuilder
 from pfai.engineering.target_authorization import TargetAuthorizationGate
@@ -10,10 +10,20 @@ from pfai.engineering.phase14_gates import evaluate_phase14_gates, stamp_phase14
 from pfai.engineering.phase15_skills import register_phase15_skills
 from pfai.engineering.phase15_gates import evaluate_phase15_gates, stamp_phase15_suite_evidence, phase15_status
 from pfai.engineering.phase16_gates import evaluate_phase16_gates, stamp_phase16_suite_evidence, phase16_status
+from pfai.engineering.phase17_skills import register_phase17_skills
+from pfai.engineering.phase17_gates import (
+    evaluate_phase17_security_quality_gate,
+    stamp_phase17_suite_evidence,
+    phase17_status,
+)
 from pfai.engineering.unified_coding_workflow import UnifiedCodingWorkflow
 from pfai.engineering.project_inspector import ProjectInspector
 from pfai.engineering.engineering_workflow import EngineeringWorkflow
 from pfai.engineering.security_regression import SecurityRegressionEngine
+from pfai.engineering.target_registry import TargetRegistry
+from pfai.engineering.scope_enforcement import ScopeEnforcementLayer
+from pfai.engineering.web_security_engine import WebApplicationSecurityEngine
+from pfai.engineering.security_ops import SecurityDevelopmentLifecycle, SecurityReportBuilder
 from pfai.engineering.skill_metrics import SkillEvaluationLedger
 
 __all__ = [
@@ -33,9 +43,18 @@ __all__ = [
     "phase16_status",
     "evaluate_phase16_gates",
     "stamp_phase16_suite_evidence",
+    "register_phase17_skills",
+    "phase17_status",
+    "evaluate_phase17_security_quality_gate",
+    "stamp_phase17_suite_evidence",
     "UnifiedCodingWorkflow",
     "ProjectInspector",
     "EngineeringWorkflow",
     "SecurityRegressionEngine",
+    "TargetRegistry",
+    "ScopeEnforcementLayer",
+    "WebApplicationSecurityEngine",
+    "SecurityDevelopmentLifecycle",
+    "SecurityReportBuilder",
     "SkillEvaluationLedger",
 ]
