@@ -1882,6 +1882,7 @@ def platform_training_observability(owner: str = Depends(require_owner)):
             running_jobs=len(AUTONOMOUS_TRAINING.scheduler.status().get('active_jobs') or []),
         ),
         'verification': ver,
+        'production_validation': AUTONOMOUS_TRAINING.production_validation_status(),
         'note': 'No secret payloads or private candidate text are exposed.',
     }
 
@@ -2178,6 +2179,26 @@ def platform_training_validate(
         apply_decision=bool(apply_decision),
         candidate_model_id=candidate_model_id,
     )
+
+
+@app.post('/platform/training/production-validate')
+def platform_training_production_validate(
+    candidate_model_id: str | None = None,
+    apply_rollback_on_failure: bool = False,
+    owner: str = Depends(require_owner),
+):
+    """Owner-only PHASE 11 production quality validation (never fabricates pass)."""
+    _ = owner
+    return AUTONOMOUS_TRAINING.run_production_validation(
+        candidate_model_id=candidate_model_id,
+        apply_rollback_on_failure=bool(apply_rollback_on_failure),
+    )
+
+
+@app.get('/platform/training/production-validation')
+def platform_training_production_validation_status(owner: str = Depends(require_owner)):
+    _ = owner
+    return AUTONOMOUS_TRAINING.production_validation_status()
 
 
 @app.post('/platform/training/rollback')

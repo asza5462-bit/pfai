@@ -114,11 +114,11 @@ Training is forbidden from modifying owner authentication, OTP, authorization, s
 - Raw chat remains ineligible; no synthetic inflation
 - Verified baseline remains PHASE 9: `model-v0001` / `dataset-v0002` (52 accepted), GPU false
 
-## PHASE 10 — production hardening
+## PHASE 11 — production validation
 
-- Authoritative `TrainingEligibilityEngine` (10 mandatory gates; growth==0 → `NO_NEW_DATASET_GROWTH`)
-- Durable `DurableTrainingScheduler` (restart-safe; concurrent-job lock; never per-chat)
-- Owner observability: `/platform/training/eligibility|scheduler|observability`
-- Job lifecycle vocabulary: QUEUED → RUNNING → EVALUATING → CANARY → ACCEPTED|REJECTED|ROLLED_BACK|FAILED
-- Same architecture selects CPU or GPU backends when honestly available; no GPU fakery
-- Training remains isolated from auth/authorization/secrets/source code
+- Authoritative `ProductionQualityGate` (configurable thresholds; never invents pass)
+- Versioned evaluation suites + auditable evaluation runs
+- Local shadow/canary promotion simulation before LKG replacement in future cycles
+- Owner observability for production validation status
+- Continuous learning (experience) remains isolated from model training authority
+- Current model-v0003: relative quality PASS; production validation **false**

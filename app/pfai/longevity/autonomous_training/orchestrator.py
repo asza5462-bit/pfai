@@ -43,6 +43,7 @@ from .types import JobState, LearningEligibility, ModelStatus, TrainingConfig, T
 from .validator import TrainingExampleValidator
 from .verified_outcomes import VerifiedOutcomeStore
 from .post_train_validation import PostTrainValidator, write_report
+from .production_validation import ProductionGateConfig, ProductionQualityGate
 
 
 class AutonomousTrainingOrchestrator:
@@ -130,7 +131,12 @@ class AutonomousTrainingOrchestrator:
             "yes",
         )
         self.min_dataset_quality = float(os.environ.get("TRAINING_MIN_DATASET_QUALITY", "0.55"))
-        self.training_code_version = os.environ.get("PFAI_TRAINING_CODE_VERSION") or "phase8-v1"
+        self.training_code_version = os.environ.get("PFAI_TRAINING_CODE_VERSION") or "phase11-v1"
+        self.production_gate = ProductionQualityGate(
+            str(self.root / "production_validation"),
+            code_version=self.training_code_version,
+        )
+        self._last_production_validation: dict[str, Any] = {}
         env_seeds = (os.environ.get("TRAINING_INCLUDE_APPROVED_SEEDS") or "false").lower() in (
             "1",
             "true",
@@ -826,7 +832,10 @@ class AutonomousTrainingOrchestrator:
             or (self.active_runtime.current() or {}).get("base_model"),
             "training_backend": (active or {}).get("training_backend"),
             "gpu_available": bool(caps.get("gpu_available")),
-            "model_quality_production_validated": False,
+            "model_quality_production_validated": bool(
+                (self._last_production_validation or {}).get("model_quality_production_validated")
+            ),
+            "production_validation": self.production_validation_status(),
             "per_chat_training": False,
             "synthetic_inflation": False,
             "authority_isolation": True,
@@ -1986,6 +1995,148 @@ class AutonomousTrainingOrchestrator:
             report_path=report_path,
         )
         return report
+
+    def run_production_validation(
+        self,
+        *,
+        candidate_model_id: str | None = None,
+        apply_rollback_on_failure: bool = False,
+        report_name: str = "production_validation.json",
+    ) -> dict[str, Any]:
+        """PHASE 11 production validation — never fabricates MODEL_QUALITY_PRODUCTION_VALIDATED."""
+        lkg = self.models.last_known_good()
+        if not lkg:
+            return {"ok": False, "error": "no_lkg_model", "model_quality_production_validated": False}
+        candidate = (
+            self.models.get(candidate_model_id)
+            if candidate_model_id
+            else self.models.active()
+        )
+        if not candidate:
+            return {"ok": False, "error": "no_candidate_model", "model_quality_production_validated": False}
+
+        dataset_id = str(candidate.get("dataset_version") or self._state.get("last_dataset_id") or "")
+        rows: list[dict[str, Any]] = []
+        dataset_integrity_ok = True
+        if dataset_id:
+            man = self.datasets.get(dataset_id)
+            dataset_integrity_ok = bool(man)
+            try:
+                rows = list(self.datasets.load_split(dataset_id, "test") or [])
+                if len(rows) < 4:
+                    rows = list(self.datasets.load_split(dataset_id, "validation") or [])
+                if len(rows) < 4:
+                    rows = list(self.datasets.load_split(dataset_id, "train") or [])[:12]
+            except Exception:
+                dataset_integrity_ok = False
+                rows = []
+
+        rollback_available = bool(lkg) and (
+            lkg.get("model_id") != candidate.get("model_id")
+            or bool(candidate.get("previous_model_id"))
+        )
+
+        prod = self.production_gate.evaluate(
+            candidate=candidate,
+            baseline=lkg,
+            dataset_id=dataset_id or "unknown",
+            dataset_rows=rows,
+            rollback_available=rollback_available,
+            dataset_integrity_ok=dataset_integrity_ok,
+        )
+
+        # Optional: if production fails AND relative quality also fails hard, rollback
+        real_rollback = False
+        rollback_result = None
+        if (
+            apply_rollback_on_failure
+            and not prod.get("model_quality_production_validated")
+            and prod.get("regression_detected")
+            and (self.models.active() or {}).get("model_id") == candidate.get("model_id")
+        ):
+            rollback_result = self.rollback_mgr.rollback(reason="production_validation_regression")
+            real_rollback = bool(rollback_result.get("ok"))
+            if real_rollback:
+                self.models.update_status(str(candidate.get("model_id")), ModelStatus.ROLLED_BACK)
+                self.audit.record(
+                    "production_validation_rollback",
+                    candidate=candidate.get("model_id"),
+                    restored=rollback_result.get("restored_model_id"),
+                    reasons=prod.get("reasons"),
+                )
+
+        out = {
+            **prod,
+            "ok": True,
+            "implemented": True,
+            "real_evaluation_executed": True,
+            "real_rollback_executed": real_rollback,
+            "rollback": rollback_result,
+            "current_active_model": (self.models.active() or {}).get("model_id"),
+            "current_lkg": (self.models.last_known_good() or {}).get("model_id"),
+            "rollback_available": bool(self.models.last_known_good()),
+        }
+        path = write_report(self.root / "artifacts" / report_name, out)
+        out["report_path"] = path
+        self._last_production_validation = {
+            k: out.get(k)
+            for k in (
+                "model_quality_production_validated",
+                "status",
+                "reasons",
+                "evaluation_run_id",
+                "candidate_model",
+                "baseline_model",
+                "at",
+            )
+        }
+        self._last_production_validation["at"] = time.time()
+        self.audit.record(
+            "production_validation",
+            validated=bool(out.get("model_quality_production_validated")),
+            reasons=out.get("reasons"),
+            report_path=path,
+            evaluation_run_id=out.get("evaluation_run_id"),
+        )
+        return out
+
+    def production_validation_status(self) -> dict[str, Any]:
+        last = dict(self._last_production_validation or {})
+        # Prefer on-disk latest report if process restarted
+        report = self.root / "artifacts" / "production_validation.json"
+        if report.exists() and not last:
+            try:
+                data = json.loads(report.read_text(encoding="utf-8"))
+                last = {
+                    "model_quality_production_validated": data.get(
+                        "model_quality_production_validated"
+                    ),
+                    "status": data.get("status"),
+                    "reasons": data.get("reasons"),
+                    "evaluation_run_id": data.get("evaluation_run_id"),
+                    "candidate_model": data.get("candidate_model"),
+                    "baseline_model": data.get("baseline_model"),
+                    "at": data.get("finished_at"),
+                }
+            except Exception:
+                pass
+        caps = detect_runtime_capabilities(probe_inference=False)
+        return {
+            "ok": True,
+            "implemented": True,
+            "model_quality_production_validated": bool(
+                last.get("model_quality_production_validated")
+            ),
+            "status": last.get("status") or "NOT_RUN",
+            "reasons": last.get("reasons") or ["PRODUCTION_VALIDATION_NOT_RUN"],
+            "last": last,
+            "gate_config": self.production_gate.config.to_dict(),
+            "gpu_available": bool(caps.get("gpu_available")),
+            "cpu_training_available": bool(caps.get("training_available")),
+            "active_model": (self.models.active() or {}).get("model_id"),
+            "lkg_model": (self.models.last_known_good() or {}).get("model_id"),
+            "note": "Configurable production gates; tiny CPU suites typically remain NOT validated.",
+        }
 
     def monitor_and_maybe_rollback(self, *, force_regression: bool = False) -> dict[str, Any]:
         active = self.models.active()

@@ -1,5 +1,27 @@
 # Agent Context Changelog
 
+## 2026-09-27 — PHASE 11: Production validation & autonomous training hardening
+
+### Implemented
+- `ProductionQualityGate` + versioned `EvaluationSuiteRegistry`
+- Local deterministic shadow/canary promotion simulation
+- `run_production_validation` / `production_validation_status` on orchestrator
+- Owner APIs: `/platform/training/production-validate`, `/production-validation`
+- Tests: `test_v108_phase11_production_validation.py`
+
+### Executed / verified
+- Real production validation run against model-v0003 vs LKG model-v0001
+- Checkpoint hashes from real adapter files
+- Shadow/canary local path CONTINUE; no regression vs LKG
+- `MODEL_QUALITY_PRODUCTION_VALIDATED=false` with machine-readable blockers:
+  - INSUFFICIENT_EVALUATION_SAMPLES
+  - TASK_PASS_RATE_BELOW_PRODUCTION_MIN
+  - CODING_PASS_RATE_BELOW_PRODUCTION_MIN
+
+### Not claimed
+- Production-ready model quality
+- GPU availability
+
 ## 2026-09-27 — Post-train validation of model-v0003 vs LKG model-v0001
 
 ### Added

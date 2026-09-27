@@ -1,4 +1,4 @@
-"""Canary / shadow promotion controls (PHASE 7)."""
+"""Canary / shadow promotion controls (PHASE 7/11)."""
 from __future__ import annotations
 
 import os
@@ -33,4 +33,37 @@ class CanaryController:
             "failure_threshold": self.failure_threshold,
             "regression": regression,
             "decision": "CONTINUE" if ok else "STOP_ACTIVATION",
+        }
+
+    def simulate_promotion_path(
+        self,
+        *,
+        offline_ok: bool,
+        regression: float,
+        candidate_pass_rate: float,
+        baseline_pass_rate: float,
+    ) -> dict[str, Any]:
+        """Local deterministic promotion simulation (no external deploy required)."""
+        shadow = self.evaluate_shadow(
+            {
+                "ok": offline_ok,
+                "decision": "CONTINUE" if offline_ok else "STOP_ACTIVATION",
+                "regression": regression,
+            }
+        )
+        canary_ok = bool(shadow.get("ok")) and (
+            candidate_pass_rate + 1e-9 >= baseline_pass_rate - self.failure_threshold
+        )
+        return {
+            "ok": canary_ok,
+            "path": "offline → shadow → canary → production",
+            "shadow": shadow,
+            "canary": {
+                "ok": canary_ok,
+                "mode": "local_deterministic_canary",
+                "decision": "CONTINUE" if canary_ok else "STOP_ACTIVATION",
+                "request_limit": self.request_limit,
+            },
+            "decision": "CONTINUE" if canary_ok else "STOP_PROMOTION",
+            "note": "Simulation only — production validation gate is separate.",
         }
