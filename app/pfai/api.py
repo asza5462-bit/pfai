@@ -1786,16 +1786,41 @@ def platform_learning_verification(owner: str = Depends(require_owner)):
 
 @app.get('/platform/training/eligibility')
 def platform_training_eligibility(owner: str = Depends(require_owner)):
-    """Authoritative training eligibility (owner-only)."""
+    """Authoritative training eligibility with per-gate breakdown (owner-only)."""
     _ = owner
-    rows = AUTONOMOUS_TRAINING.learning_pipeline_gate.accepted_training_rows(limit=10000)
-    growth = AUTONOMOUS_TRAINING.scheduler.growth_since_last_trained(len(rows))
-    decision = AUTONOMOUS_TRAINING.eligibility_engine.evaluate(
-        accepted_rows=rows,
-        dataset_growth=growth,
-        last_trained_dataset_id=AUTONOMOUS_TRAINING.scheduler.status().get('last_trained_dataset_id'),
-    )
-    return decision
+    stats = AUTONOMOUS_TRAINING.learning_statistics()
+    elig = stats.get('next_training_eligibility') or {}
+    return {
+        'ok': True,
+        'eligible': bool(elig.get('eligible')),
+        'reason': elig.get('reason'),
+        'reasons': elig.get('reasons') or elig.get('blockers') or [],
+        'status': elig.get('status'),
+        'blockers': elig.get('blockers') or [],
+        'gates': elig.get('gates'),
+        'dataset_version': stats.get('dataset_version'),
+        'dataset_accepted_examples': stats.get('latest_dataset_accepted'),
+        'dataset_growth': stats.get('dataset_growth_since_last_trained'),
+        'dataset_growth_since_previous_version': stats.get('dataset_growth_since_previous_version'),
+        'scheduler': stats.get('scheduler'),
+        'trainer_probe': stats.get('trainer_probe'),
+        'note': elig.get('note') or stats.get('note'),
+    }
+
+
+@app.get('/platform/learning/candidates')
+def platform_learning_candidates(owner: str = Depends(require_owner), limit: int = 50):
+    """Owner-only candidate statistics — never returns private example text."""
+    _ = owner
+    store = AUTONOMOUS_TRAINING.learning_pipeline_gate.store
+    stats = store.statistics()
+    return {
+        'ok': True,
+        'statistics': stats,
+        'experience_bridge': AUTONOMOUS_TRAINING.experience.status(),
+        'last_pass': AUTONOMOUS_TRAINING.learning_pipeline_gate.last_run_summary(),
+        'limit_note': f'metadata only; text bodies omitted (limit={limit})',
+    }
 
 
 @app.get('/platform/training/scheduler')

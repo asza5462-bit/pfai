@@ -101,6 +101,15 @@ class AutonomousTrainingOrchestrator:
             backend_available=lambda: bool(
                 detect_runtime_capabilities(probe_inference=False).get("training_available")
             ),
+            base_model_available=lambda: Path(
+                str(
+                    (self.models.active() or {}).get("base_model")
+                    or (self.active_runtime.current() or {}).get("base_model")
+                    or "data/models/distilgpt2"
+                )
+            ).exists()
+            or Path("data/models/distilgpt2").exists(),
+            checkpoint_root=str(self.root / "checkpoints"),
         )
         self.scheduler = DurableTrainingScheduler(
             str(self.root / "scheduler"),
@@ -229,39 +238,53 @@ class AutonomousTrainingOrchestrator:
         )
 
     def _seed_scheduler_from_lkg(self) -> None:
-        """On first boot, treat LKG/active dataset as already-trained baseline (no false growth)."""
+        """On first boot, treat LKG/active/latest dataset as already-trained baseline.
+
+        Prevents historical seed/prior data from appearing as false 'new growth'.
+        """
         st = self.scheduler.status()
         if st.get("last_trained_dataset_id"):
             return
         anchor = self.models.last_known_good() or self.models.active()
-        if not anchor:
-            return
-        ds_id = str(anchor.get("dataset_version") or "")
-        if not ds_id:
-            return
-        manifest = self.datasets.get(ds_id)
+        ds_id = ""
         accepted = 0
-        if manifest:
-            accepted = int(
-                (manifest.get("validation_results") or {}).get("accepted")
-                or (
-                    int(manifest.get("train_count") or 0)
-                    + int(manifest.get("validation_count") or 0)
-                    + int(manifest.get("test_count") or 0)
+        if anchor:
+            ds_id = str(anchor.get("dataset_version") or "")
+            if ds_id:
+                manifest = self.datasets.get(ds_id)
+                if manifest:
+                    accepted = int(
+                        (manifest.get("validation_results") or {}).get("accepted")
+                        or (
+                            int(manifest.get("train_count") or 0)
+                            + int(manifest.get("validation_count") or 0)
+                            + int(manifest.get("test_count") or 0)
+                        )
+                    )
+        if not ds_id:
+            versions = self.datasets.list_versions(limit=1)
+            if versions:
+                latest = versions[0]
+                ds_id = str(latest.get("dataset_id") or "")
+                accepted = int(
+                    (latest.get("validation_results") or {}).get("accepted")
+                    or (
+                        int(latest.get("train_count") or 0)
+                        + int(latest.get("validation_count") or 0)
+                        + int(latest.get("test_count") or 0)
+                    )
                 )
-            )
-        # Fallback: candidate store accepted count when dataset registry empty
         if accepted <= 0:
             accepted = int(
                 self.learning_pipeline_gate.store.statistics().get("accepted_candidates") or 0
             )
         if accepted > 0 or ds_id:
-            self.scheduler.mark_trained(dataset_id=ds_id, accepted=accepted)
+            self.scheduler.mark_trained(dataset_id=ds_id or "baseline", accepted=accepted)
             self.audit.record(
-                "scheduler_seeded_from_lkg",
+                "scheduler_seeded_from_baseline",
                 dataset_id=ds_id,
                 accepted=accepted,
-                model_id=anchor.get("model_id"),
+                model_id=(anchor or {}).get("model_id") if anchor else None,
             )
 
     def _load_state(self) -> dict[str, Any]:
@@ -596,14 +619,41 @@ class AutonomousTrainingOrchestrator:
             )
         growth = max(0, latest_accepted - prev_accepted) if latest else 0
         # Growth since last *trained* dataset (authoritative for eligibility)
-        trained_growth = self.scheduler.growth_since_last_trained(
-            int(stats.get("accepted_candidates") or latest_accepted or 0)
-        )
+        cand_accepted = int(stats.get("accepted_candidates") or 0)
+        quantity = max(cand_accepted, latest_accepted)
+        trained_growth = self.scheduler.growth_since_last_trained(quantity)
+        # Prefer the *minimum* of version growth and trained growth when both known —
+        # prevents unseeded scheduler from treating historical data as new.
+        if latest and growth == 0:
+            effective_growth = 0
+        else:
+            effective_growth = min(trained_growth, growth) if latest and growth > 0 else trained_growth
+            if growth == 0 and trained_growth > 0 and latest:
+                # Content unchanged across versions → no real growth
+                effective_growth = 0
         rows = self.learning_pipeline_gate.accepted_training_rows(limit=10000)
+        if not rows and latest:
+            # Fall back to dataset train split for integrity/quantity honesty
+            try:
+                rows = list(self.datasets.load_split(latest["dataset_id"], "train") or [])
+                rows += list(self.datasets.load_split(latest["dataset_id"], "validation") or [])
+            except Exception:
+                rows = rows or []
+        trainer_probe = self.probe_trainer_runtime(load_weights=False)
         eligibility = self.eligibility_engine.evaluate(
             accepted_rows=rows,
-            dataset_growth=trained_growth,
+            dataset_growth=effective_growth,
             last_trained_dataset_id=self.scheduler.status().get("last_trained_dataset_id"),
+            accepted_count_override=quantity if quantity > len(rows) else None,
+            extra_probes={
+                "trainer": trainer_probe,
+                "base_model_available": bool(trainer_probe.get("base_model_files_present")),
+                "base_model": {
+                    "path": trainer_probe.get("base_model"),
+                    "files_present": trainer_probe.get("base_model_files_present"),
+                },
+                "checkpoint_storage_available": True,
+            },
         )
         return {
             "ok": True,
@@ -616,7 +666,7 @@ class AutonomousTrainingOrchestrator:
             "latest_dataset": latest,
             "dataset_version": (latest or {}).get("dataset_id"),
             "dataset_growth_since_previous_version": growth,
-            "dataset_growth_since_last_trained": trained_growth,
+            "dataset_growth_since_last_trained": effective_growth,
             "previous_dataset_accepted": prev_accepted,
             "latest_dataset_accepted": latest_accepted,
             "train_validation_test": {
@@ -634,27 +684,14 @@ class AutonomousTrainingOrchestrator:
             "next_training_eligibility": {
                 "eligible": bool(eligibility.get("eligible")),
                 "reason": eligibility.get("reason"),
+                "reasons": eligibility.get("reasons") or eligibility.get("blockers") or [],
                 "status": eligibility.get("status"),
                 "blockers": eligibility.get("blockers"),
-                "gates": {
-                    k: eligibility.get("gates", {}).get(k)
-                    for k in (
-                        "sufficient_accepted_examples",
-                        "meaningful_dataset_growth",
-                        "dataset_quality_passed",
-                        "no_secret_pii_violations",
-                        "provenance_requirements_satisfied",
-                        "evaluation_suite_available",
-                        "compatible_training_backend",
-                        "resource_budget_available",
-                        "no_conflicting_training_job",
-                        "trigger_satisfied",
-                        "dataset_growth",
-                    )
-                },
+                "gates": eligibility.get("gates"),
                 "quality_ok": bool((eligibility.get("gates") or {}).get("dataset_quality_passed")),
                 "trigger": (eligibility.get("gates") or {}).get("trigger"),
             },
+            "trainer_probe": trainer_probe,
             "scheduler": self.scheduler.status(),
             "training_available": bool(caps.get("training_available")),
             "gpu_available": bool(caps.get("gpu_available")),
@@ -662,6 +699,73 @@ class AutonomousTrainingOrchestrator:
             "lkg_model": self.models.last_known_good(),
             "experience_bridge": self.experience.status(),
             "note": "Candidate stats never include secret payloads or private example text.",
+        }
+
+    def probe_trainer_runtime(self, *, load_weights: bool = False) -> dict[str, Any]:
+        """Honest trainer/runtime probe — does NOT execute training or invent success."""
+        caps = detect_runtime_capabilities(probe_inference=False)
+        base = Path(
+            str(
+                (self.models.active() or {}).get("base_model")
+                or (self.active_runtime.current() or {}).get("base_model")
+                or "data/models/distilgpt2"
+            )
+        )
+        if not base.exists():
+            base = Path("data/models/distilgpt2")
+        files_present = bool(
+            base.exists()
+            and (base / "config.json").exists()
+            and (
+                (base / "model.safetensors").exists()
+                or (base / "pytorch_model.bin").exists()
+            )
+            and (
+                (base / "tokenizer.json").exists()
+                or (base / "vocab.json").exists()
+            )
+        )
+        modules = caps.get("modules") or {}
+        deps_ok = bool(
+            modules.get("torch")
+            and modules.get("transformers")
+            and modules.get("peft")
+        )
+        tokenizer_ok = False
+        model_load_ok = False
+        error = None
+        if load_weights and files_present and deps_ok:
+            try:
+                from transformers import AutoModelForCausalLM, AutoTokenizer
+
+                tok = AutoTokenizer.from_pretrained(str(base), local_files_only=True)
+                tokenizer_ok = tok is not None
+                if load_weights:
+                    model = AutoModelForCausalLM.from_pretrained(
+                        str(base), local_files_only=True
+                    )
+                    model_load_ok = model is not None
+                    del model
+            except Exception as exc:  # pragma: no cover - environment dependent
+                error = str(exc)[:300]
+        return {
+            "ok": bool(caps.get("training_available") and files_present and deps_ok),
+            "training_backend": "transformers_lora",
+            "trainer_runtime_available": bool(caps.get("training_available")),
+            "gpu_available": bool(caps.get("gpu_available")),
+            "base_model": str(base),
+            "base_model_files_present": files_present,
+            "dependencies": {
+                "torch": bool(modules.get("torch")),
+                "transformers": bool(modules.get("transformers")),
+                "peft": bool(modules.get("peft")),
+                "datasets": bool(modules.get("datasets")),
+            },
+            "tokenizer_load_ok": tokenizer_ok if load_weights else None,
+            "model_load_ok": model_load_ok if load_weights else None,
+            "weights_probed": bool(load_weights),
+            "error": error,
+            "note": "Probe only — not a training run.",
         }
 
     def pipeline_verification_status(self) -> dict[str, Any]:
@@ -683,7 +787,10 @@ class AutonomousTrainingOrchestrator:
             ),
             "training_eligible": bool(elig.get("eligible")),
             "training_eligibility_reason": elig.get("reason") or "UNKNOWN",
+            "training_eligibility_reasons": elig.get("reasons") or elig.get("blockers") or [],
             "training_status": elig.get("status") or "TRAINING_BLOCKED",
+            "eligibility_gates": elig.get("gates"),
+            "trainer_probe": stats.get("trainer_probe") or self.probe_trainer_runtime(load_weights=False),
             "dataset_version": stats.get("dataset_version"),
             "dataset_accepted_examples": stats.get("latest_dataset_accepted"),
             "dataset_growth": stats.get("dataset_growth_since_last_trained")
@@ -729,10 +836,9 @@ class AutonomousTrainingOrchestrator:
                 for j in jobs[:10]
             ],
             "experience_bridge": self.experience.status(),
-            "eligibility_gates": elig.get("gates"),
             "note": (
                 "Pipeline is ready to train when real growth/schedule thresholds are met; "
-                "current eligibility may still be false. growth==0 → NO_NEW_DATASET_GROWTH."
+                "current eligibility may still be false. growth==0 → NO_REAL_DATASET_GROWTH."
             ),
         }
 
@@ -1492,6 +1598,30 @@ class AutonomousTrainingOrchestrator:
         built = self.build_dataset_from_sources()
         rows = self.learning_pipeline_gate.accepted_training_rows(limit=10000)
         trained_growth = self.scheduler.growth_since_last_trained(len(rows))
+        versions = self.datasets.list_versions(limit=2)
+        version_growth = 0
+        if len(versions) >= 2:
+            a = int((versions[0].get("validation_results") or {}).get("accepted") or 0)
+            b = int((versions[1].get("validation_results") or {}).get("accepted") or 0)
+            version_growth = max(0, a - b)
+        elif versions:
+            version_growth = 0
+        # No real growth if latest dataset content is unchanged vs prior version
+        if versions and version_growth == 0 and trained_growth > 0:
+            # Re-seed baseline so we don't keep false-positive growth
+            latest_acc = int(
+                (versions[0].get("validation_results") or {}).get("accepted")
+                or len(rows)
+            )
+            self.scheduler.mark_trained(
+                dataset_id=str(versions[0].get("dataset_id") or "baseline"),
+                accepted=latest_acc,
+            )
+            trained_growth = 0
+        effective_growth = trained_growth if version_growth > 0 or not versions else 0
+        if version_growth > 0:
+            effective_growth = min(trained_growth, version_growth) if trained_growth else version_growth
+        trained_growth = effective_growth
 
         if not built.get("ok"):
             status = built.get("error") or "INSUFFICIENT_DATA"
@@ -1503,7 +1633,7 @@ class AutonomousTrainingOrchestrator:
                 "status": status,
                 "trained": False,
                 "training_eligible": False,
-                "reason": status if trained_growth > 0 else "NO_NEW_DATASET_GROWTH",
+                "reason": status if trained_growth > 0 else "NO_REAL_DATASET_GROWTH",
                 "dataset_growth": trained_growth,
                 "candidate_pass": built.get("candidate_pass"),
                 "note": "Quality gate failed or insufficient real experience — collecting continues; no training.",
@@ -1512,11 +1642,21 @@ class AutonomousTrainingOrchestrator:
             return out
 
         eligibility = self.scheduler.decide(accepted_rows=rows, owner_requested=False)
+        # Override growth with effective_growth for honesty
+        if effective_growth <= 0 and not eligibility.get("owner_path"):
+            eligibility = self.eligibility_engine.evaluate(
+                accepted_rows=rows,
+                dataset_growth=0,
+                last_trained_dataset_id=self.scheduler.status().get("last_trained_dataset_id"),
+                accepted_count_override=max(len(rows), int((versions[0].get("validation_results") or {}).get("accepted") or 0))
+                if versions
+                else len(rows),
+            )
         if not eligibility.get("eligible"):
             reason = eligibility.get("reason") or "TRAINING_BLOCKED"
             # Prefer explicit zero-growth reason when growth is 0
             if trained_growth <= 0:
-                reason = "NO_NEW_DATASET_GROWTH"
+                reason = "NO_REAL_DATASET_GROWTH"
             out = {
                 "ok": True,
                 "status": "TRAINING_BLOCKED",

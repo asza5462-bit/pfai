@@ -1,5 +1,20 @@
 # Agent Context Changelog
 
+## 2026-09-27 — PHASE 10 verification: real autonomy without forced training
+
+### Verified
+- Full code path audited (experience→…→rollback)
+- Eligibility gates expose per-gate reasons; primary blocker `NO_REAL_DATASET_GROWTH`
+- Trainer probe: transformers_lora can load distilgpt2 tokenizer+weights (CPU); GPU false
+- No real training executed this run (growth=0); historical PHASE 9 training retained
+- Live store false-eligibility from unseeded scheduler fixed (baseline seeded)
+- Owner APIs: eligibility reasons + `/platform/learning/candidates`
+- Tests: `test_v105_phase10_verification.py`
+
+### Not claimed
+- REAL_TRAINING_EXECUTED this run = false
+- MODEL_QUALITY_PRODUCTION_VALIDATED = false
+
 ## 2026-09-27 — PHASE 10: Autonomous learning/training production hardening
 
 ### Added

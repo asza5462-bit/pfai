@@ -50,8 +50,9 @@ class TestEligibilityEngine(unittest.TestCase):
         rows = [_row(i) for i in range(20)]
         d = eng.evaluate(accepted_rows=rows, dataset_growth=0)
         self.assertFalse(d["eligible"])
-        self.assertEqual(d["reason"], "NO_NEW_DATASET_GROWTH")
+        self.assertEqual(d["reason"], "NO_REAL_DATASET_GROWTH")
         self.assertEqual(d["status"], "TRAINING_BLOCKED")
+        self.assertIn("NO_REAL_DATASET_GROWTH", d["reasons"])
 
     def test_min_examples_alone_insufficient(self):
         eng = TrainingEligibilityEngine(
@@ -63,7 +64,7 @@ class TestEligibilityEngine(unittest.TestCase):
         rows = [_row(i) for i in range(12)]
         d = eng.evaluate(accepted_rows=rows, dataset_growth=0)
         self.assertFalse(d["eligible"])
-        self.assertIn("NO_NEW_DATASET_GROWTH", d["blockers"])
+        self.assertIn("NO_REAL_DATASET_GROWTH", d["blockers"])
 
     def test_growth_trigger_can_pass_other_gates(self):
         eng = TrainingEligibilityEngine(
@@ -167,7 +168,7 @@ class TestOrchestratorPhase10(unittest.TestCase):
             tick = orch.maybe_run_autonomous_tick()
             self.assertFalse(tick.get("trained"))
             self.assertFalse(tick.get("training_eligible"))
-            self.assertEqual(tick.get("reason"), "NO_NEW_DATASET_GROWTH")
+            self.assertEqual(tick.get("reason"), "NO_REAL_DATASET_GROWTH")
 
     def test_verification_and_stats(self):
         with tempfile.TemporaryDirectory() as d:

@@ -48,4 +48,17 @@ If growth == 0 → `TRAINING_ELIGIBLE=false`, reason `NO_NEW_DATASET_GROWTH`.
 | Backend | transformers_lora |
 | Production quality | **false** |
 
-No forced training. No synthetic dataset inflation. Phase 8 security intact.
+## PHASE 10 verification (real eligibility)
+
+Verified code path (not docs-only): experience → sanitize → PII → quality →
+dedupe → provenance → dataset version → TrainingEligibilityEngine →
+DurableTrainingScheduler → trainer → checkpoint → evaluate → accept/reject →
+activate → LKG → rollback.
+
+Authoritative zero-growth blocker: `NO_REAL_DATASET_GROWTH`.
+
+Trainer probe (`probe_trainer_runtime`) can load distilgpt2 + tokenizer without
+claiming a training run. Real training executes only when all gates pass —
+currently blocked: growth=0.
+
+Owner APIs expose per-gate breakdown via `/platform/training/eligibility`.

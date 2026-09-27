@@ -21,4 +21,7 @@ Raw chat remains ineligible. No synthetic inflation.
 
 ## Eligibility reason when blocked
 
-`NO_NEW_DATASET_GROWTH` when there are no new accepted examples since the last trained baseline.
+`NO_REAL_DATASET_GROWTH` (alias `NO_NEW_DATASET_GROWTH`) when there are no new
+accepted examples since the last trained / versioned baseline.
+
+Do not treat historical seed data as new growth.
