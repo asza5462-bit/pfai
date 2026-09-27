@@ -10,6 +10,17 @@
 | **BLOCKED** | Gate prevented progress with reason |
 | **NOT YET VALIDATED** | Production bar not met |
 
+Do **not** conflate:
+
+| Flag | Meaning |
+|------|---------|
+| REAL_TRAINING_EXECUTED | Weights/adapters actually updated |
+| REAL_EVALUATION_EXECUTED | Real PEFT inference scoring ran |
+| PRODUCTION_VALIDATED | ProductionQualityGate passed entirely |
+| PRODUCTION_READY | Same as production validated + serving eligible |
+
+ACTIVE / `internal_active` ≠ PRODUCTION_READY.
+
 ## Architecture
 
 ```
@@ -33,29 +44,35 @@ Passing canary ≠ production validated.
 ## ProductionQualityGate
 
 Configurable via env (`PRODUCTION_MIN_EVAL_SAMPLES`, `PRODUCTION_MIN_TASK_PASS_RATE`, …).
+Thresholds are **not** lowered to force a pass.
 
 `MODEL_QUALITY_PRODUCTION_VALIDATED=true` **only** when every production gate passes.
 
-Current verified run on model-v0003:
-
-- samples 20 < 200 → `INSUFFICIENT_EVALUATION_SAMPLES`
-- pass_rate 0.58 < 0.85 → `TASK_PASS_RATE_BELOW_PRODUCTION_MIN`
-- coding 0.5 < 0.7 → `CODING_PASS_RATE_BELOW_PRODUCTION_MIN`
-- → **NOT_PRODUCTION_VALIDATED** (honest)
-
-## Current verified baseline
+## Current verified baseline (best candidate)
 
 | Field | Value | Label |
 |-------|-------|-------|
-| Active | model-v0003 | VERIFIED |
-| LKG | model-v0001 | VERIFIED |
-| Dataset | dataset-v0003 (67 accepted) | VERIFIED |
-| Real training | job-94d9f8c65f8a / transformers_lora CPU | EXECUTED |
-| Post-train quality gate | PASS (no regression vs LKG) | VERIFIED |
-| Production validation | false | NOT YET VALIDATED |
+| Active (internal) | model-v0005 | VERIFIED |
+| LKG / production serving | model-v0001 | VERIFIED |
+| Prior candidates | model-v0003, model-v0004, model-v0006 | VERIFIED |
+| Train dataset (best) | dataset-v0005 | VERIFIED |
+| Eval dataset | prodeval-v0004 (eligible 325 / executed 337) | VERIFIED |
+| Real training | transformers_lora CPU (distilgpt2) | EXECUTED |
+| Sample gate (≥200) | PASS | VERIFIED |
+| Task pass rate | 0.8071 (need ≥0.85) | BLOCKED |
+| Coding pass rate | 0.6859 (need ≥0.70) | BLOCKED |
+| Canary/shadow | PASS | VERIFIED |
+| Regression vs LKG | false | VERIFIED |
+| PRODUCTION_VALIDATED | false | NOT YET VALIDATED |
+| PRODUCTION_READY | false | NOT YET VALIDATED |
 | GPU | false | VERIFIED |
-| CPU training | available | VERIFIED |
 | Rollback | available | VERIFIED |
+
+## Eval / train banks
+
+- `production_banks.py` provides disjoint, provenance-tagged train vs eval examples
+- Evaluation harvest excludes train-bank content hashes (leakage isolation)
+- Future validated experiences accumulate into `evaluation_datasets/accumulator.jsonl` (eval-only)
 
 ## Owner APIs
 
@@ -76,4 +93,5 @@ Isolation tests remain enforced.
 ## CPU / GPU
 
 Dynamic detection. GPU unavailable → CPU LoRA when feasible; never fake GPU.
+CPU tiny-LoRA is **not** claimed equivalent to production-scale training.
 If resources insufficient → defer with explicit blocker.

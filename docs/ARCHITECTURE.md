@@ -121,4 +121,7 @@ Training is forbidden from modifying owner authentication, OTP, authorization, s
 - Local shadow/canary promotion simulation before LKG replacement in future cycles
 - Owner observability for production validation status
 - Continuous learning (experience) remains isolated from model training authority
-- Current model-v0003: relative quality PASS; production validation **false**
+- Disjoint `production_banks` train/eval corpora with leakage exclusion
+- Serving tiers: `internal_active` vs `production_ready` (ACTIVE ≠ production)
+- Best candidate model-v0005: sample gate PASS; task/coding gates still below production mins
+- LKG model-v0001 remains production serving fallback; PRODUCTION_READY=false

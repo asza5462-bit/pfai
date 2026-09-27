@@ -1,5 +1,30 @@
 # Agent Context Changelog
 
+## 2026-09-27 — PHASE 11 continued: eval banks + retrain toward production gates
+
+### Implemented
+- `production_banks.py`: disjoint provenance-tagged train/eval banks (coding + PFAI/knowledge)
+- Evaluation harvest excludes production train-bank hashes (leakage isolation)
+- `ActiveModelRuntime.production_serving()` keeps production on LKG until `production_ready`
+- ModelRegistry activation preserves existing production LKG when outgoing model is not production_ready
+- Tests: `test_v109_phase11_eval_dataset_activation.py`, `test_v110_phase11_production_banks.py`
+
+### Executed / verified (real CPU LoRA)
+- REAL_TRAINING_EXECUTED=true → model-v0004, model-v0005, model-v0006 (transformers_lora / distilgpt2)
+- Best candidate retained: **model-v0005** (dataset-v0005); model-v0006 regressed and was not kept active
+- REAL_EVALUATION_EXECUTED=true on model-v0005 vs LKG model-v0001
+- Evaluation corpus **prodeval-v0004**: eligible 325, executed 337 (≥200) — sample gate PASS
+- Canary/shadow PASS; regression_detected=false; LKG model-v0001 immutable
+- PRODUCTION_VALIDATED=false / PRODUCTION_READY=false
+- Remaining blockers (thresholds unchanged):
+  - TASK_PASS_RATE_BELOW_PRODUCTION_MIN (0.8071 < 0.85)
+  - CODING_PASS_RATE_BELOW_PRODUCTION_MIN (0.6859 < 0.70)
+- Production serving path still uses LKG model-v0001 (`lkg_fallback`)
+
+### Not claimed
+- Production-ready model quality
+- GPU / production-scale training equivalence
+
 ## 2026-09-27 — PHASE 11: Production validation & autonomous training hardening
 
 ### Implemented
