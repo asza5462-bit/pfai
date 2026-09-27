@@ -1,40 +1,51 @@
-# Autonomous Training (PHASE 9 + continuous experience)
+# Autonomous Training (PHASE 10 production hardening)
 
-## Loop
+## Architecture
 
 ```
-real operational event → ContinuousExperienceBridge
+ContinuousExperienceBridge
 → LearningCandidate (sanitize / secret-PII / quality / dedupe / provenance)
-→ dataset version only if content checksum changes
-→ trigger decision (growth|schedule|owner|regression — not min_examples alone)
-→ train → checkpoint → evaluate vs LKG → canary
-→ activate OR reject/rollback → record
+→ immutable dataset version (checksum change only)
+→ TrainingEligibilityEngine (authoritative)
+→ DurableTrainingScheduler (restart-safe; never per-chat)
+→ AutonomousTrainingOrchestrator
+→ train → checkpoint → evaluate vs LKG → canary → activate | reject/rollback
 ```
 
-## Triggers
+## TrainingEligibilityEngine (all gates)
 
-Autonomous `should_train` requires:
+1. sufficient accepted examples  
+2. meaningful growth since **last trained** dataset  
+3. dataset quality gate  
+4. no secret/PII violations  
+5. provenance satisfied  
+6. evaluation suite available  
+7. compatible training backend  
+8. resource/time budget  
+9. no conflicting training job  
+10. justified trigger: growth **or** schedule **or** owner/explicit  
 
-1. Enough total accepted examples (`TRAINING_MIN_EXAMPLES`)
-2. **AND** a justification: `dataset_growth` (≥ `TRAINING_MIN_NEW_EXAMPLES`), schedule, regression recovery, performance opportunity, or owner/explicit request
+`min_examples` alone never enables autonomous training.  
+If growth == 0 → `TRAINING_ELIGIBLE=false`, reason `NO_NEW_DATASET_GROWTH`.
 
-`min_examples` alone never starts autonomous training.
-A new dataset version alone never starts training.
-Raw chat never trains.
+## Observability (owner-only)
 
-Owner tick: `POST /platform/training/tick`  
-Verification: `GET /platform/learning/verification`  
-Learning stats: `GET /platform/learning/statistics`
+- `GET /platform/training/eligibility`
+- `GET /platform/training/scheduler`
+- `GET /platform/training/observability`
+- `GET /platform/learning/verification`
+- `POST /platform/training/tick`
 
-## Honesty
+## Current verified baseline
 
-- GPU is never faked; CPU resource/timeout limits apply
-- `MODEL_QUALITY_PRODUCTION_VALIDATED` remains false for small/CPU runs
-- Training cannot modify auth, OTP, permissions, secrets, or application source
+| Field | Value |
+|-------|-------|
+| Active / LKG | model-v0001 |
+| Dataset | dataset-v0002 (52 accepted) |
+| Growth | 0 |
+| TRAINING_ELIGIBLE | false (`NO_NEW_DATASET_GROWTH`) |
+| GPU | false (CPU LoRA only) |
+| Backend | transformers_lora |
+| Production quality | **false** |
 
-## Current verified baseline (PHASE 9)
-
-- Active/LKG: `model-v0001` (distilgpt2 + transformers_lora)
-- Dataset: `dataset-v0002` (52 accepted)
-- Growth since previous version: **0** (no new real accepted examples yet)
-- Training eligible: **false** until real growth/schedule thresholds are met
+No forced training. No synthetic dataset inflation. Phase 8 security intact.

@@ -18,6 +18,7 @@ from .compatibility import ModelCompatibilityChecker
 from .dataset import DatasetBuilder, DatasetVersionRegistry
 from .dataset_quality import DatasetQualityGate
 from .evaluation_gate import EvaluationGate
+from .eligibility import TrainingEligibilityEngine
 from .experience_bridge import ContinuousExperienceBridge
 from .isolation import TrainingSafetyIsolation
 from .learning_candidate import LearningCandidatePipeline
@@ -35,6 +36,7 @@ from .resources import TrainingResourceManager
 from .rollback import ModelRollbackManager
 from .runtime import detect_runtime_capabilities
 from .runtime_detector import TrainingRuntimeDetector
+from .scheduler import DurableTrainingScheduler, normalize_job_lifecycle_state
 from .trainer import TrainingBackendRegistry
 from .triggers import TrainingTriggerPolicy
 from .types import JobState, LearningEligibility, ModelStatus, TrainingConfig, TrainingResult
@@ -90,6 +92,23 @@ class AutonomousTrainingOrchestrator:
             str(self.root / "candidates")
         )
         self.experience = ContinuousExperienceBridge(self)
+        self.eligibility_engine = TrainingEligibilityEngine(
+            triggers=self.triggers,
+            dataset_quality=self.dataset_quality,
+            resources=self.resources,
+            list_jobs=lambda: self.list_jobs(limit=50),
+            eval_available=lambda: True,
+            backend_available=lambda: bool(
+                detect_runtime_capabilities(probe_inference=False).get("training_available")
+            ),
+        )
+        self.scheduler = DurableTrainingScheduler(
+            str(self.root / "scheduler"),
+            eligibility=self.eligibility_engine,
+            list_jobs=lambda: self.list_jobs(limit=50),
+            schedule_seconds=self.triggers.schedule_seconds,
+        )
+        self._seed_scheduler_from_lkg()
         self._lock = threading.RLock()
         env_mock = (os.environ.get("TRAINING_ALLOW_MOCK") or "").lower() in ("1", "true", "yes")
         self.allow_mock_backend = env_mock if allow_mock_backend is None else bool(allow_mock_backend)
@@ -208,6 +227,42 @@ class AutonomousTrainingOrchestrator:
             "corrected_failure",
             lambda: observe_corrected_failures(list(self._correction_buffer)),
         )
+
+    def _seed_scheduler_from_lkg(self) -> None:
+        """On first boot, treat LKG/active dataset as already-trained baseline (no false growth)."""
+        st = self.scheduler.status()
+        if st.get("last_trained_dataset_id"):
+            return
+        anchor = self.models.last_known_good() or self.models.active()
+        if not anchor:
+            return
+        ds_id = str(anchor.get("dataset_version") or "")
+        if not ds_id:
+            return
+        manifest = self.datasets.get(ds_id)
+        accepted = 0
+        if manifest:
+            accepted = int(
+                (manifest.get("validation_results") or {}).get("accepted")
+                or (
+                    int(manifest.get("train_count") or 0)
+                    + int(manifest.get("validation_count") or 0)
+                    + int(manifest.get("test_count") or 0)
+                )
+            )
+        # Fallback: candidate store accepted count when dataset registry empty
+        if accepted <= 0:
+            accepted = int(
+                self.learning_pipeline_gate.store.statistics().get("accepted_candidates") or 0
+            )
+        if accepted > 0 or ds_id:
+            self.scheduler.mark_trained(dataset_id=ds_id, accepted=accepted)
+            self.audit.record(
+                "scheduler_seeded_from_lkg",
+                dataset_id=ds_id,
+                accepted=accepted,
+                model_id=anchor.get("model_id"),
+            )
 
     def _load_state(self) -> dict[str, Any]:
         if self.state_path.exists():
@@ -540,16 +595,15 @@ class AutonomousTrainingOrchestrator:
                 + (prev.get("test_count") or 0)
             )
         growth = max(0, latest_accepted - prev_accepted) if latest else 0
-        # Training eligibility: quality+quantity vs triggers — never just "new version exists"
-        quality_probe = self.dataset_quality.evaluate(
-            self.learning_pipeline_gate.accepted_training_rows(limit=10000)
+        # Growth since last *trained* dataset (authoritative for eligibility)
+        trained_growth = self.scheduler.growth_since_last_trained(
+            int(stats.get("accepted_candidates") or latest_accepted or 0)
         )
-        trigger = self.triggers.evaluate(
-            new_example_count=int(quality_probe.get("accepted") or 0),
-            new_since_last_dataset=growth,
-        )
-        training_eligible = bool(
-            quality_probe.get("ok") and trigger.get("should_train") and self.triggers.enabled
+        rows = self.learning_pipeline_gate.accepted_training_rows(limit=10000)
+        eligibility = self.eligibility_engine.evaluate(
+            accepted_rows=rows,
+            dataset_growth=trained_growth,
+            last_trained_dataset_id=self.scheduler.status().get("last_trained_dataset_id"),
         )
         return {
             "ok": True,
@@ -562,6 +616,7 @@ class AutonomousTrainingOrchestrator:
             "latest_dataset": latest,
             "dataset_version": (latest or {}).get("dataset_id"),
             "dataset_growth_since_previous_version": growth,
+            "dataset_growth_since_last_trained": trained_growth,
             "previous_dataset_accepted": prev_accepted,
             "latest_dataset_accepted": latest_accepted,
             "train_validation_test": {
@@ -577,20 +632,30 @@ class AutonomousTrainingOrchestrator:
             "last_training_timestamp": (self._last_training_result or {}).get("at"),
             "last_rollback_result": dict(self._last_rollback_result or {}),
             "next_training_eligibility": {
-                "eligible": training_eligible,
-                "quality_ok": bool(quality_probe.get("ok")),
-                "quality_status": quality_probe.get("status"),
-                "trigger": trigger,
-                "reason": (
-                    "eligible"
-                    if training_eligible
-                    else (
-                        quality_probe.get("status")
-                        if not quality_probe.get("ok")
-                        else (trigger.get("reason") or "TRIGGER_NOT_MET")
+                "eligible": bool(eligibility.get("eligible")),
+                "reason": eligibility.get("reason"),
+                "status": eligibility.get("status"),
+                "blockers": eligibility.get("blockers"),
+                "gates": {
+                    k: eligibility.get("gates", {}).get(k)
+                    for k in (
+                        "sufficient_accepted_examples",
+                        "meaningful_dataset_growth",
+                        "dataset_quality_passed",
+                        "no_secret_pii_violations",
+                        "provenance_requirements_satisfied",
+                        "evaluation_suite_available",
+                        "compatible_training_backend",
+                        "resource_budget_available",
+                        "no_conflicting_training_job",
+                        "trigger_satisfied",
+                        "dataset_growth",
                     )
-                ),
+                },
+                "quality_ok": bool((eligibility.get("gates") or {}).get("dataset_quality_passed")),
+                "trigger": (eligibility.get("gates") or {}).get("trigger"),
             },
+            "scheduler": self.scheduler.status(),
             "training_available": bool(caps.get("training_available")),
             "gpu_available": bool(caps.get("gpu_available")),
             "active_model": self.models.active(),
@@ -606,6 +671,8 @@ class AutonomousTrainingOrchestrator:
         active = self.models.active()
         lkg = self.models.last_known_good()
         last_train = dict(self._last_training_result or {})
+        elig = stats.get("next_training_eligibility") or {}
+        jobs = self.list_jobs(limit=20)
         return {
             "ok": True,
             "implemented": True,
@@ -614,11 +681,14 @@ class AutonomousTrainingOrchestrator:
                 and self.triggers.enabled
                 and caps.get("training_available")
             ),
-            "training_eligible": bool((stats.get("next_training_eligibility") or {}).get("eligible")),
-            "training_eligibility_reason": (stats.get("next_training_eligibility") or {}).get("reason"),
+            "training_eligible": bool(elig.get("eligible")),
+            "training_eligibility_reason": elig.get("reason") or "UNKNOWN",
+            "training_status": elig.get("status") or "TRAINING_BLOCKED",
             "dataset_version": stats.get("dataset_version"),
             "dataset_accepted_examples": stats.get("latest_dataset_accepted"),
-            "dataset_growth": stats.get("dataset_growth_since_previous_version"),
+            "dataset_growth": stats.get("dataset_growth_since_last_trained")
+            if stats.get("dataset_growth_since_last_trained") is not None
+            else stats.get("dataset_growth_since_previous_version"),
             "total_candidates": stats.get("total_learning_candidates"),
             "real_training_executed": bool(last_train.get("real_training_executed")),
             "real_model_available": bool(caps.get("training_available")),
@@ -646,10 +716,23 @@ class AutonomousTrainingOrchestrator:
             "per_chat_training": False,
             "synthetic_inflation": False,
             "authority_isolation": True,
+            "scheduler": self.scheduler.status(),
+            "recent_jobs": [
+                {
+                    "job_id": j.get("job_id"),
+                    "state": j.get("state"),
+                    "lifecycle": normalize_job_lifecycle_state(str(j.get("state") or "")),
+                    "dataset_id": j.get("dataset_id"),
+                    "model_id": j.get("model_id"),
+                    "real_training": j.get("real_training"),
+                }
+                for j in jobs[:10]
+            ],
             "experience_bridge": self.experience.status(),
+            "eligibility_gates": elig.get("gates"),
             "note": (
                 "Pipeline is ready to train when real growth/schedule thresholds are met; "
-                "current eligibility may still be false."
+                "current eligibility may still be false. growth==0 → NO_NEW_DATASET_GROWTH."
             ),
         }
 
@@ -1288,6 +1371,24 @@ class AutonomousTrainingOrchestrator:
             "quality_note": "Bounded/tiny runs prove the pipeline — not production model quality.",
         }
         self._record_training_result(out)
+        try:
+            man = self.datasets.get(dataset_id) or {}
+            accepted_n = int(
+                (man.get("validation_results") or {}).get("accepted")
+                or (
+                    int(man.get("train_count") or 0)
+                    + int(man.get("validation_count") or 0)
+                    + int(man.get("test_count") or 0)
+                )
+                or len(train_rows)
+            )
+            self.scheduler.mark_trained(
+                dataset_id=str(dataset_id),
+                accepted=accepted_n,
+                job_id=job_id,
+            )
+        except Exception:
+            pass
         return out
 
     def activate_model(self, model_id: str) -> dict[str, Any]:
@@ -1354,8 +1455,8 @@ class AutonomousTrainingOrchestrator:
     def maybe_run_autonomous_tick(self) -> dict[str, Any]:
         """Safe autonomous loop — NEVER runs on chat messages.
 
-        collect → clean → evaluate → version dataset → decide → optional train
-        → evaluate → canary → activate or rollback → record.
+        COLLECT → SANITIZE → VALIDATE → VERSION_DATASET → CHECK_ELIGIBILITY
+        → optional TRAIN → CHECKPOINT → EVALUATE → CANARY → ACTIVATE/ROLLBACK.
         """
         if not self.autonomous_enabled:
             return {"ok": False, "status": "AUTONOMOUS_DISABLED", "trained": False}
@@ -1366,101 +1467,106 @@ class AutonomousTrainingOrchestrator:
         monitor = self.monitor_and_maybe_rollback(force_regression=False)
         if monitor.get("action") == "rollback":
             self._record_rollback_result(monitor)
-            return {
+            out = {
                 "ok": bool(monitor.get("ok")),
                 "status": "ROLLED_BACK",
                 "trained": False,
                 "monitor": monitor,
                 "last_rollback_result": dict(self._last_rollback_result or {}),
             }
+            self.scheduler.record_tick_decision({**out, "reason": "ROLLED_BACK"})
+            return out
 
-        # LearningCandidate pass + dataset version only if quality gate passes
+        if self.scheduler.has_conflicting_job():
+            out = {
+                "ok": False,
+                "status": "TRAINING_BLOCKED",
+                "trained": False,
+                "reason": "CONFLICTING_TRAINING_JOB",
+                "training_eligible": False,
+            }
+            self.scheduler.record_tick_decision(out)
+            return out
+
+        # LearningCandidate pass + dataset version only if quality gate / content change
         built = self.build_dataset_from_sources()
+        rows = self.learning_pipeline_gate.accepted_training_rows(limit=10000)
+        trained_growth = self.scheduler.growth_since_last_trained(len(rows))
+
         if not built.get("ok"):
             status = built.get("error") or "INSUFFICIENT_DATA"
-            # Prefer explicit insufficient-real-data when store has little accepted growth
             cand = (built.get("candidate_pass") or {}).get("accepted_this_run") or 0
             if status in ("INSUFFICIENT_DATA", "DATASET_INVALID") and int(cand) == 0:
                 status = "INSUFFICIENT_REAL_DATA"
-            return {
+            out = {
                 "ok": False,
                 "status": status,
                 "trained": False,
-                "quality": {
-                    k: (built.get("quality") or {}).get(k)
-                    for k in ("accepted", "reasons", "quality_note", "status")
-                },
+                "training_eligible": False,
+                "reason": status if trained_growth > 0 else "NO_NEW_DATASET_GROWTH",
+                "dataset_growth": trained_growth,
                 "candidate_pass": built.get("candidate_pass"),
-                "new_since_last_dataset": built.get("new_since_last_dataset"),
                 "note": "Quality gate failed or insufficient real experience — collecting continues; no training.",
             }
+            self.scheduler.record_tick_decision(out)
+            return out
 
-        accepted = int(built.get("accepted") or 0)
-        growth = int(
-            built.get("dataset_growth_since_previous_version")
-            if built.get("dataset_growth_since_previous_version") is not None
-            else built.get("new_since_last_dataset")
-            or 0
-        )
-        # Unchanged content: do not treat as training justification
-        if built.get("unchanged") and growth <= 0:
-            return {
+        eligibility = self.scheduler.decide(accepted_rows=rows, owner_requested=False)
+        if not eligibility.get("eligible"):
+            reason = eligibility.get("reason") or "TRAINING_BLOCKED"
+            # Prefer explicit zero-growth reason when growth is 0
+            if trained_growth <= 0:
+                reason = "NO_NEW_DATASET_GROWTH"
+            out = {
                 "ok": True,
-                "status": "INSUFFICIENT_REAL_DATA",
+                "status": "TRAINING_BLOCKED",
                 "trained": False,
+                "training_eligible": False,
+                "reason": reason,
+                "eligibility": {
+                    k: eligibility.get(k)
+                    for k in ("eligible", "reason", "status", "blockers", "gates")
+                },
                 "dataset_id": (built.get("manifest") or {}).get("dataset_id"),
-                "accepted": accepted,
-                "new_since_last_dataset": 0,
-                "dataset_growth_since_previous_version": 0,
-                "unchanged": True,
-                "candidate_pass": built.get("candidate_pass"),
-                "note": "No new real accepted experience since last dataset — continue collecting.",
-            }
-
-        decision = self.triggers.evaluate(
-            new_example_count=accepted,
-            new_since_last_dataset=growth,
-            owner_requested=False,
-            explicit_retrain=False,
-            regression_recovery=False,
-            performance_opportunity=False,
-        )
-        if not decision.get("should_train"):
-            return {
-                "ok": True,
-                "status": "TRIGGER_NOT_MET",
-                "trained": False,
-                "trigger": decision,
-                "dataset_id": (built.get("manifest") or {}).get("dataset_id"),
-                "quality_status": "DATASET_READY",
-                "accepted": accepted,
-                "new_since_last_dataset": growth,
-                "dataset_growth_since_previous_version": growth,
-                "created": bool(built.get("created")),
-                "candidate_pass": built.get("candidate_pass"),
+                "accepted": int(built.get("accepted") or 0),
+                "dataset_growth": trained_growth,
+                "unchanged": bool(built.get("unchanged")),
+                "scheduler": self.scheduler.status(),
                 "note": (
-                    "Autonomous tick collected/versioned data but did not train; "
-                    "waits for growth/schedule/eval triggers — never per-chat. "
-                    "A new dataset version alone does not force training."
+                    "Autonomous tick did not train — eligibility gates not satisfied "
+                    "(never per-chat; never min_examples alone)."
                 ),
             }
+            self.scheduler.record_tick_decision(out)
+            return out
 
-        # Train against the versioned dataset only when triggers are satisfied
+        # Train against the versioned dataset only when all gates pass
         cycle = self.run_cycle(
             owner_requested=False,
             activate_if_pass=True,
             force_dataset=(built.get("manifest") or {}).get("dataset_id"),
         )
         self._record_training_result(cycle)
-        return {
+        job = cycle.get("job") or {}
+        if cycle.get("ok") or job.get("dataset_id"):
+            self.scheduler.mark_trained(
+                dataset_id=str(job.get("dataset_id") or (built.get("manifest") or {}).get("dataset_id") or ""),
+                accepted=len(rows),
+                job_id=job.get("job_id"),
+            )
+        out = {
             "ok": bool(cycle.get("ok")),
             "status": cycle.get("status"),
             "trained": bool(
                 cycle.get("real_training_executed") or cycle.get("actual_training_executed")
             ),
-            "trigger": decision,
+            "training_eligible": True,
+            "reason": "ELIGIBLE",
+            "eligibility": {
+                k: eligibility.get(k) for k in ("eligible", "reason", "status", "blockers")
+            },
             "dataset_id": (built.get("manifest") or {}).get("dataset_id"),
-            "dataset_growth_since_previous_version": growth,
+            "dataset_growth": trained_growth,
             "cycle": {
                 k: cycle.get(k)
                 for k in (
@@ -1475,7 +1581,12 @@ class AutonomousTrainingOrchestrator:
                 )
             },
             "last_training_result": dict(self._last_training_result or {}),
+            "scheduler": self.scheduler.status(),
         }
+        self.scheduler.record_tick_decision(
+            {**out, "job_id": (job or {}).get("job_id"), "reason": out.get("status")}
+        )
+        return out
 
     def monitor_and_maybe_rollback(self, *, force_regression: bool = False) -> dict[str, Any]:
         active = self.models.active()

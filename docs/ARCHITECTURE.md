@@ -111,5 +111,14 @@ Training is forbidden from modifying owner authentication, OTP, authorization, s
 - Dataset versions only on content checksum change; growth measured as accepted-count delta
 - Autonomous training requires min examples **and** growth/schedule/owner justification
 - Owner verification: `GET /platform/learning/verification`
-- Raw chat remains ineligible; no synthetic inflation; no Phase 10
+- Raw chat remains ineligible; no synthetic inflation
 - Verified baseline remains PHASE 9: `model-v0001` / `dataset-v0002` (52 accepted), GPU false
+
+## PHASE 10 — production hardening
+
+- Authoritative `TrainingEligibilityEngine` (10 mandatory gates; growth==0 → `NO_NEW_DATASET_GROWTH`)
+- Durable `DurableTrainingScheduler` (restart-safe; concurrent-job lock; never per-chat)
+- Owner observability: `/platform/training/eligibility|scheduler|observability`
+- Job lifecycle vocabulary: QUEUED → RUNNING → EVALUATING → CANARY → ACCEPTED|REJECTED|ROLLED_BACK|FAILED
+- Same architecture selects CPU or GPU backends when honestly available; no GPU fakery
+- Training remains isolated from auth/authorization/secrets/source code

@@ -1784,6 +1784,83 @@ def platform_learning_verification(owner: str = Depends(require_owner)):
     return AUTONOMOUS_TRAINING.pipeline_verification_status()
 
 
+@app.get('/platform/training/eligibility')
+def platform_training_eligibility(owner: str = Depends(require_owner)):
+    """Authoritative training eligibility (owner-only)."""
+    _ = owner
+    rows = AUTONOMOUS_TRAINING.learning_pipeline_gate.accepted_training_rows(limit=10000)
+    growth = AUTONOMOUS_TRAINING.scheduler.growth_since_last_trained(len(rows))
+    decision = AUTONOMOUS_TRAINING.eligibility_engine.evaluate(
+        accepted_rows=rows,
+        dataset_growth=growth,
+        last_trained_dataset_id=AUTONOMOUS_TRAINING.scheduler.status().get('last_trained_dataset_id'),
+    )
+    return decision
+
+
+@app.get('/platform/training/scheduler')
+def platform_training_scheduler(owner: str = Depends(require_owner)):
+    _ = owner
+    return AUTONOMOUS_TRAINING.scheduler.status()
+
+
+@app.get('/platform/training/observability')
+def platform_training_observability(owner: str = Depends(require_owner)):
+    """Aggregated owner-only training observability (no secrets/private text)."""
+    _ = owner
+    ver = AUTONOMOUS_TRAINING.pipeline_verification_status()
+    stats = AUTONOMOUS_TRAINING.learning_statistics()
+    jobs = AUTONOMOUS_TRAINING.list_jobs(limit=20)
+    from pfai.longevity.autonomous_training.scheduler import normalize_job_lifecycle_state
+
+    return {
+        'ok': True,
+        'eligibility': stats.get('next_training_eligibility'),
+        'dataset': {
+            'version': stats.get('dataset_version'),
+            'accepted': stats.get('latest_dataset_accepted'),
+            'growth_since_previous': stats.get('dataset_growth_since_previous_version'),
+            'growth_since_last_trained': stats.get('dataset_growth_since_last_trained'),
+            'versions': stats.get('dataset_versions'),
+            'splits': stats.get('train_validation_test'),
+        },
+        'jobs': [
+            {
+                'job_id': j.get('job_id'),
+                'state': j.get('state'),
+                'lifecycle': normalize_job_lifecycle_state(str(j.get('state') or '')),
+                'dataset_id': j.get('dataset_id'),
+                'model_id': j.get('model_id'),
+                'real_training': j.get('real_training'),
+                'is_mock': j.get('is_mock'),
+            }
+            for j in jobs
+        ],
+        'active_model': AUTONOMOUS_TRAINING.models.active(),
+        'lkg_model': AUTONOMOUS_TRAINING.models.last_known_good(),
+        'candidate_models': [
+            {
+                'model_id': m.get('model_id'),
+                'status': m.get('status'),
+                'dataset_version': m.get('dataset_version'),
+                'training_backend': m.get('training_backend'),
+            }
+            for m in AUTONOMOUS_TRAINING.models.list_models(limit=20)
+            if m.get('status') in ('CANDIDATE', 'VALIDATING', 'VALIDATED', 'CANARY', 'REJECTED')
+        ],
+        'last_training_result': stats.get('last_training_result'),
+        'last_rollback_result': stats.get('last_rollback_result'),
+        'scheduler': AUTONOMOUS_TRAINING.scheduler.status(),
+        'resource_status': AUTONOMOUS_TRAINING.resources.admit(
+            dataset_rows=int(stats.get('accepted_candidates') or 0),
+            method='lora',
+            running_jobs=len(AUTONOMOUS_TRAINING.scheduler.status().get('active_jobs') or []),
+        ),
+        'verification': ver,
+        'note': 'No secret payloads or private candidate text are exposed.',
+    }
+
+
 @app.get('/platform/learning/dataset')
 def platform_learning_dataset(owner: str = Depends(require_owner), limit: int = 20):
     _ = owner

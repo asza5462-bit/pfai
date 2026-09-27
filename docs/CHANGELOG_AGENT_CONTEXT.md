@@ -1,5 +1,20 @@
 # Agent Context Changelog
 
+## 2026-09-27 — PHASE 10: Autonomous learning/training production hardening
+
+### Added
+- `TrainingEligibilityEngine` — authoritative multi-gate eligibility (`NO_NEW_DATASET_GROWTH` when growth==0)
+- `DurableTrainingScheduler` — restart-safe schedule/baseline; concurrent job prevention
+- Owner APIs: `/platform/training/eligibility`, `/scheduler`, `/observability`
+- Tests `test_v104_phase10_hardening.py`
+- Docs: AUTONOMOUS_TRAINING / DATASET_PIPELINE / ARCHITECTURE updated
+
+### Verified (honest)
+- Architecture READY; TRAINING_ELIGIBLE=**false** (reason `NO_NEW_DATASET_GROWTH`)
+- dataset-v0002 / 52 accepted / growth 0; model-v0001 active+LKG; GPU false
+- No forced training; no synthetic inflation; Phase 8 security intact
+- MODEL_QUALITY_PRODUCTION_VALIDATED remains **false**
+
 ## 2026-09-27 — Autonomous learning verification (no Phase 10)
 
 ### Verified

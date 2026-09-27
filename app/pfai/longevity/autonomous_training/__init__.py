@@ -6,6 +6,8 @@ from .isolation import TrainingSafetyIsolation
 from .active_runtime import ActiveModelRuntime
 from .compatibility import ModelCompatibilityChecker
 from .resources import TrainingResourceManager
+from .eligibility import TrainingEligibilityEngine
+from .scheduler import DurableTrainingScheduler
 
 __all__ = [
     "AutonomousTrainingOrchestrator",
@@ -20,4 +22,6 @@ __all__ = [
     "ActiveModelRuntime",
     "ModelCompatibilityChecker",
     "TrainingResourceManager",
+    "TrainingEligibilityEngine",
+    "DurableTrainingScheduler",
 ]
