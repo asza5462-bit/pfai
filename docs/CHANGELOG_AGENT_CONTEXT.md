@@ -1,5 +1,23 @@
 # Agent Context Changelog
 
+## 2026-09-27 — PHASE 11 FINAL: model-v0007 production-validated
+
+### Root cause + fix
+- Trainer used `### Instruction`/`### Response` while evaluator prompts use colon form
+- Aligned LoRA training text format; **did not** change ProductionQualityGate thresholds or scoring
+
+### Executed / verified
+- REAL_TRAINING_EXECUTED=true → **model-v0007** (transformers_lora / distilgpt2 / dataset-v0006)
+- REAL_EVALUATION_EXECUTED=true → pass_rate **0.8690**, coding **0.7947**, samples **336**
+- Canary/shadow PASS; regression_detected=false
+- PRODUCTION_VALIDATED=true / PRODUCTION_READY=true
+- Active + LKG = model-v0007; previous LKG model-v0001 checkpoint retained for rollback
+- Orchestrator promotes LKG only after ProductionQualityGate pass; status API exposes truthful blockers/metrics
+
+### Not claimed
+- GPU / production-scale training equivalence
+- Phase 12 / deploy / remote push (explicitly not started)
+
 ## 2026-09-27 — PHASE 11 continued: eval banks + retrain toward production gates
 
 ### Implemented

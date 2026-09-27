@@ -2089,10 +2089,24 @@ class AutonomousTrainingOrchestrator:
             ),
             evaluation_run_id=str(prod.get("evaluation_run_id") or ""),
         )
-        # Keep LKG marked production-reference (not necessarily production_ready model)
-        if lkg.get("model_id") and lkg.get("model_id") != candidate.get("model_id"):
-            # LKG remains the production fallback reference until candidate is production_ready
-            pass
+        # After full ProductionQualityGate pass: promote candidate to LKG while retaining
+        # the previous LKG checkpoint for rollback. Until then LKG stays production fallback.
+        if production_validated and candidate.get("model_id"):
+            prev_lkg_id = (lkg or {}).get("model_id")
+            if prev_lkg_id and prev_lkg_id != candidate.get("model_id"):
+                self.audit.record(
+                    "lkg_promotion_previous_retained",
+                    previous_lkg=prev_lkg_id,
+                    new_lkg=candidate.get("model_id"),
+                    reason="production_quality_gate_pass",
+                )
+            self.models.mark_lkg(
+                str(candidate.get("model_id")),
+                reason="production_quality_gate_pass",
+            )
+            self.models.update_status(
+                str(candidate.get("model_id")), ModelStatus.ACTIVE
+            )
 
         # Update active runtime serving tier metadata without swapping models
         cur = self.active_runtime.current()
@@ -2202,40 +2216,96 @@ class AutonomousTrainingOrchestrator:
 
     def production_validation_status(self) -> dict[str, Any]:
         last = dict(self._last_production_validation or {})
+        report_data: dict[str, Any] = {}
         # Prefer on-disk latest report if process restarted
         report = self.root / "artifacts" / "production_validation.json"
-        if report.exists() and not last:
+        if report.exists():
             try:
-                data = json.loads(report.read_text(encoding="utf-8"))
-                last = {
-                    "model_quality_production_validated": data.get(
-                        "model_quality_production_validated"
-                    ),
-                    "status": data.get("status"),
-                    "reasons": data.get("reasons"),
-                    "evaluation_run_id": data.get("evaluation_run_id"),
-                    "candidate_model": data.get("candidate_model"),
-                    "baseline_model": data.get("baseline_model"),
-                    "at": data.get("finished_at"),
-                }
+                report_data = json.loads(report.read_text(encoding="utf-8"))
             except Exception:
-                pass
+                report_data = {}
+        if report_data and not last:
+            last = {
+                "model_quality_production_validated": report_data.get(
+                    "model_quality_production_validated"
+                ),
+                "production_ready": report_data.get("production_ready"),
+                "status": report_data.get("status"),
+                "reasons": report_data.get("reasons"),
+                "evaluation_run_id": report_data.get("evaluation_run_id"),
+                "candidate_model": report_data.get("candidate_model"),
+                "baseline_model": report_data.get("baseline_model"),
+                "evaluation_dataset": report_data.get("evaluation_dataset"),
+                "evaluation_samples": report_data.get("evaluation_samples")
+                or report_data.get("independent_evaluation_samples"),
+                "at": report_data.get("finished_at"),
+            }
         caps = detect_runtime_capabilities(probe_inference=False)
+        active = self.models.active() or {}
+        lkg = self.models.last_known_good() or {}
+        metrics = (report_data.get("candidate_metrics") or {}) if report_data else {}
+        suite = metrics.get("suite_pass_rates") or {}
+        blockers = list(report_data.get("blockers") or report_data.get("reasons") or [])
+        if not report_data and not last.get("model_quality_production_validated"):
+            blockers = blockers or ["PRODUCTION_VALIDATION_NOT_RUN"]
+        production_ready = bool(
+            (active.get("meta") or {}).get("production_ready")
+            or last.get("production_ready")
+            or report_data.get("production_ready")
+        )
         return {
             "ok": True,
             "implemented": True,
             "model_quality_production_validated": bool(
                 last.get("model_quality_production_validated")
+                or report_data.get("model_quality_production_validated")
             ),
-            "status": last.get("status") or "NOT_RUN",
-            "reasons": last.get("reasons") or ["PRODUCTION_VALIDATION_NOT_RUN"],
+            "production_validation": bool(
+                last.get("model_quality_production_validated")
+                or report_data.get("model_quality_production_validated")
+            ),
+            "production_ready": production_ready,
+            "status": last.get("status")
+            or report_data.get("status")
+            or "NOT_RUN",
+            "reasons": last.get("reasons")
+            or report_data.get("reasons")
+            or ["PRODUCTION_VALIDATION_NOT_RUN"],
+            "exact_remaining_blockers": blockers
+            if not production_ready
+            else [],
             "last": last,
             "gate_config": self.production_gate.config.to_dict(),
             "gpu_available": bool(caps.get("gpu_available")),
             "cpu_training_available": bool(caps.get("training_available")),
-            "active_model": (self.models.active() or {}).get("model_id"),
-            "lkg_model": (self.models.last_known_good() or {}).get("model_id"),
-            "note": "Configurable production gates; tiny CPU suites typically remain NOT validated.",
+            "current_active_model": active.get("model_id"),
+            "current_lkg": lkg.get("model_id"),
+            "candidate_model": last.get("candidate_model")
+            or report_data.get("candidate_model")
+            or active.get("model_id"),
+            "active_model": active.get("model_id"),
+            "lkg_model": lkg.get("model_id"),
+            "training_status": (self.jobs.latest() or {}).get("status")
+            if hasattr(self, "jobs")
+            else None,
+            "dataset_version": report_data.get("evaluation_dataset")
+            or last.get("evaluation_dataset"),
+            "valid_evaluation_samples": report_data.get("evaluation_samples")
+            or report_data.get("independent_evaluation_samples")
+            or last.get("evaluation_samples"),
+            "task_pass_rate": metrics.get("pass_rate"),
+            "coding_pass_rate": suite.get("coding"),
+            "regression_detected": bool(report_data.get("regression_detected")),
+            "quality_gate": report_data.get("quality_gate")
+            or ("PASS" if production_ready else "FAIL"),
+            "canary_result": report_data.get("canary_result"),
+            "rollback_available": bool(lkg.get("model_id")),
+            "serving_tier": (active.get("meta") or {}).get("serving_tier")
+            or report_data.get("serving_tier"),
+            "note": (
+                "production_ready requires full ProductionQualityGate pass; "
+                "ACTIVE alone is never sufficient."
+            ),
         }
 
     def monitor_and_maybe_rollback(self, *, force_regression: bool = False) -> dict[str, Any]:

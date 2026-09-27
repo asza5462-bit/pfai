@@ -118,10 +118,10 @@ Training is forbidden from modifying owner authentication, OTP, authorization, s
 
 - Authoritative `ProductionQualityGate` (configurable thresholds; never invents pass)
 - Versioned evaluation suites + auditable evaluation runs
-- Local shadow/canary promotion simulation before LKG replacement in future cycles
-- Owner observability for production validation status
+- Local shadow/canary promotion simulation; LKG promoted only after full gate pass
+- Owner observability for production validation status (truthful blockers/metrics)
 - Continuous learning (experience) remains isolated from model training authority
 - Disjoint `production_banks` train/eval corpora with leakage exclusion
 - Serving tiers: `internal_active` vs `production_ready` (ACTIVE ≠ production)
-- Best candidate model-v0005: sample gate PASS; task/coding gates still below production mins
-- LKG model-v0001 remains production serving fallback; PRODUCTION_READY=false
+- **model-v0007**: PRODUCTION_VALIDATED=true / PRODUCTION_READY=true (CPU LoRA; not GPU-scale claim)
+- Previous LKG model-v0001 checkpoint retained for rollback

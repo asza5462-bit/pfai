@@ -48,25 +48,28 @@ Thresholds are **not** lowered to force a pass.
 
 `MODEL_QUALITY_PRODUCTION_VALIDATED=true` **only** when every production gate passes.
 
-## Current verified baseline (best candidate)
+## Current verified baseline (production-validated)
 
 | Field | Value | Label |
 |-------|-------|-------|
-| Active (internal) | model-v0005 | VERIFIED |
-| LKG / production serving | model-v0001 | VERIFIED |
-| Prior candidates | model-v0003, model-v0004, model-v0006 | VERIFIED |
-| Train dataset (best) | dataset-v0005 | VERIFIED |
-| Eval dataset | prodeval-v0004 (eligible 325 / executed 337) | VERIFIED |
-| Real training | transformers_lora CPU (distilgpt2) | EXECUTED |
+| Active + LKG | model-v0007 | VERIFIED |
+| Previous LKG (rollback) | model-v0001 (checkpoint retained) | VERIFIED |
+| Prior candidates | model-v0003 … model-v0006 | VERIFIED |
+| Train dataset | dataset-v0006 | VERIFIED |
+| Eval dataset | prodeval-v0003 (executed 336; ≥200) | VERIFIED |
+| Real training | transformers_lora CPU (distilgpt2), prompt format aligned | EXECUTED |
 | Sample gate (≥200) | PASS | VERIFIED |
-| Task pass rate | 0.8071 (need ≥0.85) | BLOCKED |
-| Coding pass rate | 0.6859 (need ≥0.70) | BLOCKED |
+| Task pass rate | 0.8690 (need ≥0.85) | PASS |
+| Coding pass rate | 0.7947 (need ≥0.70) | PASS |
 | Canary/shadow | PASS | VERIFIED |
-| Regression vs LKG | false | VERIFIED |
-| PRODUCTION_VALIDATED | false | NOT YET VALIDATED |
-| PRODUCTION_READY | false | NOT YET VALIDATED |
+| Regression vs prior LKG | false | VERIFIED |
+| PRODUCTION_VALIDATED | true | VERIFIED |
+| PRODUCTION_READY | true | VERIFIED |
 | GPU | false | VERIFIED |
-| Rollback | available | VERIFIED |
+| Rollback | available (model-v0001 checkpoint) | VERIFIED |
+
+Note: CPU LoRA on distilgpt2 is **not** claimed equivalent to production-scale GPU training.
+It passed the configured local ProductionQualityGate only.
 
 ## Eval / train banks
 
