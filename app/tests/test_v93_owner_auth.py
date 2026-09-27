@@ -180,6 +180,110 @@ class TestOwnerAuthAPI(unittest.TestCase):
         self.assertTrue(flags["secure"])
         self.assertEqual(flags["samesite"], "strict")
 
+    def test_secure_cookie_production_forces_secure(self):
+        from pfai import api as api_mod
+        from starlette.requests import Request
+
+        scope = {
+            "type": "http",
+            "asgi": {"version": "3.0"},
+            "http_version": "1.1",
+            "method": "GET",
+            "scheme": "http",
+            "path": "/",
+            "raw_path": b"/",
+            "query_string": b"",
+            "headers": [],
+            "client": ("127.0.0.1", 123),
+            "server": ("test", 80),
+        }
+        req = Request(scope)
+        prev_env = os.environ.get("PFAI_ENV")
+        prev_cookie = os.environ.get("PFAI_COOKIE_SECURE")
+        try:
+            os.environ["PFAI_ENV"] = "production"
+            os.environ["PFAI_COOKIE_SECURE"] = "false"
+            flags = api_mod._secure_cookie_flags(req)
+            self.assertTrue(flags["secure"])
+        finally:
+            if prev_env is None:
+                os.environ.pop("PFAI_ENV", None)
+            else:
+                os.environ["PFAI_ENV"] = prev_env
+            if prev_cookie is None:
+                os.environ.pop("PFAI_COOKIE_SECURE", None)
+            else:
+                os.environ["PFAI_COOKIE_SECURE"] = prev_cookie
+
+    def test_secure_cookie_dev_http_explicit(self):
+        from pfai import api as api_mod
+        from starlette.requests import Request
+
+        scope = {
+            "type": "http",
+            "asgi": {"version": "3.0"},
+            "http_version": "1.1",
+            "method": "GET",
+            "scheme": "http",
+            "path": "/",
+            "raw_path": b"/",
+            "query_string": b"",
+            "headers": [],
+            "client": ("127.0.0.1", 123),
+            "server": ("test", 80),
+        }
+        req = Request(scope)
+        prev_env = os.environ.get("PFAI_ENV")
+        prev_cookie = os.environ.get("PFAI_COOKIE_SECURE")
+        try:
+            os.environ.pop("PFAI_ENV", None)
+            os.environ["PFAI_COOKIE_SECURE"] = "false"
+            flags = api_mod._secure_cookie_flags(req)
+            self.assertFalse(flags["secure"])
+        finally:
+            if prev_env is None:
+                os.environ.pop("PFAI_ENV", None)
+            else:
+                os.environ["PFAI_ENV"] = prev_env
+            if prev_cookie is None:
+                os.environ.pop("PFAI_COOKIE_SECURE", None)
+            else:
+                os.environ["PFAI_COOKIE_SECURE"] = prev_cookie
+
+    def test_public_observability_has_no_secrets(self):
+        self.client.cookies.clear()
+        for path in ("/health", "/system", "/metrics", "/modules", "/deployments", "/continuous/status"):
+            r = self.client.get(path)
+            self.assertEqual(r.status_code, 200, msg=path)
+            body = r.text.lower()
+            for needle in ("pbkdf2", "api_key", "passcode=", "owner_secret", "pfai_owner_session="):
+                self.assertNotIn(needle, body, msg=f"{path} leaked {needle}")
+            if path in ("/recovery/verify", "/research/verify"):
+                self.assertNotIn("history_path", body)
+                self.assertNotIn("ledger_path", body)
+
+    def test_private_read_endpoints_require_owner(self):
+        self.client.cookies.clear()
+        self.assertEqual(self.client.get("/knowledge/search?q=x").status_code, 401)
+        self.assertEqual(self.client.get("/regression/pending").status_code, 401)
+        headers = {"X-Owner-Secret": "test-secret"}
+        self.assertEqual(self.client.get("/knowledge/search?q=x", headers=headers).status_code, 200)
+        self.assertEqual(self.client.get("/regression/pending", headers=headers).status_code, 200)
+
+    def test_recovery_verify_sanitizes_paths(self):
+        r = self.client.get("/recovery/verify")
+        self.assertEqual(r.status_code, 200)
+        data = r.json()
+        self.assertIn("valid", data)
+        self.assertIn("history_name", data)
+        self.assertNotIn("history_path", data)
+        self.assertNotIn("/", data["history_name"])
+        r2 = self.client.get("/research/verify")
+        self.assertEqual(r2.status_code, 200)
+        data2 = r2.json()
+        self.assertIn("ledger_name", data2)
+        self.assertNotIn("ledger_path", data2)
+
     def test_owner_endpoints_reject_public_url_alone(self):
         self.client.cookies.clear()
         from pfai.api import app

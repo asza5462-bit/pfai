@@ -214,7 +214,8 @@
 - Decision:
   - Extend `OwnerControl` with `OwnerAuthService` (sessions, rate-limit/lockout, first-time setup lock).
   - Store only passcode hashes (`pbkdf2_sha256$…` preferred; legacy sha256 accepted). Env: `PFAI_OWNER_EMAIL` + `PFAI_OWNER_SECRET_HASH`.
-  - HttpOnly cookie sessions (`pfai_owner_session`, SameSite=Strict, Secure on HTTPS); legacy header kept for automation.
+  - HttpOnly cookie sessions (`pfai_owner_session`, SameSite=Strict; Secure always when `PFAI_ENV=production`, otherwise on HTTPS / `PFAI_COOKIE_SECURE=true`); legacy `X-Owner-Secret` header kept for automation.
   - First-time `/owner/setup` permanently disables itself via `owner_setup.lock`; no frontend-trusted roles.
   - Any passcode shared in development is considered compromised; require a new production hash before deploy.
+  - Production requires HTTPS; private knowledge/regression reads are owner-gated; `/health`/`/system`/`/metrics` stay public observability.
 - Consequences: Dashboard authenticates via login/setup UI without retaining plaintext secrets; owner APIs remain server-gated.

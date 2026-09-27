@@ -190,9 +190,9 @@ TOOL_ROUTER = ToolRouter({
     'deployments_list': lambda: {'items': runtime.deploy.history()},
     'knowledge_search': lambda q='', limit=5: {'results': runtime.store.search(q, int(limit or 5))},
     'memory_search': lambda q='', limit=5: {'results': COMMAND_MEMORY.relevant(q, int(limit or 5))},
-    'recovery_verify': lambda: {'valid': RECOVERY.verify_history(), 'history_path': str(RECOVERY.history_path)},
+    'recovery_verify': lambda: {'valid': RECOVERY.verify_history(), 'history_name': Path(RECOVERY.history_path).name},
     'research_verify': lambda: {
-        'valid': RESEARCH_GATE.verify_chain(), 'ledger_path': str(RESEARCH_GATE.ledger),
+        'valid': RESEARCH_GATE.verify_chain(), 'ledger_name': Path(RESEARCH_GATE.ledger).name,
         'network_enabled': RESEARCH_GATE.policy.network,
         'allowed_domains': sorted(RESEARCH_GATE.policy.domains),
     },
@@ -317,10 +317,29 @@ def _client_key(request: Request) -> str:
     return forwarded or (request.client.host if request.client else 'unknown')
 
 
+def _is_production_env() -> bool:
+    return os.environ.get('PFAI_ENV', '').strip().lower() in ('production', 'prod')
+
+
 def _secure_cookie_flags(request: Request) -> dict:
-    # Secure cookies when request is HTTPS (or behind TLS-terminating proxy).
+    """Cookie flags for owner sessions.
+
+    Production (PFAI_ENV=production|prod): always Secure — HTTPS is required.
+    Development: Secure when the request is HTTPS / x-forwarded-proto=https,
+    or when PFAI_COOKIE_SECURE=true. Explicit PFAI_COOKIE_SECURE=false allows
+    HTTP-only local development cookies.
+    """
     proto = (request.headers.get('x-forwarded-proto') or request.url.scheme or 'http').lower()
-    secure = proto == 'https' or os.environ.get('PFAI_COOKIE_SECURE', '').lower() in ('1', 'true', 'yes')
+    flag = os.environ.get('PFAI_COOKIE_SECURE', '').strip().lower()
+    if _is_production_env():
+        # Production must never emit non-Secure session cookies.
+        secure = True
+    elif flag in ('0', 'false', 'no'):
+        secure = False
+    elif flag in ('1', 'true', 'yes'):
+        secure = True
+    else:
+        secure = proto == 'https'
     return {
         'httponly': True,
         'secure': secure,
@@ -503,7 +522,10 @@ def remember(x:Remember, owner: str = Depends(require_owner)): runtime.memory.ad
 @app.post('/knowledge')
 def knowledge(x:Knowledge, owner: str = Depends(require_owner)): runtime.store.add(x.content,x.source,x.metadata); return {'ok':True}
 @app.get('/knowledge/search')
-def ksearch(q:str,limit:int=5): return {'results':runtime.store.search(q,limit)}
+def ksearch(q:str, limit:int=5, owner: str = Depends(require_owner)):
+    """Owner-gated: knowledge store may hold private curated content."""
+    _ = owner
+    return {'results': runtime.store.search(q, limit)}
 @app.post('/ask')
 def ask(x:Ask, owner: str = Depends(require_owner)):
     if not x.question.strip(): raise HTTPException(400,'question is required')
@@ -571,7 +593,8 @@ def continuous_resume(owner:str=Depends(require_owner)):
 def continuous_stop(owner:str=Depends(require_owner)):
     OWNER.authorize('CONTINUOUS_STOP', f'{owner} stopped the continuous-training service')
     log.info('continuous_stop owner=%s', owner)
-    return CONTINUOUS.stop(f'stopped by {owner}')
+    # Public /continuous/status exposes last_error — do not embed owner email there.
+    return CONTINUOUS.stop('stopped by owner')
 
 @app.post('/continuous/approve/{version}')
 def continuous_approve(version:str, owner:str=Depends(require_owner)):
@@ -639,7 +662,10 @@ def code_solve(x: CodeSolve, owner: str = Depends(require_owner)):
                                           reference_urls=x.reference_urls or None)
 
 @app.get('/regression/pending')
-def regression_pending(): return {'items': REGRESSIONS.pending()}
+def regression_pending(owner: str = Depends(require_owner)):
+    """Owner-gated: pending cases include broken/fixed source code."""
+    _ = owner
+    return {'items': REGRESSIONS.pending()}
 
 @app.post('/regression/capture')
 def regression_capture(x: RegressionCaptureRequest, owner: str = Depends(require_owner)):
@@ -669,16 +695,20 @@ def dashboard():
 
 @app.get('/recovery/verify')
 def recovery_verify():
-    return {'valid': RECOVERY.verify_history(), 'history_path': str(RECOVERY.history_path)}
+    # Public integrity probe — basename only (no absolute filesystem paths).
+    return {'valid': RECOVERY.verify_history(), 'history_name': Path(RECOVERY.history_path).name}
 
 @app.get('/research/verify')
 def research_verify():
     """Tamper-evidence check for the research ledger (research_gate.py) -- every
     URL fetch attempt made on behalf of /code/solve, allowed or denied, is
     recorded there. Read-only, same reasoning as /recovery/verify."""
-    return {'valid': RESEARCH_GATE.verify_chain(), 'ledger_path': str(RESEARCH_GATE.ledger),
-            'network_enabled': RESEARCH_GATE.policy.network,
-            'allowed_domains': sorted(RESEARCH_GATE.policy.domains)}
+    return {
+        'valid': RESEARCH_GATE.verify_chain(),
+        'ledger_name': Path(RESEARCH_GATE.ledger).name,
+        'network_enabled': RESEARCH_GATE.policy.network,
+        'allowed_domains': sorted(RESEARCH_GATE.policy.domains),
+    }
 
 @app.get('/recovery/history')
 def recovery_history():
