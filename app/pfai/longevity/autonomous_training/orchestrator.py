@@ -18,6 +18,7 @@ from .compatibility import ModelCompatibilityChecker
 from .dataset import DatasetBuilder, DatasetVersionRegistry
 from .dataset_quality import DatasetQualityGate
 from .evaluation_gate import EvaluationGate
+from .experience_bridge import ContinuousExperienceBridge
 from .isolation import TrainingSafetyIsolation
 from .learning_candidate import LearningCandidatePipeline
 from .model_registry import ModelRegistry
@@ -36,7 +37,7 @@ from .runtime import detect_runtime_capabilities
 from .runtime_detector import TrainingRuntimeDetector
 from .trainer import TrainingBackendRegistry
 from .triggers import TrainingTriggerPolicy
-from .types import JobState, ModelStatus, TrainingConfig, TrainingResult
+from .types import JobState, LearningEligibility, ModelStatus, TrainingConfig, TrainingResult
 from .validator import TrainingExampleValidator
 
 
@@ -88,6 +89,7 @@ class AutonomousTrainingOrchestrator:
         self.learning_pipeline_gate = LearningCandidatePipeline(
             str(self.root / "candidates")
         )
+        self.experience = ContinuousExperienceBridge(self)
         self._lock = threading.RLock()
         env_mock = (os.environ.get("TRAINING_ALLOW_MOCK") or "").lower() in ("1", "true", "yes")
         self.allow_mock_backend = env_mock if allow_mock_backend is None else bool(allow_mock_backend)
@@ -445,25 +447,46 @@ class AutonomousTrainingOrchestrator:
         return {"ok": True, "autonomous_training_enabled": self.autonomous_enabled}
 
     def submit_owner_feedback(self, item: dict[str, Any]) -> dict[str, Any]:
-        """Queue owner-approved feedback for the next candidate collect (not immediate train)."""
+        """Queue owner-approved feedback and immediately record via experience bridge."""
         row = dict(item or {})
         row["approved"] = True
         self._owner_feedback_buffer.append(row)
+        recorded = self.experience.record_owner_feedback(
+            instruction=str(row.get("instruction") or row.get("question") or ""),
+            response=str(row.get("response") or row.get("correction") or ""),
+            source_id=str(row.get("id") or ""),
+            approved=True,
+        )
         self.audit.record("owner_feedback_queued", source_id=str(row.get("id") or ""))
-        return {"ok": True, "queued": len(self._owner_feedback_buffer)}
+        return {"ok": True, "queued": len(self._owner_feedback_buffer), "recorded": recorded}
 
     def submit_tool_outcome(self, item: dict[str, Any]) -> dict[str, Any]:
         row = dict(item or {})
         for bad in ("secret", "token", "password", "otp", "cookie", "api_key"):
             row.pop(bad, None)
         self._tool_outcome_buffer.append(row)
-        return {"ok": True, "queued": len(self._tool_outcome_buffer)}
+        recorded = None
+        if row.get("success"):
+            recorded = self.experience.record_tool_success(
+                instruction=str(row.get("instruction") or row.get("goal") or ""),
+                result_summary=str(row.get("response") or row.get("result_summary") or ""),
+                source_id=str(row.get("id") or ""),
+                raw_payload=row,
+            )
+        return {"ok": True, "queued": len(self._tool_outcome_buffer), "recorded": recorded}
 
     def submit_correction(self, item: dict[str, Any]) -> dict[str, Any]:
         row = dict(item or {})
         row["corrected"] = True
         self._correction_buffer.append(row)
-        return {"ok": True, "queued": len(self._correction_buffer)}
+        recorded = self.experience.record_corrected_failure(
+            instruction=str(row.get("instruction") or ""),
+            corrected_response=str(row.get("corrected_response") or row.get("response") or ""),
+            source_id=str(row.get("id") or ""),
+            tests_passed=bool(row.get("tests_passed") or row.get("verified")),
+            provenance={"via": "submit_correction"},
+        )
+        return {"ok": True, "queued": len(self._correction_buffer), "recorded": recorded}
 
     def run_learning_candidate_pass(self) -> dict[str, Any]:
         """OBSERVATION→sanitize→…→ACCEPTED without training."""
@@ -472,9 +495,11 @@ class AutonomousTrainingOrchestrator:
         extra_accepted = 0
         for row in raw:
             rec = self.learning_pipeline_gate.process_observation(row)
-            if rec.eligibility == "accepted":
+            if rec.eligibility in (LearningEligibility.ACCEPTED.value, "accepted"):
                 extra_accepted += 1
                 result.setdefault("accepted_rows", []).append(rec.to_training_row())
+            elif rec.eligibility in (LearningEligibility.PENDING_REVIEW.value, "pending"):
+                result["pending_this_run"] = int(result.get("pending_this_run") or 0) + 1
             else:
                 result["rejected_this_run"] = int(result.get("rejected_this_run") or 0) + 1
                 if rec.rejection_reason == "duplicate":
@@ -497,20 +522,79 @@ class AutonomousTrainingOrchestrator:
         stats = self.learning_pipeline_gate.store.statistics()
         datasets = self.datasets.list_versions(limit=20)
         latest = datasets[0] if datasets else None
+        prev = datasets[1] if len(datasets) > 1 else None
         caps = detect_runtime_capabilities(probe_inference=False)
+        accepted_n = int(stats.get("accepted_candidates") or 0)
+        latest_accepted = 0
+        if latest:
+            latest_accepted = int(
+                (latest.get("train_count") or 0)
+                + (latest.get("validation_count") or 0)
+                + (latest.get("test_count") or 0)
+            )
+        prev_accepted = 0
+        if prev:
+            prev_accepted = int(
+                (prev.get("train_count") or 0)
+                + (prev.get("validation_count") or 0)
+                + (prev.get("test_count") or 0)
+            )
+        growth = max(0, latest_accepted - prev_accepted) if latest else 0
+        # Training eligibility: quality+quantity vs triggers — never just "new version exists"
+        quality_probe = self.dataset_quality.evaluate(
+            self.learning_pipeline_gate.accepted_training_rows(limit=10000)
+        )
+        trigger = self.triggers.evaluate(
+            new_example_count=int(quality_probe.get("accepted") or 0),
+            new_since_last_dataset=growth,
+        )
+        training_eligible = bool(
+            quality_probe.get("ok") and trigger.get("should_train") and self.triggers.enabled
+        )
         return {
             "ok": True,
             "candidates": stats,
+            "total_learning_candidates": stats.get("total_candidates"),
+            "accepted_candidates": stats.get("accepted_candidates"),
+            "rejected_candidates": stats.get("rejected_candidates"),
+            "accepted_by_source": stats.get("source_distribution"),
             "dataset_versions": datasets,
             "latest_dataset": latest,
+            "dataset_version": (latest or {}).get("dataset_id"),
+            "dataset_growth_since_previous_version": growth,
+            "train_validation_test": {
+                "train": (latest or {}).get("train_count"),
+                "validation": (latest or {}).get("validation_count"),
+                "test": (latest or {}).get("test_count"),
+            }
+            if latest
+            else None,
+            "last_accepted_example_timestamp": stats.get("last_accepted_at"),
             "last_candidate_pass": self.learning_pipeline_gate.last_run_summary(),
+            "last_training_result": dict(self._last_training_result or {}),
+            "last_training_timestamp": (self._last_training_result or {}).get("at"),
+            "last_rollback_result": dict(self._last_rollback_result or {}),
+            "next_training_eligibility": {
+                "eligible": training_eligible,
+                "quality_ok": bool(quality_probe.get("ok")),
+                "quality_status": quality_probe.get("status"),
+                "trigger": trigger,
+                "reason": (
+                    "eligible"
+                    if training_eligible
+                    else (
+                        quality_probe.get("status")
+                        if not quality_probe.get("ok")
+                        else "TRIGGER_NOT_MET"
+                    )
+                ),
+            },
             "training_available": bool(caps.get("training_available")),
             "gpu_available": bool(caps.get("gpu_available")),
             "active_model": self.models.active(),
             "lkg_model": self.models.last_known_good(),
-            "last_training_result": dict(self._last_training_result or {}),
-            "last_rollback_result": dict(self._last_rollback_result or {}),
-            "note": "Candidate stats never include secret payloads; responses are sanitized.",
+            "experience_bridge": self.experience.status(),
+            "note": "Candidate stats never include secret payloads or private example text.",
         }
 
     def build_dataset_from_sources(self, *, sources: list[str] | None = None) -> dict[str, Any]:
@@ -577,6 +661,42 @@ class AutonomousTrainingOrchestrator:
                 "rejection_reasons"
             ),
         }
+        # Only create a new immutable version when content actually changes
+        checksum = self.datasets.compute_built_checksum(built)
+        existing = self.datasets.find_by_checksum(checksum)
+        if existing:
+            self.triggers.mark_dataset_baseline(accepted_n)
+            self._state["last_dataset_id"] = existing["dataset_id"]
+            self._state["last_dataset_accepted_baseline"] = accepted_n
+            self._save_state()
+            self.audit.record(
+                "dataset_unchanged",
+                dataset_id=existing["dataset_id"],
+                checksum=checksum[:16],
+            )
+            return {
+                "ok": True,
+                "unchanged": True,
+                "created": False,
+                "manifest": existing,
+                "accepted": accepted_n,
+                "rejected": built["rejected"],
+                "quality": quality_report,
+                "new_since_last_dataset": 0,
+                "dataset_growth_since_previous_version": 0,
+                "dataset_versions": self.datasets.list_versions(limit=20),
+                "candidate_pass": {
+                    k: pass_result.get(k)
+                    for k in (
+                        "observed",
+                        "accepted_this_run",
+                        "rejected_this_run",
+                        "duplicates_this_run",
+                    )
+                },
+                "note": "Accepted dataset content unchanged — no new version created.",
+            }
+
         parent = None
         versions = self.datasets.list_versions(limit=1)
         if versions:
@@ -591,7 +711,18 @@ class AutonomousTrainingOrchestrator:
                     + list(self.learning_pipeline_gate._observers.keys())
                 ),
                 "quality": quality_report,
+                "content_checksum": checksum,
+                "real_experience_only": True,
             },
+        )
+        # Mark candidates as USED_IN_DATASET
+        used_ids = [
+            (r.get("provenance") or {}).get("candidate_id")
+            for r in merged
+            if (r.get("provenance") or {}).get("candidate_id")
+        ]
+        self.learning_pipeline_gate.store.mark_used_in_dataset(
+            [str(x) for x in used_ids if x], dataset_id=manifest["dataset_id"]
         )
         self.audit.record(
             "dataset_created", dataset_id=manifest["dataset_id"], counts=manifest.get("validation_results")
@@ -602,11 +733,14 @@ class AutonomousTrainingOrchestrator:
         self._save_state()
         return {
             "ok": True,
+            "unchanged": False,
+            "created": True,
             "manifest": manifest,
             "accepted": built["accepted"],
             "rejected": built["rejected"],
             "quality": quality_report,
             "new_since_last_dataset": new_since,
+            "dataset_growth_since_previous_version": new_since,
             "dataset_versions": self.datasets.list_versions(limit=20),
             "candidate_pass": {
                 k: pass_result.get(k)
@@ -1187,9 +1321,14 @@ class AutonomousTrainingOrchestrator:
         # LearningCandidate pass + dataset version only if quality gate passes
         built = self.build_dataset_from_sources()
         if not built.get("ok"):
+            status = built.get("error") or "INSUFFICIENT_DATA"
+            # Prefer explicit insufficient-real-data when store has little accepted growth
+            cand = (built.get("candidate_pass") or {}).get("accepted_this_run") or 0
+            if status in ("INSUFFICIENT_DATA", "DATASET_INVALID") and int(cand) == 0:
+                status = "INSUFFICIENT_REAL_DATA"
             return {
                 "ok": False,
-                "status": built.get("error") or "INSUFFICIENT_DATA",
+                "status": status,
                 "trained": False,
                 "quality": {
                     k: (built.get("quality") or {}).get(k)
@@ -1197,11 +1336,31 @@ class AutonomousTrainingOrchestrator:
                 },
                 "candidate_pass": built.get("candidate_pass"),
                 "new_since_last_dataset": built.get("new_since_last_dataset"),
-                "note": "Quality gate failed — no dataset version created, no training.",
+                "note": "Quality gate failed or insufficient real experience — collecting continues; no training.",
             }
 
         accepted = int(built.get("accepted") or 0)
-        growth = int(built.get("new_since_last_dataset") or 0)
+        growth = int(
+            built.get("dataset_growth_since_previous_version")
+            if built.get("dataset_growth_since_previous_version") is not None
+            else built.get("new_since_last_dataset")
+            or 0
+        )
+        # Unchanged content: do not treat as training justification
+        if built.get("unchanged") and growth <= 0:
+            return {
+                "ok": True,
+                "status": "INSUFFICIENT_REAL_DATA",
+                "trained": False,
+                "dataset_id": (built.get("manifest") or {}).get("dataset_id"),
+                "accepted": accepted,
+                "new_since_last_dataset": 0,
+                "dataset_growth_since_previous_version": 0,
+                "unchanged": True,
+                "candidate_pass": built.get("candidate_pass"),
+                "note": "No new real accepted experience since last dataset — continue collecting.",
+            }
+
         decision = self.triggers.evaluate(
             new_example_count=accepted,
             new_since_last_dataset=growth,
@@ -1220,14 +1379,17 @@ class AutonomousTrainingOrchestrator:
                 "quality_status": "DATASET_READY",
                 "accepted": accepted,
                 "new_since_last_dataset": growth,
+                "dataset_growth_since_previous_version": growth,
+                "created": bool(built.get("created")),
                 "candidate_pass": built.get("candidate_pass"),
                 "note": (
                     "Autonomous tick collected/versioned data but did not train; "
-                    "waits for growth/schedule/eval triggers — never per-chat."
+                    "waits for growth/schedule/eval triggers — never per-chat. "
+                    "A new dataset version alone does not force training."
                 ),
             }
 
-        # Train against the freshly versioned dataset (no second collect)
+        # Train against the versioned dataset only when triggers are satisfied
         cycle = self.run_cycle(
             owner_requested=False,
             activate_if_pass=True,
@@ -1242,6 +1404,7 @@ class AutonomousTrainingOrchestrator:
             ),
             "trigger": decision,
             "dataset_id": (built.get("manifest") or {}).get("dataset_id"),
+            "dataset_growth_since_previous_version": growth,
             "cycle": {
                 k: cycle.get(k)
                 for k in (

@@ -1,42 +1,29 @@
-# Dataset Pipeline — LearningCandidate growth layer
+# Dataset Pipeline — LearningCandidate + continuous experience
 
 ## Flow
 
 ```
-OBSERVATION → SANITIZATION → SECRET/PII FILTER → QUALITY CHECK
-→ DEDUPLICATION → PROVENANCE → LABEL/OUTCOME → EVALUATION
-→ ACCEPTED DATASET → DATASET VERSION
+REAL OPERATIONAL EVENT → ContinuousExperienceBridge
+→ OBSERVATION → SANITIZATION → SECRET/PII → QUALITY → DEDUPE
+→ PROVENANCE → LABEL → ACCEPTED|REJECTED|PENDING_REVIEW|INELIGIBLE
+→ DATASET VERSION (only if content checksum changes)
 ```
 
-Training does **not** run on every chat. Candidates are collected from:
+Never trains from raw chat. Never manufactures examples to inflate counts.
 
-- User-approved / owner-approved interactions
-- Successful task completions & coding passes
-- Corrected failures
-- Knowledge / durable learning with provenance
-- Evaluation lessons
-- Tool/skill outcomes (no raw secrets)
-- Explicitly eligible memory entries (via durable pipeline)
+## Eligibility
 
-## Gates
+`INELIGIBLE` | `PENDING_REVIEW` | `ACCEPTED` | `REJECTED` | `USED_IN_DATASET`
 
-- Sanitizer `sanitize_v2`: secrets, cookies, session tokens, PII → `[REDACTED]` / `[REDACTED_PII]`
-- Authority isolation (auth/OTP/permission paths never enter corpora)
-- Configurable `LEARNING_CANDIDATE_MIN_QUALITY` / `TRAINING_MIN_DATASET_QUALITY`
-- Dedup by content hash
-- Provenance + eligibility on every accepted example
-- Train / validation / test split with leakage detection
+## Source attribution (trust-weighted)
 
-Statuses: `DATASET_READY` | `INSUFFICIENT_DATA` | `DATASET_INVALID`
+`USER_APPROVED` `TASK_SUCCESS` `CODE_TEST_PASS` `KNOWLEDGE_VERIFIED` `FEEDBACK`
+`TOOL_SUCCESS` `SKILL_SUCCESS` `SELF_CHECK` `CORRECTED_FAILURE` `EVALUATION`
 
 ## Versioning
 
-Immutable versions `dataset-v000N` are created **only** when the quality gate passes.
-
-## Statistics (owner APIs)
-
-`/platform/learning/statistics`, `/platform/learning/dataset`, `/platform/training/datasets`
-
-Expose counts, rejection reasons, source/quality distribution, split counts — **never** secret payloads or private training text.
+Immutable `dataset-v000N`. New version **only** when accepted content changes.
+Unchanged content → reuse prior version (`unchanged=true`).
+Insufficient real growth → `INSUFFICIENT_REAL_DATA` (keep collecting; do not train).
 
 A small accepted count proves the pipeline — **not** production model quality.

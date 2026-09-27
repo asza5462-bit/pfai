@@ -288,6 +288,10 @@ AUTONOMOUS_TRAINING = AutonomousTrainingOrchestrator(
     allow_mock_backend=False,
     include_approved_seeds=True,
 )
+from pfai.longevity.autonomous_training.experience_bridge import set_global_experience_bridge
+
+# Continuous experience bridge — real operational events only
+set_global_experience_bridge(AUTONOMOUS_TRAINING.experience)
 
 # Migration runner: backup longevity learning DB before apply
 _LONGEVITY_BACKUP_SRC = Path('data/longevity/learning.sqlite3')
@@ -926,8 +930,27 @@ def code_solve(x: CodeSolve, owner: str = Depends(require_owner)):
     carries the exact source URLs and content hashes in its metadata."""
     if not x.instruction.strip() or not x.test_code.strip():
         raise HTTPException(400, 'instruction and test_code are both required')
-    return CODE_LEARNING.solve_and_learn(x.instruction, x.test_code, x.source,
+    result = CODE_LEARNING.solve_and_learn(x.instruction, x.test_code, x.source,
                                           reference_urls=x.reference_urls or None)
+    # Continuous experience: only verified passing solutions become LearningCandidates
+    if result.get('solved') and result.get('code'):
+        learn = AUTONOMOUS_TRAINING.experience.record_code_test_pass(
+            instruction=x.instruction,
+            code=str(result.get('code') or ''),
+            source_id=f"code_solve:{x.source}",
+            provenance={
+                'via': 'code_solve',
+                'attempts': result.get('attempts'),
+                'curated_continuous': result.get('curated'),
+            },
+        )
+        result = {**result, 'learning_candidate': {
+            'eligibility': learn.get('eligibility'),
+            'candidate_id': learn.get('candidate_id'),
+            'trained': False,
+        }}
+    return result
+
 
 @app.get('/regression/pending')
 def regression_pending(owner: str = Depends(require_owner)):
@@ -935,12 +958,28 @@ def regression_pending(owner: str = Depends(require_owner)):
     _ = owner
     return {'items': REGRESSIONS.pending()}
 
+
 @app.post('/regression/capture')
 def regression_capture(x: RegressionCaptureRequest, owner: str = Depends(require_owner)):
     """Queues a candidate regression test only after verifying it in the
     sandbox (broken really fails, fixed really passes). Read-only with
     respect to the live test suite -- it never touches tests/ itself."""
-    return REGRESSIONS.capture(x.title, x.broken_code, x.fixed_code, x.test_code)
+    result = REGRESSIONS.capture(x.title, x.broken_code, x.fixed_code, x.test_code)
+    # Verified fix (broken fails, fixed passes) → corrected-failure candidate
+    if result.get('queued') and x.fixed_code.strip():
+        learn = AUTONOMOUS_TRAINING.experience.record_corrected_failure(
+            instruction=f"Fix regression: {x.title}",
+            corrected_response=x.fixed_code,
+            source_id=str(result.get('case_id') or x.title),
+            tests_passed=True,
+            provenance={'via': 'regression_capture', 'title': x.title},
+        )
+        result = {**result, 'learning_candidate': {
+            'eligibility': learn.get('eligibility'),
+            'candidate_id': learn.get('candidate_id'),
+            'trained': False,
+        }}
+    return result
 
 @app.post('/regression/materialize/{case_id}')
 def regression_materialize(case_id: str, owner: str = Depends(require_owner)):
@@ -1058,7 +1097,28 @@ def platform_learning(x: LearningBody, owner: str = Depends(require_owner)):
     req = OrchestratorRequest(goal=x.content or x.candidate_id or 'learning', mode='learning', user_id=owner, context=ctx)
     result = ORCHESTRATOR.handle(req)
     OWNER.authorize('PLATFORM_LEARNING', f'{owner} learning action={x.action}')
-    return {'ok': result.ok, 'reply': result.reply, 'meta': result.meta, 'needs_approval': result.needs_approval, 'error': result.error}
+    learn_meta = None
+    # When durable learning stores verified knowledge, feed continuous experience
+    if result.ok and x.action == 'store' and (result.meta or {}).get('candidate_id'):
+        try:
+            cand = PLATFORM_LEARNING.get(str((result.meta or {}).get('candidate_id')))
+            content = getattr(cand, 'content', '') or ''
+            if content:
+                learn_meta = AUTONOMOUS_TRAINING.experience.record_knowledge_verified(
+                    content=content,
+                    source_id=str((result.meta or {}).get('candidate_id')),
+                    provenance={'via': 'platform_learning.store', 'knowledge_id': (result.meta or {}).get('knowledge_id')},
+                )
+        except Exception:
+            learn_meta = None
+    out = {'ok': result.ok, 'reply': result.reply, 'meta': result.meta, 'needs_approval': result.needs_approval, 'error': result.error}
+    if learn_meta:
+        out['learning_candidate'] = {
+            'eligibility': learn_meta.get('eligibility'),
+            'candidate_id': learn_meta.get('candidate_id'),
+            'trained': False,
+        }
+    return out
 
 @app.get('/platform/learning/audit')
 def platform_learning_audit(owner: str = Depends(require_owner), limit: int = 50):
@@ -2211,7 +2271,29 @@ def coding_hint(x: HintRequest, owner: str = Depends(require_owner)):
 
 @app.post('/coding/exercise/submit')
 def coding_exercise_submit(x: ExerciseSubmit, owner: str = Depends(require_owner)):
-    return CODING_AGENT.tutor.submit_exercise(owner, x.track_id, x.lesson_id, x.code)
+    result = CODING_AGENT.tutor.submit_exercise(owner, x.track_id, x.lesson_id, x.code)
+    # Only sandbox-passing submissions become learning candidates (never failing attempts)
+    if result.get('passed') and result.get('mode') == 'sandbox' and (x.code or '').strip():
+        lesson = CODING_CURRICULUM.get_lesson(x.track_id, x.lesson_id) or {}
+        prompt = (lesson.get('exercise') or {}).get('prompt') or f"Complete exercise {x.track_id}/{x.lesson_id}"
+        learn = AUTONOMOUS_TRAINING.experience.record_code_test_pass(
+            instruction=str(prompt),
+            code=x.code,
+            source_id=f"coding:{x.track_id}/{x.lesson_id}",
+            provenance={'via': 'coding_exercise_submit', 'owner_scoped': True},
+        )
+        result = {**result, 'learning_candidate': {
+            'eligibility': learn.get('eligibility'),
+            'candidate_id': learn.get('candidate_id'),
+            'trained': False,
+        }}
+    elif not result.get('passed'):
+        result = {**result, 'learning_candidate': {
+            'eligibility': 'INELIGIBLE',
+            'reason': 'tests_failed',
+            'trained': False,
+        }}
+    return result
 
 @app.post('/coding/solution')
 def coding_solution(x: SolutionRequest, owner: str = Depends(require_owner)):
@@ -2264,6 +2346,11 @@ def coding_training_status(owner: str = Depends(require_owner)):
 def coding_chat(x: CodingChat, owner: str = Depends(require_owner)):
     result = CODING_AGENT.handle(x.message, owner=owner, mode=x.mode, code=x.code, language=x.language)
     OWNER.authorize('CODING_CHAT', f'{owner} coding intent={result.get("intent")}')
+    # Raw chats are never training data
+    AUTONOMOUS_TRAINING.experience.record_raw_chat_attempt(
+        instruction=x.message or '',
+        response=str((result or {}).get('reply') or (result or {}).get('response') or ''),
+    )
     return result
 
 @app.get('/assets/{asset_path:path}')

@@ -15,6 +15,7 @@ from pathlib import Path
 from typing import Any, Callable, Iterable
 
 from .sanitizer import TrainingDataSanitizer
+from .types import LearningEligibility
 from .validator import TrainingExampleValidator
 
 
@@ -29,7 +30,7 @@ class LearningCandidateRecord:
     source: str
     source_id: str = ""
     outcome: str = "unknown"  # success | corrected | failed_then_fixed | approved | evaluated
-    eligibility: str = "pending"  # pending | accepted | rejected
+    eligibility: str = LearningEligibility.PENDING_REVIEW.value
     rejection_reason: str = ""
     quality_score: float = 0.0
     content_hash: str = ""
@@ -205,7 +206,7 @@ class LearningCandidateStore:
             db = self._conn()
             try:
                 rows = db.execute(
-                    "SELECT candidate_id FROM candidates WHERE eligibility='accepted' "
+                    "SELECT candidate_id FROM candidates WHERE eligibility IN ('ACCEPTED','accepted','USED_IN_DATASET') "
                     "ORDER BY created_at DESC LIMIT ?",
                     (int(limit),),
                 ).fetchall()
@@ -218,26 +219,61 @@ class LearningCandidateStore:
                 out.append(item)
         return out
 
+    def mark_used_in_dataset(self, candidate_ids: list[str], *, dataset_id: str) -> int:
+        n = 0
+        for cid in candidate_ids:
+            item = self.get(cid)
+            if not item:
+                continue
+            if item.get("eligibility") not in (
+                LearningEligibility.ACCEPTED.value,
+                "accepted",
+                LearningEligibility.USED_IN_DATASET.value,
+            ):
+                continue
+            item["eligibility"] = LearningEligibility.USED_IN_DATASET.value
+            prov = dict(item.get("provenance") or {})
+            prov["used_in_dataset"] = dataset_id
+            item["provenance"] = prov
+            path = self.root / f"{cid}.json"
+            path.write_text(json.dumps(item, indent=2, ensure_ascii=False), encoding="utf-8")
+            with self._lock:
+                db = self._conn()
+                try:
+                    db.execute(
+                        "UPDATE candidates SET eligibility=?, provenance=? WHERE candidate_id=?",
+                        (
+                            LearningEligibility.USED_IN_DATASET.value,
+                            json.dumps(prov),
+                            cid,
+                        ),
+                    )
+                    db.commit()
+                    n += 1
+                finally:
+                    db.close()
+        return n
+
     def statistics(self) -> dict[str, Any]:
         with self._lock:
             db = self._conn()
             try:
                 total = int(db.execute("SELECT COUNT(*) FROM candidates").fetchone()[0])
-                accepted = int(
-                    db.execute(
-                        "SELECT COUNT(*) FROM candidates WHERE eligibility='accepted'"
-                    ).fetchone()[0]
-                )
-                rejected = int(
-                    db.execute(
-                        "SELECT COUNT(*) FROM candidates WHERE eligibility='rejected'"
-                    ).fetchone()[0]
-                )
-                pending = int(
-                    db.execute(
-                        "SELECT COUNT(*) FROM candidates WHERE eligibility='pending'"
-                    ).fetchone()[0]
-                )
+                by_elig = {
+                    (r[0] or "none"): r[1]
+                    for r in db.execute(
+                        "SELECT eligibility, COUNT(*) FROM candidates GROUP BY eligibility"
+                    ).fetchall()
+                }
+
+                def _count(*keys: str) -> int:
+                    return sum(int(by_elig.get(k) or 0) for k in keys)
+
+                accepted = _count("ACCEPTED", "accepted", "USED_IN_DATASET")
+                rejected = _count("REJECTED", "rejected")
+                pending = _count("PENDING_REVIEW", "pending")
+                ineligible = _count("INELIGIBLE")
+                used = _count("USED_IN_DATASET")
                 by_source = {
                     r[0]: r[1]
                     for r in db.execute(
@@ -248,7 +284,7 @@ class LearningCandidateStore:
                     (r[0] or "none"): r[1]
                     for r in db.execute(
                         "SELECT rejection_reason, COUNT(*) FROM candidates "
-                        "WHERE eligibility='rejected' GROUP BY rejection_reason"
+                        "WHERE eligibility IN ('REJECTED','rejected') GROUP BY rejection_reason"
                     ).fetchall()
                 }
                 by_outcome = {
@@ -260,9 +296,18 @@ class LearningCandidateStore:
                 qualities = [
                     float(r[0])
                     for r in db.execute(
-                        "SELECT quality_score FROM candidates WHERE eligibility='accepted'"
+                        "SELECT quality_score FROM candidates WHERE eligibility IN ('ACCEPTED','accepted','USED_IN_DATASET')"
                     ).fetchall()
                 ]
+                last_acc = db.execute(
+                    "SELECT MAX(evaluated_at) FROM candidates WHERE eligibility IN ('ACCEPTED','accepted','USED_IN_DATASET')"
+                ).fetchone()
+                last_accepted_at = float(last_acc[0] or 0) if last_acc else 0.0
+                dupes = int(
+                    db.execute(
+                        "SELECT COUNT(*) FROM candidates WHERE rejection_reason='duplicate'"
+                    ).fetchone()[0]
+                )
             finally:
                 db.close()
         avg_q = (sum(qualities) / len(qualities)) if qualities else 0.0
@@ -281,12 +326,22 @@ class LearningCandidateStore:
             "accepted_candidates": accepted,
             "rejected_candidates": rejected,
             "pending_candidates": pending,
+            "ineligible_candidates": ineligible,
+            "used_in_dataset": used,
+            "duplicates": dupes,
             "duplicates_tracked_via_hash": True,
+            "eligibility_distribution": by_elig,
             "rejection_reasons": by_reason,
             "source_distribution": by_source,
+            "accepted_by_source": {
+                k: v
+                for k, v in by_source.items()
+                # approximate — detailed join omitted; store-level by source includes all eligibilities
+            },
             "outcome_distribution": by_outcome,
             "quality_distribution": buckets,
             "avg_accepted_quality": round(avg_q, 4),
+            "last_accepted_at": last_accepted_at,
         }
 
 
@@ -420,7 +475,7 @@ class LearningCandidatePipeline:
                 source=existing["source"],
                 source_id=existing.get("source_id") or "",
                 outcome=existing.get("outcome") or outcome,
-                eligibility="rejected",
+                eligibility=LearningEligibility.REJECTED.value,
                 rejection_reason="duplicate",
                 quality_score=float(existing.get("quality_score") or quality),
                 content_hash=digest,
@@ -432,19 +487,31 @@ class LearningCandidatePipeline:
 
         cand_id = f"lc-{digest[:16]}"
         provenance = dict(ex.get("provenance") or {})
+        if isinstance(raw.get("provenance"), dict):
+            provenance.update(dict(raw["provenance"]))
+        attribution = str(raw.get("attribution") or provenance.get("attribution") or source)
         provenance.update(
             {
                 "source": source,
                 "source_id": source_id,
+                "attribution": attribution,
                 "eligible_for_learning": True,
                 "observation_ts": float(raw.get("timestamp") or now),
                 "pipeline": "LearningCandidatePipeline",
+                "synthetic": False,
             }
         )
         labels = {
             "outcome": outcome,
             "category": str(raw.get("category") or provenance.get("category") or source),
+            "attribution": attribution,
         }
+        force_pending = bool(raw.get("force_pending_review"))
+        eligibility = (
+            LearningEligibility.PENDING_REVIEW.value
+            if force_pending
+            else LearningEligibility.ACCEPTED.value
+        )
         rec = LearningCandidateRecord(
             candidate_id=cand_id,
             instruction=ex["instruction"],
@@ -452,7 +519,7 @@ class LearningCandidatePipeline:
             source=source,
             source_id=source_id,
             outcome=outcome,
-            eligibility="accepted",
+            eligibility=eligibility,
             rejection_reason="",
             quality_score=quality,
             content_hash=digest,
@@ -463,7 +530,7 @@ class LearningCandidatePipeline:
         )
         stored = self.store.upsert(rec)
         if stored.get("duplicate_of"):
-            rec.eligibility = "rejected"
+            rec.eligibility = LearningEligibility.REJECTED.value
             rec.rejection_reason = "duplicate"
             rec.labels["duplicate"] = True
         return rec
@@ -494,7 +561,7 @@ class LearningCandidatePipeline:
             source=source,
             source_id=source_id,
             outcome=outcome,
-            eligibility="rejected",
+            eligibility=LearningEligibility.REJECTED.value,
             rejection_reason=reason,
             quality_score=quality,
             content_hash=digest,
@@ -515,6 +582,7 @@ class LearningCandidatePipeline:
         observed = 0
         accepted = 0
         rejected = 0
+        pending = 0
         duplicates = 0
         reasons: dict[str, int] = {}
         accepted_rows: list[dict[str, Any]] = []
@@ -531,9 +599,17 @@ class LearningCandidatePipeline:
                 row = dict(item)
                 row.setdefault("source", name)
                 rec = self.process_observation(row)
-                if rec.eligibility == "accepted":
+                if rec.eligibility in (
+                    LearningEligibility.ACCEPTED.value,
+                    "accepted",
+                ):
                     accepted += 1
                     accepted_rows.append(rec.to_training_row())
+                elif rec.eligibility in (
+                    LearningEligibility.PENDING_REVIEW.value,
+                    "pending",
+                ):
+                    pending += 1
                 else:
                     rejected += 1
                     if rec.rejection_reason == "duplicate":
@@ -547,6 +623,7 @@ class LearningCandidatePipeline:
             "observed": observed,
             "accepted_this_run": accepted,
             "rejected_this_run": rejected,
+            "pending_this_run": pending,
             "duplicates_this_run": duplicates,
             "rejection_reasons_this_run": reasons,
             "accepted_rows": accepted_rows,
@@ -567,7 +644,7 @@ class LearningCandidatePipeline:
                     source=item["source"],
                     source_id=item.get("source_id") or "",
                     outcome=item.get("outcome") or "unknown",
-                    eligibility="accepted",
+                    eligibility=item.get("eligibility") or LearningEligibility.ACCEPTED.value,
                     quality_score=float(item.get("quality_score") or 0),
                     content_hash=item.get("content_hash") or "",
                     provenance=dict(item.get("provenance") or {}),

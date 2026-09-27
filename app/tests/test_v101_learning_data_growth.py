@@ -57,7 +57,7 @@ class TestCandidateSanitizationAndSecrets(unittest.TestCase):
                 "verified": True,
             }
         )
-        self.assertEqual(rec.eligibility, "rejected")
+        self.assertIn(rec.eligibility, ("rejected", "REJECTED"))
         self.assertIn(rec.rejection_reason, ("sanitizer_rejected", "secret_or_pii_dominant", "security_or_hidden_material"))
 
     def test_pii_filtering(self):
@@ -81,12 +81,12 @@ class TestCandidateSanitizationAndSecrets(unittest.TestCase):
                 "verified": True,
             }
         )
-        self.assertEqual(rec.eligibility, "rejected")
+        self.assertIn(rec.eligibility, ("rejected", "REJECTED"))
         self.assertEqual(rec.rejection_reason, "security_or_hidden_material")
 
     def test_accepted_has_provenance(self):
         rec = self.pipe.process_observation(_good_example(1))
-        self.assertEqual(rec.eligibility, "accepted")
+        self.assertIn(rec.eligibility, ("accepted", "ACCEPTED"))
         self.assertTrue(rec.provenance.get("eligible_for_learning"))
         self.assertEqual(rec.provenance.get("pipeline"), "LearningCandidatePipeline")
         self.assertTrue(rec.content_hash)
@@ -97,8 +97,8 @@ class TestCandidateSanitizationAndSecrets(unittest.TestCase):
     def test_deduplication(self):
         a = self.pipe.process_observation(_good_example(7))
         b = self.pipe.process_observation(_good_example(7))
-        self.assertEqual(a.eligibility, "accepted")
-        self.assertEqual(b.eligibility, "rejected")
+        self.assertIn(a.eligibility, ("accepted", "ACCEPTED"))
+        self.assertIn(b.eligibility, ("rejected", "REJECTED"))
         self.assertEqual(b.rejection_reason, "duplicate")
 
     def test_statistics_and_reasons(self):
@@ -225,7 +225,13 @@ class TestTriggersAndTick(unittest.TestCase):
             self.assertFalse(tick.get("trained"))
             self.assertIn(
                 tick.get("status"),
-                ("INSUFFICIENT_DATA", "DATASET_INVALID", "DATASET_QUALITY_BELOW_THRESHOLD", "TRIGGER_NOT_MET"),
+                (
+                    "INSUFFICIENT_DATA",
+                    "INSUFFICIENT_REAL_DATA",
+                    "DATASET_INVALID",
+                    "DATASET_QUALITY_BELOW_THRESHOLD",
+                    "TRIGGER_NOT_MET",
+                ),
             )
 
     def test_autonomous_tick_versions_then_may_train_mock(self):

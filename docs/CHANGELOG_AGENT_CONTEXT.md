@@ -1,5 +1,20 @@
 # Agent Context Changelog
 
+## 2026-09-27 — Continuous real experience collection (post–PHASE 9)
+
+### Added
+- `ContinuousExperienceBridge` wired to coding pass, regression fixes, durable knowledge store, owner feedback, tools/skills
+- Explicit eligibility: INELIGIBLE / PENDING_REVIEW / ACCEPTED / REJECTED / USED_IN_DATASET
+- Source attribution + trust weights (CODE_TEST_PASS, FEEDBACK, …)
+- Dataset versions created only when content checksum changes
+- `INSUFFICIENT_REAL_DATA` when no new real growth; raw chat never trains
+- Owner stats: growth, last accepted/training timestamps, next training eligibility
+- Tests `test_v102_continuous_experience.py`
+
+### Constraints
+- No synthetic inflation; no Phase 10; PHASE 8/9 gates/LKG intact
+- MODEL_QUALITY_PRODUCTION_VALIDATED remains **false**
+
 ## 2026-09-27 — Real autonomous learning data growth (post–PHASE 9)
 
 ### Added

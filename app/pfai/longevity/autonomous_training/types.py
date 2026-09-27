@@ -63,6 +63,52 @@ class TriggerKind(str, Enum):
     REGRESSION_RECOVERY = "regression_recovery"
 
 
+class LearningEligibility(str, Enum):
+    """Explicit eligibility for LearningCandidate records."""
+
+    INELIGIBLE = "INELIGIBLE"
+    PENDING_REVIEW = "PENDING_REVIEW"
+    ACCEPTED = "ACCEPTED"
+    REJECTED = "REJECTED"
+    USED_IN_DATASET = "USED_IN_DATASET"
+
+
+class ExperienceSource(str, Enum):
+    """Source attribution — not all sources are equally trustworthy."""
+
+    USER_APPROVED = "USER_APPROVED"
+    TASK_SUCCESS = "TASK_SUCCESS"
+    CODE_TEST_PASS = "CODE_TEST_PASS"
+    KNOWLEDGE_VERIFIED = "KNOWLEDGE_VERIFIED"
+    FEEDBACK = "FEEDBACK"
+    TOOL_SUCCESS = "TOOL_SUCCESS"
+    SKILL_SUCCESS = "SKILL_SUCCESS"
+    SELF_CHECK = "SELF_CHECK"
+    CORRECTED_FAILURE = "CORRECTED_FAILURE"
+    EVALUATION = "EVALUATION"
+    # Internal / legacy collectors map onto the above where possible
+    APPROVED_SEED = "APPROVED_SEED"
+
+
+# Higher = more trustworthy for auto-accept (0..1). Below threshold → PENDING_REVIEW.
+EXPERIENCE_TRUST: dict[str, float] = {
+    ExperienceSource.CODE_TEST_PASS.value: 0.95,
+    ExperienceSource.CORRECTED_FAILURE.value: 0.92,
+    ExperienceSource.KNOWLEDGE_VERIFIED.value: 0.90,
+    ExperienceSource.USER_APPROVED.value: 0.88,
+    ExperienceSource.FEEDBACK.value: 0.85,
+    ExperienceSource.TASK_SUCCESS.value: 0.80,
+    ExperienceSource.EVALUATION.value: 0.78,
+    ExperienceSource.SKILL_SUCCESS.value: 0.72,
+    ExperienceSource.TOOL_SUCCESS.value: 0.70,
+    ExperienceSource.SELF_CHECK.value: 0.65,
+    ExperienceSource.APPROVED_SEED.value: 0.90,
+}
+
+# Auto-accept when trust >= this (else PENDING_REVIEW after quality gates).
+AUTO_ACCEPT_TRUST = 0.75
+
+
 @dataclass
 class TrainingExample:
     example_id: str

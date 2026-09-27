@@ -223,6 +223,18 @@ class Orchestrator:
                 meta={"skill": name, "permission": result.meta.get("permission"), "version": result.meta.get("version")},
                 error=result.error,
             )
+        if result.ok:
+            try:
+                from pfai.longevity.autonomous_training.experience_bridge import notify_skill_success
+
+                summary = result.reply or (str(result.output) if result.output is not None else "skill completed")
+                notify_skill_success(
+                    skill=name,
+                    summary=str(summary)[:2000],
+                    source_id=f"skill:{name}:{result.meta.get('version') or ''}",
+                )
+            except Exception:
+                pass
         return OrchestratorResult(
             ok=result.ok,
             reply=result.reply or (str(result.output) if result.output is not None else ""),

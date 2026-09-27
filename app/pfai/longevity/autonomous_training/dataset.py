@@ -142,11 +142,7 @@ class DatasetVersionRegistry:
     ) -> dict[str, Any]:
         dataset_id = self._next_id()
         splits: dict[str, list[TrainingExample]] = built["splits"]
-        payload = {
-            split: [e.to_dict() for e in examples] for split, examples in splits.items()
-        }
-        raw = json.dumps(payload, sort_keys=True, ensure_ascii=False).encode("utf-8")
-        checksum = hashlib.sha256(raw).hexdigest()
+        checksum = self.compute_built_checksum(built)
         created_at = time.time()
         version_dir = self.root / dataset_id
         if version_dir.exists():
@@ -244,6 +240,44 @@ class DatasetVersionRegistry:
             }
             for r in rows
         ]
+
+    def find_by_checksum(self, checksum: str) -> dict[str, Any] | None:
+        with self._lock:
+            db = self._conn()
+            try:
+                row = db.execute(
+                    "SELECT dataset_id FROM dataset_versions WHERE checksum=? ORDER BY created_at DESC LIMIT 1",
+                    (checksum,),
+                ).fetchone()
+            finally:
+                db.close()
+        if not row:
+            return None
+        return self.get(row[0])
+
+    def compute_built_checksum(self, built: dict[str, Any]) -> str:
+        """Stable checksum over example content only (not mutable eligibility labels)."""
+        splits: dict[str, list] = built.get("splits") or {}
+        payload: dict[str, list] = {}
+        for split, examples in splits.items():
+            rows = []
+            for e in examples or []:
+                if hasattr(e, "to_dict"):
+                    d = e.to_dict()
+                else:
+                    d = dict(e)
+                rows.append(
+                    {
+                        "content_hash": d.get("content_hash") or "",
+                        "instruction": d.get("instruction") or "",
+                        "response": d.get("response") or "",
+                        "source": d.get("source") or "",
+                    }
+                )
+            rows.sort(key=lambda r: r["content_hash"] or (r["instruction"] + r["response"]))
+            payload[split] = rows
+        raw = json.dumps(payload, sort_keys=True, ensure_ascii=False).encode("utf-8")
+        return hashlib.sha256(raw).hexdigest()
 
     def load_split(self, dataset_id: str, split: str = "train") -> list[dict[str, Any]]:
         path = self.root / dataset_id / f"{split}.jsonl"
