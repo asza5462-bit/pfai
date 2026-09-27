@@ -25,6 +25,7 @@ WEAK_PASS_MESSAGE = "passcode does not meet strength requirements"
 
 # Tunables (override via env for ops, not secrets)
 DEFAULT_SESSION_TTL = int(os.environ.get("PFAI_OWNER_SESSION_TTL", "28800"))  # 8h
+DEFAULT_SESSION_ABS_MAX = int(os.environ.get("PFAI_OWNER_SESSION_ABS_MAX", "86400"))  # 24h hard auto-lock
 MAX_FAILURES = int(os.environ.get("PFAI_OWNER_MAX_FAILURES", "5"))
 LOCKOUT_SECONDS = int(os.environ.get("PFAI_OWNER_LOCKOUT_SECONDS", "900"))
 PBKDF2_ITERATIONS = int(os.environ.get("PFAI_OWNER_PBKDF2_ITERATIONS", "260000"))
@@ -38,6 +39,7 @@ class OwnerAuthService:
         *,
         root: str = "data/security",
         session_ttl: int = DEFAULT_SESSION_TTL,
+        session_abs_max: int = DEFAULT_SESSION_ABS_MAX,
     ) -> None:
         self.owner = owner
         self.root = Path(root)
@@ -47,6 +49,7 @@ class OwnerAuthService:
         self.sessions_path = self.root / "owner_sessions.json"
         self.rate_path = self.root / "owner_auth_rate.json"
         self.session_ttl = int(session_ttl)
+        self.session_abs_max = int(session_abs_max)
         self._lock = threading.RLock()
         self._hydrate_env_from_store()
 
@@ -59,6 +62,7 @@ class OwnerAuthService:
             "authenticated": bool(authenticated),
             "email": email if authenticated else "",
             "session_ttl_seconds": self.session_ttl,
+            "session_abs_max_seconds": self.session_abs_max,
             "auth_methods": ["session_cookie", "x_owner_secret_header"],
             "note": "Passcodes are never returned. Prefer a new production passcode before any deploy.",
         }
@@ -190,16 +194,26 @@ class OwnerAuthService:
             return None
         with self._lock:
             sessions = self._load_json(self.sessions_path, {})
-            rec = sessions.get(self._token_key(token))
+            key = self._token_key(token)
+            rec = sessions.get(key)
             if not rec:
                 return None
-            if float(rec.get("expires_at", 0)) < time.time():
-                sessions.pop(self._token_key(token), None)
+            now = time.time()
+            created = float(rec.get("created_at") or 0)
+            # Absolute auto-lock: session cannot outlive abs max even with activity.
+            if created and (now - created) > self.session_abs_max:
+                sessions.pop(key, None)
+                self._save_json(self.sessions_path, sessions)
+                self.owner._audit("SESSION_ABS_EXPIRED", {"email": rec.get("email")})
+                return None
+            if float(rec.get("expires_at", 0)) < now:
+                sessions.pop(key, None)
                 self._save_json(self.sessions_path, sessions)
                 return None
-            # sliding expiration
-            rec["expires_at"] = time.time() + self.session_ttl
-            sessions[self._token_key(token)] = rec
+            # sliding idle expiration (bounded by abs max)
+            remaining_abs = self.session_abs_max - (now - created) if created else self.session_ttl
+            rec["expires_at"] = now + min(self.session_ttl, max(1, int(remaining_abs)))
+            sessions[key] = rec
             self._save_json(self.sessions_path, sessions)
             return str(rec.get("email") or "")
 
@@ -292,8 +306,18 @@ class OwnerAuthService:
             if rec["failures"] >= MAX_FAILURES:
                 rec["locked_until"] = time.time() + LOCKOUT_SECONDS
                 rec["failures"] = 0
+                # Auto-lock: revoke all active sessions on lockout.
+                self._drop_all_sessions_unlocked()
+                self.owner._audit("AUTH_AUTO_LOCK", {"client": client_key})
             clients[client_key] = rec
             self._save_rate(state)
+
+    def _drop_all_sessions_unlocked(self) -> None:
+        self._save_json(self.sessions_path, {})
+
+    def drop_all_sessions(self) -> None:
+        with self._lock:
+            self._drop_all_sessions_unlocked()
 
     def _clear_failures(self, client_key: str) -> None:
         with self._lock:

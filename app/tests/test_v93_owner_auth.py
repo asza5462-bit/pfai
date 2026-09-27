@@ -75,12 +75,24 @@ class TestOwnerAuthService(unittest.TestCase):
 
     def test_lockout_after_repeated_failures(self):
         self.auth.run_setup("owner@example.com", STRONG, STRONG)
+        tok = self.auth.login("owner@example.com", STRONG, client_key="legit")["token"]
+        self.assertEqual(self.auth.resolve_session(tok), "owner@example.com")
         with mock.patch("pfai.owner_auth.MAX_FAILURES", 3), mock.patch("pfai.owner_auth.LOCKOUT_SECONDS", 60):
             for _ in range(3):
                 self.auth.login("owner@example.com", "nope-nope-nope1", client_key="attacker")
             locked = self.auth.login("owner@example.com", STRONG, client_key="attacker")
             self.assertFalse(locked["ok"])
             self.assertTrue(locked.get("locked"))
+            # Auto-lock revokes existing sessions
+            self.assertIsNone(self.auth.resolve_session(tok))
+
+    def test_absolute_session_auto_lock(self):
+        self.auth.run_setup("owner@example.com", STRONG, STRONG)
+        self.auth.session_ttl = 60
+        self.auth.session_abs_max = 1
+        tok = self.auth.login("owner@example.com", STRONG, client_key="ip-abs")["token"]
+        time.sleep(1.2)
+        self.assertIsNone(self.auth.resolve_session(tok))
 
     def test_hash_never_contains_plaintext(self):
         digest = OwnerAuthService.hash_passcode(STRONG)
@@ -126,17 +138,90 @@ class TestOwnerAuthAPI(unittest.TestCase):
         )
         self.assertEqual(r.status_code, 200, r.text)
         self.assertTrue(r.json()["authenticated"])
+        self.assertNotIn("token", r.json())
+        self.assertNotIn("passcode", r.json())
+        self.assertNotIn("secret_hash", r.json())
         self.assertIn(COOKIE_NAME, r.cookies)
+        # Starlette/httpx exposes set-cookie; assert security flags when present.
+        set_cookie = r.headers.get("set-cookie") or ""
+        self.assertIn(COOKIE_NAME, set_cookie)
+        self.assertIn("httponly", set_cookie.lower())
+        self.assertIn("samesite=strict", set_cookie.lower().replace(" ", ""))
         # cookie auth without header
         r2 = self.client.get("/owner/identity")
         self.assertEqual(r2.status_code, 200)
         # logout
         r3 = self.client.post("/owner/logout")
         self.assertEqual(r3.status_code, 200)
+        self.client.cookies.clear()
         r4 = self.client.get("/owner/identity")
         self.assertEqual(r4.status_code, 401)
 
+    def test_secure_cookie_flags_helper(self):
+        from pfai import api as api_mod
+        from starlette.requests import Request
+
+        scope = {
+            "type": "http",
+            "asgi": {"version": "3.0"},
+            "http_version": "1.1",
+            "method": "GET",
+            "scheme": "https",
+            "path": "/",
+            "raw_path": b"/",
+            "query_string": b"",
+            "headers": [],
+            "client": ("127.0.0.1", 123),
+            "server": ("test", 443),
+        }
+        req = Request(scope)
+        flags = api_mod._secure_cookie_flags(req)
+        self.assertTrue(flags["httponly"])
+        self.assertTrue(flags["secure"])
+        self.assertEqual(flags["samesite"], "strict")
+
+    def test_owner_endpoints_reject_public_url_alone(self):
+        self.client.cookies.clear()
+        from pfai.api import app
+        import inspect
+        from fastapi.params import Depends as DependsParam
+
+        owner_paths = []
+        for route in app.routes:
+            path = getattr(route, "path", None)
+            endpoint = getattr(route, "endpoint", None)
+            if not path or not endpoint:
+                continue
+            sig = inspect.signature(endpoint)
+            uses_owner = False
+            for p in sig.parameters.values():
+                if p.default is inspect.Parameter.empty:
+                    continue
+                dep = getattr(p.default, "dependency", None)
+                if callable(dep) and getattr(dep, "__name__", "") == "require_owner":
+                    uses_owner = True
+                if isinstance(p.default, DependsParam) and getattr(p.default.dependency, "__name__", "") == "require_owner":
+                    uses_owner = True
+            if uses_owner:
+                owner_paths.append(path)
+
+        self.assertGreaterEqual(len(owner_paths), 40)
+        for method, path in [
+            ("POST", "/orchestrate"),
+            ("POST", "/chat/message"),
+            ("GET", "/coding/tracks"),
+            ("POST", "/platform/learning"),
+            ("GET", "/owner/identity"),
+            ("POST", "/continuous/promote/x"),
+        ]:
+            if method == "GET":
+                r = self.client.get(path)
+            else:
+                r = self.client.request(method, path, json={"goal": "x", "message": "x", "content": "x"})
+            self.assertIn(r.status_code, (401, 503, 422), msg=f"{method} {path} -> {r.status_code}")
+
     def test_privilege_escalation_ignored(self):
+        self.client.cookies.clear()
         r = self.client.post(
             "/orchestrate?role=owner&admin=true",
             json={"goal": "x", "mode": "self_check", "context": {"role": "owner", "is_admin": True}},

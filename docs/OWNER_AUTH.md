@@ -13,7 +13,8 @@ Optional:
 
 | Variable | Purpose |
 |---|---|
-| `PFAI_OWNER_SESSION_TTL` | Session lifetime seconds (default `28800`) |
+| `PFAI_OWNER_SESSION_TTL` | Session idle lifetime seconds (default `28800`) |
+| `PFAI_OWNER_SESSION_ABS_MAX` | Absolute session auto-lock seconds (default `86400`) |
 | `PFAI_OWNER_MAX_FAILURES` | Failures before lockout (default `5`) |
 | `PFAI_OWNER_LOCKOUT_SECONDS` | Lockout cooldown (default `900`) |
 | `PFAI_COOKIE_SECURE` | Force `Secure` cookies (`true`/`false`) |
