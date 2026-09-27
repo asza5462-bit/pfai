@@ -121,12 +121,12 @@ class TestPhase3MigrationExport(unittest.TestCase):
         self.assertEqual(PFAI_SCHEMA_VERSION, 4)
         report = runner.run(dry_run=False)
         self.assertTrue(report.ok, report.error)
-        self.assertEqual(runner.current_version(), 3)
+        self.assertEqual(runner.current_version(), 4)
         self.assertTrue(backups)
         self.assertTrue((self.root / "backups" / backups[0]["path"]).exists())
         # Persisted
         runner2 = MigrationRunner(state_path=str(state), backup_fn=backup)
-        self.assertEqual(runner2.current_version(), 3)
+        self.assertEqual(runner2.current_version(), 4)
 
     def test_migration_without_backup_fn_fails_apply(self):
         runner = MigrationRunner(current=1, state_path=str(self.root / "s.json"), backup_fn=None)

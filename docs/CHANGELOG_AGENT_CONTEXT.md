@@ -17,7 +17,11 @@
 - PHASE 5 Email OTP + authz preserved
 
 ### Verified
-- See PHASE 6 completion report
+- Targeted PHASE 6 tests: 17 passed
+- Full pytest: **412 passed**
+- Smoke: health/dashboard/OTP/schema4/training status honest (`TRAINING_RUNTIME_UNAVAILABLE` here)
+- No deploy; no git remote; no secrets; no fake real training success
+- Actual real weight training executed: **NO** (training stack/runtime unavailable in this environment)
 
 ## 2026-09-27 — Longevity PHASE 5: Email OTP / Local providers / Migration audit
 

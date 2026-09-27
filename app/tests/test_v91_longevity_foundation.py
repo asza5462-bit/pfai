@@ -165,7 +165,7 @@ class TestLongevityContracts(unittest.TestCase):
         self.assertIsInstance(layer, CompatibilityLayerProtocol)
         report = layer.check()
         self.assertTrue(report.python_ok)
-        self.assertEqual(layer.schema_version(), 3)
+        self.assertEqual(layer.schema_version(), 4)
         self.assertIn("echo", layer.supported_provider_kinds())
         self.assertIn("sqlite", layer.supported_storage_kinds())
 
