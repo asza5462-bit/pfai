@@ -206,3 +206,15 @@
   - Existing `/chat/*` and Dashboard stay the primary UX; additive `/orchestrate` + `/platform/*` expose the new layer.
   - Durable learning persists candidates + versioned knowledge + audit; `allows_weight_mutation()==False`; fine-tune only prepared via readiness metadata.
 - Consequences: Platform is swappable at the provider boundary; learning is reversible and owner-gated for validation/store.
+
+## ADR-022 — Owner authentication sessions + one-time setup
+
+- Status: Accepted (2026-09-27)
+- Context: Owner gate previously relied on sending a passcode via `X-Owner-Secret` and browser sessionStorage — unsafe for long-lived operation.
+- Decision:
+  - Extend `OwnerControl` with `OwnerAuthService` (sessions, rate-limit/lockout, first-time setup lock).
+  - Store only passcode hashes (`pbkdf2_sha256$…` preferred; legacy sha256 accepted). Env: `PFAI_OWNER_EMAIL` + `PFAI_OWNER_SECRET_HASH`.
+  - HttpOnly cookie sessions (`pfai_owner_session`, SameSite=Strict, Secure on HTTPS); legacy header kept for automation.
+  - First-time `/owner/setup` permanently disables itself via `owner_setup.lock`; no frontend-trusted roles.
+  - Any passcode shared in development is considered compromised; require a new production hash before deploy.
+- Consequences: Dashboard authenticates via login/setup UI without retaining plaintext secrets; owner APIs remain server-gated.

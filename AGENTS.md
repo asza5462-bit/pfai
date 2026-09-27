@@ -27,13 +27,14 @@ PFAI 8.0 is a production-oriented AI control plane:
 1. Never delete or disable an existing user-facing feature without an explicit request.
 2. Never break existing API routes or response contracts.
 3. Never commit secrets (`ANTHROPIC_API_KEY`, owner plaintext secret, `.env`).
-4. Never put API keys in source, README examples as real values, or chat.
+4. Never put API keys or owner passcodes in source, README examples as real values, frontend, logs, or chat.
 5. Continuous learning may curate/evaluate candidates; **promotion to active requires owner approval**.
 6. Network access is deny-by-default (`security.allow_network` + exact `allowed_domains`).
 7. Prefer small, modular fixes over rewrites.
 8. After meaningful changes: update memory docs and run real tests (not build-only).
 9. Do not force Vercel. Prefer Docker + long-running host (Render/Railway/VM).
 10. If unsure, inspect code first — do not invent project facts.
+11. Owner auth is server-side only (`docs/OWNER_AUTH.md`); never trust frontend role claims.
 
 ## Working directory
 

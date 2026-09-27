@@ -17,7 +17,24 @@ class OwnerControl:
         self.email_env=email_env
     @staticmethod
     def hash_secret(secret: str) -> str:
+        """Legacy SHA-256 hex digest (still accepted). Prefer OwnerAuthService.hash_passcode for new setups."""
         return hashlib.sha256(secret.encode()).hexdigest()
+
+    @staticmethod
+    def verify_secret(presented: str, stored: str) -> bool:
+        """Constant-time verify for legacy SHA-256 or pbkdf2_sha256$... hashes."""
+        if not presented or not stored:
+            return False
+        stored = stored.strip()
+        if stored.startswith('pbkdf2_sha256$'):
+            try:
+                _, iters_s, salt_hex, hash_hex = stored.split('$', 3)
+                dk = hashlib.pbkdf2_hmac('sha256', presented.encode('utf-8'), bytes.fromhex(salt_hex), int(iters_s))
+                return hmac.compare_digest(dk.hex(), hash_hex)
+            except Exception:
+                return False
+        return hmac.compare_digest(OwnerControl.hash_secret(presented), stored)
+
     def configure_from_environment(self):
         if not os.environ.get(self.secret_env):
             raise RuntimeError(f'{self.secret_env} must be configured outside source code')
@@ -30,7 +47,7 @@ class OwnerControl:
     def authenticate(self, presented_secret: str) -> bool:
         configured=os.environ.get(self.secret_env, '')
         if not configured or not presented_secret: return False
-        ok=hmac.compare_digest(self.hash_secret(presented_secret), configured)
+        ok=self.verify_secret(presented_secret, configured)
         self._audit('AUTH_SUCCESS' if ok else 'AUTH_FAILURE', {'email': self.owner_email()})
         return ok
     def authorize(self, action: str, reason: str, *, safety_policy_may_block=True):

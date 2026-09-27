@@ -1,4 +1,4 @@
-from fastapi import FastAPI, HTTPException, Header, Depends, Request
+from fastapi import FastAPI, HTTPException, Header, Depends, Request, Response, Cookie
 from fastapi.middleware.cors import CORSMiddleware
 from fastapi.exceptions import RequestValidationError
 from fastapi.responses import JSONResponse
@@ -15,6 +15,7 @@ from .code_best_of_n import select_best_solution
 from .regression_capture import RegressionCapture
 from .code_learning_pipeline import CodeLearningPipeline
 from .owner_control import OwnerControl
+from .owner_auth import OwnerAuthService, COOKIE_NAME, AUTH_FAIL_MESSAGE
 from .policy import Policy
 from .research_gate import ResearchGate
 from .config import Config
@@ -62,6 +63,7 @@ RECOVERY=RecoveryDrillScheduler('data/backups')
 # separate human-approval gate required before any candidate is promoted.
 CONTINUOUS=ContinuousLearningOrchestrator('data/continuous_learning',evaluator_model=runtime.model)
 OWNER=OwnerControl('data/security/owner_control.jsonl')
+OWNER_AUTH=OwnerAuthService(OWNER, root='data/security')
 CODE_EVAL=SandboxedCodeEvaluator()
 REGRESSIONS=RegressionCapture('data/regression_queue')
 # Research is off by default and stays off unless an operator sets
@@ -310,23 +312,131 @@ async def unhandled_exception_handler(request: Request, exc: Exception):
     return JSONResponse(status_code=500, content={'detail': 'internal server error'})
 
 
-def require_owner(x_owner_secret: str | None = Header(default=None, alias='X-Owner-Secret')) -> str:
-    """Gate for governance-level actions (deploy, promote, rollback, recovery drills,
-    continuous-learning approvals/lifecycle). Requires PFAI_OWNER_EMAIL and
-    PFAI_OWNER_SECRET_HASH to be configured outside source (see .env.example), and the
-    caller to present the matching plaintext secret in the X-Owner-Secret header.
-    Every attempt (success or failure) is written to the tamper-evident owner ledger."""
-    if not OWNER.owner_email():
-        raise HTTPException(503, 'owner identity not configured: set PFAI_OWNER_EMAIL')
-    if not OWNER.authenticate(x_owner_secret or ''):
-        raise HTTPException(401, 'missing or incorrect X-Owner-Secret header')
-    return OWNER.owner_email()
+def _client_key(request: Request) -> str:
+    forwarded = (request.headers.get('x-forwarded-for') or '').split(',')[0].strip()
+    return forwarded or (request.client.host if request.client else 'unknown')
+
+
+def _secure_cookie_flags(request: Request) -> dict:
+    # Secure cookies when request is HTTPS (or behind TLS-terminating proxy).
+    proto = (request.headers.get('x-forwarded-proto') or request.url.scheme or 'http').lower()
+    secure = proto == 'https' or os.environ.get('PFAI_COOKIE_SECURE', '').lower() in ('1', 'true', 'yes')
+    return {
+        'httponly': True,
+        'secure': secure,
+        'samesite': 'strict',
+        'path': '/',
+        'max_age': OWNER_AUTH.session_ttl,
+    }
+
+
+def require_owner(
+    request: Request,
+    x_owner_secret: str | None = Header(default=None, alias='X-Owner-Secret'),
+    pfai_owner_session: str | None = Cookie(default=None, alias=COOKIE_NAME),
+) -> str:
+    """Server-side owner gate. Never trusts role/admin flags from body/query/frontend.
+
+    Accepts (in order):
+      1) HttpOnly session cookie established via /owner/login
+      2) Legacy X-Owner-Secret header for API/automation (still verified server-side)
+
+    Frontend-supplied owner/admin/role values are ignored.
+    """
+    # Reject privilege escalation attempts via query/body if present — ignore them.
+    _ = request.query_params.get('role') or request.query_params.get('admin') or request.query_params.get('owner')
+
+    if not OWNER_AUTH.owner_configured() and OWNER_AUTH.setup_required():
+        raise HTTPException(503, 'owner setup required: POST /owner/setup')
+
+    email = OWNER_AUTH.resolve_session(pfai_owner_session)
+    if email:
+        return email
+
+    if x_owner_secret and OWNER_AUTH.authenticate_secret_header(x_owner_secret):
+        return OWNER.owner_email() or 'owner'
+
+    if not OWNER.owner_email() and not OWNER_AUTH.owner_configured():
+        raise HTTPException(503, 'owner identity not configured: complete /owner/setup or set PFAI_OWNER_EMAIL')
+    raise HTTPException(401, 'authentication required')
+
+
+@app.get('/owner/status')
+def owner_status(
+    request: Request,
+    pfai_owner_session: str | None = Cookie(default=None, alias=COOKIE_NAME),
+):
+    """Public auth status — no secrets. Used by Dashboard to choose setup vs login."""
+    email = OWNER_AUTH.resolve_session(pfai_owner_session) or ''
+    return OWNER_AUTH.public_status(authenticated=bool(email), email=email)
+
+
+class OwnerSetupBody(BaseModel):
+    email: str
+    passcode: str
+    passcode_confirm: str
+
+
+class OwnerLoginBody(BaseModel):
+    email: str
+    passcode: str
+
+
+@app.post('/owner/setup')
+def owner_setup(x: OwnerSetupBody, request: Request, response: Response):
+    """First-time owner initialization only. Permanently disabled after success."""
+    result = OWNER_AUTH.run_setup(x.email, x.passcode, x.passcode_confirm)
+    # Never echo passcode fields back.
+    if not result.get('ok'):
+        code = 409 if result.get('error') == 'owner setup is disabled' else 400
+        raise HTTPException(code, result.get('error') or 'setup failed')
+    # Auto-login session after setup
+    login = OWNER_AUTH.login(x.email, x.passcode, client_key=_client_key(request))
+    if login.get('ok') and login.get('token'):
+        response.set_cookie(COOKIE_NAME, login['token'], **_secure_cookie_flags(request))
+    return {
+        'ok': True,
+        'email': result.get('email'),
+        'setup_locked': True,
+        'message': result.get('message'),
+        'authenticated': bool(login.get('ok')),
+    }
+
+
+@app.post('/owner/login')
+def owner_login(x: OwnerLoginBody, request: Request, response: Response):
+    result = OWNER_AUTH.login(x.email, x.passcode, client_key=_client_key(request))
+    if not result.get('ok'):
+        # Uniform failure (no email/passcode distinction); 429 when locked out.
+        status = 429 if result.get('locked') else 401
+        raise HTTPException(status, AUTH_FAIL_MESSAGE)
+    response.set_cookie(COOKIE_NAME, result['token'], **_secure_cookie_flags(request))
+    return {
+        'ok': True,
+        'email': result['email'],
+        'expires_in': result['expires_in'],
+        'authenticated': True,
+    }
+
+
+@app.post('/owner/logout')
+def owner_logout(
+    request: Request,
+    response: Response,
+    pfai_owner_session: str | None = Cookie(default=None, alias=COOKIE_NAME),
+):
+    OWNER_AUTH.logout(pfai_owner_session)
+    response.delete_cookie(COOKIE_NAME, path='/')
+    return {'ok': True, 'authenticated': False}
+
 
 @app.get('/owner/identity')
 def owner_identity(owner: str = Depends(require_owner)):
     """Non-sensitive: who the configured owner is and whether a secret has been set.
     Never returns the secret or its hash."""
-    return OWNER.identity()
+    ident = OWNER.identity()
+    ident['authenticated_as'] = owner
+    return ident
 class Ask(BaseModel): question:str
 class Remember(BaseModel): content:str; kind:str='fact'; source:str=''; confidence:float=.5
 class Knowledge(BaseModel): content:str; source:str='manual'; metadata:dict={}
@@ -344,7 +454,8 @@ class RunCycle(BaseModel):
 @app.get('/health')
 def health():
     return runtime.health(extra={
-        'owner_configured': bool(OWNER.owner_email()) and bool(os.environ.get('PFAI_OWNER_SECRET_HASH')),
+        'owner_configured': OWNER_AUTH.owner_configured(),
+        'owner_setup_required': OWNER_AUTH.setup_required(),
         'continuous': continuous_gate_status(),
         'network_enabled': RESEARCH_GATE.policy.network,
         'platform': {

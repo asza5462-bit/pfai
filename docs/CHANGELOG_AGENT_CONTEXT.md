@@ -1,5 +1,23 @@
 # Agent Context Changelog
 
+## 2026-09-27 — Owner Authentication + first-time setup
+
+### Added
+- `owner_auth.py` — setup lock, PBKDF2 hashing, HttpOnly sessions, rate-limit lockout
+- Routes: `/owner/status`, `/owner/setup`, `/owner/login`, `/owner/logout` (identity remains gated)
+- Dashboard login/setup modal (no passcode in sessionStorage)
+- `python -m pfai.hash_owner_secret`, `docs/OWNER_AUTH.md`, ADR-022
+- Tests `test_v93_owner_auth.py`
+
+### Security
+- Never stores/logs/returns plaintext passcodes
+- Legacy `X-Owner-Secret` still verified server-side for automation
+- Setup cannot be re-run after lock / existing configuration
+- Dev-shared passcodes treated as compromised before any deploy
+
+### Verified
+- (fill after pytest)
+
 ## 2026-09-27 — Longevity PHASE 2: Orchestrator + ProviderRegistry
 
 ### Added

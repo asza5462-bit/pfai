@@ -9,8 +9,10 @@ python3 -m venv .venv
 pip install -r requirements.txt
 
 # Required for owner-gated routes and real Anthropic calls:
-export PFAI_OWNER_EMAIL='you@example.com'
-export PFAI_OWNER_SECRET_HASH="$(python3 -c 'import hashlib; print(hashlib.sha256(b"YOUR_SECRET").hexdigest())')"
+export PFAI_OWNER_EMAIL='szz5462@gmail.com'
+# Prefer: python -m pfai.hash_owner_secret   (prints pbkdf2 hash; paste below)
+# Treat any previously shared passcode as compromised — use a NEW secret before deploy.
+export PFAI_OWNER_SECRET_HASH='(paste hash only — never the plaintext passcode)'
 # export ANTHROPIC_API_KEY=...   # set in your shell/platform secrets only
 
 python run_web.py
@@ -86,14 +88,19 @@ Promotion to active **never** happens automatically. Use owner-authenticated API
 | Variable | Required | Notes |
 |---|---|---|
 | `ANTHROPIC_API_KEY` | For real Claude | Platform secret only |
-| `PFAI_OWNER_EMAIL` | For owner routes | Identity |
-| `PFAI_OWNER_SECRET_HASH` | For owner routes | SHA-256 of plaintext secret |
+| `PFAI_OWNER_EMAIL` | For owner routes | Sole owner identity |
+| `PFAI_OWNER_SECRET_HASH` | For owner routes | Passcode hash only (pbkdf2 or legacy sha256) |
+| `PFAI_OWNER_SESSION_TTL` | Optional | Owner session seconds |
+| `PFAI_OWNER_MAX_FAILURES` | Optional | Auth lockout threshold |
+| `PFAI_OWNER_LOCKOUT_SECONDS` | Optional | Auth lockout duration |
 | `PFAI_CONTINUOUS_TRAINING_ENABLED` | Optional | Override continuous loop |
 | `PFAI_CORS_ORIGINS` | Optional | Comma-separated origins |
 | `PFAI_HOST` | Optional | Default `0.0.0.0` in `run_web.py` |
 | `PORT` / `PFAI_PORT` | Optional | Default `8000` |
 | `PFAI_LOG_LEVEL` | Optional | Default `INFO` |
 | `PFAI_LOCAL_MODEL_ID` | Optional | Local student model for SFT |
+
+See also `docs/OWNER_AUTH.md` for first-time setup, sessions, and rotation.
 
 ## Docker
 
