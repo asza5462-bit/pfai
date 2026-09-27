@@ -64,10 +64,12 @@ class TestPhase10Verification(unittest.TestCase):
         )
         stats = orch.learning_statistics()
         elig = stats["next_training_eligibility"]
+        # After a completed real train on current content, growth since last trained is 0
         self.assertFalse(elig["eligible"])
         self.assertEqual(elig["reason"], ZERO_GROWTH_REASON)
         self.assertEqual(stats.get("dataset_growth_since_last_trained"), 0)
-        self.assertEqual(stats.get("latest_dataset_accepted"), 52)
+        self.assertGreaterEqual(int(stats.get("latest_dataset_accepted") or 0), 52)
+        self.assertTrue((root / "datasets" / "dataset-v0002").exists())
 
     def test_trainer_probe_does_not_claim_training(self):
         with tempfile.TemporaryDirectory() as d:

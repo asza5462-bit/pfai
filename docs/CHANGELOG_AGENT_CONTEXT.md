@@ -1,5 +1,24 @@
 # Agent Context Changelog
 
+## 2026-09-27 — PHASE 10: legitimate dataset growth + real CPU training
+
+### Root cause
+ContinuousExperienceBridge was hooked in API, but coding observers used `None`
+and dataset builds did not merge prior versions — so growth stayed 0 on the
+model-v0001 / dataset-v0002 lineage.
+
+### Fixes
+- `VerifiedOutcomeStore` + bridge mirroring for verified coding/eval outcomes
+- `build_dataset_from_sources` preserves prior dataset examples
+- `run_cycle` consults `TrainingEligibilityEngine` with growth
+
+### Verified execution
+- 15 new ACCEPTED examples (sandbox curriculum + verified tasks + regression + eval + owner feedback)
+- `dataset-v0003` (67 accepted); prior `dataset-v0002` preserved
+- Real transformers_lora CPU training: `job-94d9f8c65f8a` → `model-v0003` ACTIVE
+- LKG remains `model-v0001`; checkpoint adapter present
+- GPU false; production quality still false
+
 ## 2026-09-27 — PHASE 10 verification: real autonomy without forced training
 
 ### Verified

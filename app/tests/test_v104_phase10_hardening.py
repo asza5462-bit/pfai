@@ -225,8 +225,14 @@ class TestOrchestratorPhase10(unittest.TestCase):
         if not root.exists():
             self.skipTest("phase9 verify absent")
         ar = json.loads((root / "active_runtime.json").read_text(encoding="utf-8"))
-        self.assertEqual(ar.get("model_id"), "model-v0001")
+        # Active may advance after later real training; LKG/checkpoint lineage must remain
+        self.assertTrue(ar.get("model_id"))
         self.assertTrue((Path(ar["checkpoint_ref"]) / "adapter_model.safetensors").exists())
+        orch = AutonomousTrainingOrchestrator(
+            root=str(root), allow_mock_backend=False, include_approved_seeds=False
+        )
+        self.assertEqual(orch.models.last_known_good()["model_id"], "model-v0001")
+        self.assertTrue((root / "datasets" / "dataset-v0002").exists())
 
 
 if __name__ == "__main__":

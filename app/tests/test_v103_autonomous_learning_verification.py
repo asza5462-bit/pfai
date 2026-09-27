@@ -314,12 +314,19 @@ class TestPhase9VerifiedArtifactsIntact(unittest.TestCase):
         if not root.exists():
             self.skipTest("phase9 verify root absent")
         ar = json.loads((root / "active_runtime.json").read_text(encoding="utf-8"))
-        self.assertEqual(ar.get("model_id"), "model-v0001")
+        self.assertTrue(ar.get("model_id"))
         self.assertTrue(ar.get("loaded"))
         cp = Path(ar.get("checkpoint_ref") or "")
         self.assertTrue((cp / "adapter_model.safetensors").exists())
         distil = Path("data/models/distilgpt2")
         self.assertTrue((distil / "model.safetensors").exists())
+        from pfai.longevity.autonomous_training.orchestrator import AutonomousTrainingOrchestrator
+
+        orch = AutonomousTrainingOrchestrator(
+            root=str(root), allow_mock_backend=False, include_approved_seeds=False
+        )
+        self.assertEqual(orch.models.last_known_good()["model_id"], "model-v0001")
+        self.assertTrue((root / "datasets" / "dataset-v0002").exists())
         # GPU honesty
         det = TrainingRuntimeDetector().detect().to_dict()
         if not det.get("gpu_available"):

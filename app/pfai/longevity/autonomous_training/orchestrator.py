@@ -41,6 +41,7 @@ from .trainer import TrainingBackendRegistry
 from .triggers import TrainingTriggerPolicy
 from .types import JobState, LearningEligibility, ModelStatus, TrainingConfig, TrainingResult
 from .validator import TrainingExampleValidator
+from .verified_outcomes import VerifiedOutcomeStore
 
 
 class AutonomousTrainingOrchestrator:
@@ -91,6 +92,7 @@ class AutonomousTrainingOrchestrator:
         self.learning_pipeline_gate = LearningCandidatePipeline(
             str(self.root / "candidates")
         )
+        self.verified_outcomes = VerifiedOutcomeStore(str(self.root / "verified_outcomes"))
         self.experience = ContinuousExperienceBridge(self)
         self.eligibility_engine = TrainingEligibilityEngine(
             triggers=self.triggers,
@@ -219,10 +221,14 @@ class AutonomousTrainingOrchestrator:
             "durable_learning",
             lambda: observe_durable_learning(self.learning_pipeline),
         )
-        pipe.register_observer("coding_passed", lambda: observe_coding_passes(None))
+        # Pull sandbox-verified coding outcomes from durable store (never invent)
+        pipe.register_observer(
+            "coding_passed",
+            lambda: observe_coding_passes(self.verified_outcomes),
+        )
         pipe.register_observer(
             "evaluation",
-            lambda: observe_evaluation_lessons(getattr(self.gates, "eval_runner", None)),
+            lambda: observe_evaluation_lessons(self.verified_outcomes),
         )
         pipe.register_observer(
             "owner_feedback",
@@ -848,17 +854,40 @@ class AutonomousTrainingOrchestrator:
         stored = self.learning_pipeline_gate.accepted_training_rows(limit=10000)
         seen: set[str] = set()
         merged: list[dict[str, Any]] = []
-        for r in stored + rows:
+
+        def _add(r: dict[str, Any]) -> None:
             key = (r.get("instruction") or "") + "\0" + (r.get("response") or "")
-            if key in seen:
-                continue
+            if not key.strip("\0") or key in seen:
+                return
             seen.add(key)
             merged.append(r)
+
+        # Preserve prior immutable dataset content (e.g. dataset-v0002) then add new accepts
+        prior_versions = self.datasets.list_versions(limit=1)
+        prior_count = 0
+        if prior_versions:
+            pid = prior_versions[0].get("dataset_id")
+            for split in ("train", "validation", "test"):
+                try:
+                    for r in self.datasets.load_split(str(pid), split) or []:
+                        _add(dict(r))
+                        prior_count += 1
+                except Exception:
+                    continue
+        for r in stored + rows:
+            _add(r)
         if sources:
             allowed = set(sources)
             merged = [r for r in merged if r.get("source") in allowed]
 
         prev_baseline = int(getattr(self.triggers, "_last_dataset_accepted", 0) or 0)
+        prior_accepted_count = 0
+        if prior_versions:
+            prior_accepted_count = int(
+                (prior_versions[0].get("validation_results") or {}).get("accepted")
+                or prior_count
+                or 0
+            )
         quality = self.dataset_quality.evaluate(merged)
         if not quality.get("ok"):
             return {
@@ -881,8 +910,10 @@ class AutonomousTrainingOrchestrator:
             }
         built = quality["built"]
         accepted_n = int(quality["accepted"])
-        new_since = max(0, accepted_n - prev_baseline)
+        # Growth = newly accepted beyond previous immutable dataset version
+        new_since = max(0, accepted_n - prior_accepted_count)
         if new_since == 0 and int(pass_result.get("accepted_this_run") or 0) > 0:
+            # Content may replace; prefer candidate-pass count when version count flat
             new_since = int(pass_result.get("accepted_this_run") or 0)
         quality_report = {
             "total_input": len(merged),
@@ -1049,7 +1080,15 @@ class AutonomousTrainingOrchestrator:
             if not manifest:
                 return {"ok": False, "error": "dataset_not_found"}
             dataset_id = force_dataset
-            accepted = int(manifest.get("train_count") or 0) + int(manifest.get("validation_count") or 0)
+            accepted = int(
+                (manifest.get("validation_results") or {}).get("accepted")
+                or (
+                    int(manifest.get("train_count") or 0)
+                    + int(manifest.get("validation_count") or 0)
+                    + int(manifest.get("test_count") or 0)
+                )
+            )
+            growth = self.scheduler.growth_since_last_trained(accepted)
         else:
             built = self.build_dataset_from_sources()
             if not built.get("ok"):
@@ -1058,16 +1097,61 @@ class AutonomousTrainingOrchestrator:
             manifest = built["manifest"]
             dataset_id = manifest["dataset_id"]
             accepted = int(built.get("accepted") or 0)
+            growth = int(
+                built.get("dataset_growth_since_previous_version")
+                if built.get("dataset_growth_since_previous_version") is not None
+                else built.get("new_since_last_dataset")
+                or self.scheduler.growth_since_last_trained(accepted)
+            )
 
-        decision = self.triggers.evaluate(
-            new_example_count=accepted,
+        # Authoritative eligibility (includes growth / schedule / owner gates)
+        rows = self.learning_pipeline_gate.accepted_training_rows(limit=10000)
+        if not rows and force_dataset:
+            try:
+                rows = list(self.datasets.load_split(dataset_id, "train") or [])
+                rows += list(self.datasets.load_split(dataset_id, "validation") or [])
+            except Exception:
+                rows = []
+        eligibility = self.eligibility_engine.evaluate(
+            accepted_rows=rows,
+            dataset_growth=growth,
+            last_trained_dataset_id=self.scheduler.status().get("last_trained_dataset_id"),
+            accepted_count_override=accepted if accepted > len(rows) else None,
             owner_requested=owner_requested,
             explicit_retrain=explicit_retrain,
             regression_recovery=regression_recovery,
             performance_opportunity=performance_opportunity,
+            method=cfg.method,
         )
-        if not decision["should_train"] and not owner_requested and not explicit_retrain:
-            return {"ok": False, "status": "TRIGGER_NOT_MET", "trigger": decision, "dataset_id": dataset_id}
+        decision = (eligibility.get("gates") or {}).get("trigger") or {}
+        if not eligibility.get("eligible") and not owner_requested and not explicit_retrain:
+            return {
+                "ok": False,
+                "status": "TRIGGER_NOT_MET",
+                "reason": eligibility.get("reason"),
+                "eligibility": {
+                    k: eligibility.get(k)
+                    for k in ("eligible", "reason", "reasons", "blockers", "status")
+                },
+                "trigger": decision,
+                "dataset_id": dataset_id,
+            }
+        # Owner/explicit path still requires core safety gates (handled inside engine when owner_path)
+        if owner_requested or explicit_retrain:
+            if eligibility.get("reason") in (
+                "TRAINING_BACKEND_UNAVAILABLE",
+                "RESOURCE_BUDGET_EXCEEDED",
+                "CONFLICTING_TRAINING_JOB",
+                "SECRET_OR_PII_VIOLATIONS",
+                "AUTHORITY_ISOLATION_VIOLATION",
+            ):
+                return {
+                    "ok": False,
+                    "status": "TRAINING_BLOCKED",
+                    "reason": eligibility.get("reason"),
+                    "eligibility": eligibility,
+                    "dataset_id": dataset_id,
+                }
 
         job_id = f"job-{uuid.uuid4().hex[:12]}"
         job: dict[str, Any] = {

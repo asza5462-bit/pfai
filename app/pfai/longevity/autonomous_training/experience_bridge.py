@@ -55,8 +55,32 @@ class ContinuousExperienceBridge:
     def _pipeline(self):
         return self.orch.learning_pipeline_gate
 
+    def _outcomes(self):
+        return getattr(self.orch, "verified_outcomes", None)
+
     def _trust(self, attribution: str) -> float:
         return float(EXPERIENCE_TRUST.get(attribution, 0.5))
+
+    def _mirror_outcome(self, *, kind: str, instruction: str, response: str, source_id: str, extra: dict[str, Any] | None = None) -> None:
+        store = self._outcomes()
+        if store is None:
+            return
+        try:
+            store.append(
+                {
+                    "kind": kind,
+                    "instruction": instruction,
+                    "response": response,
+                    "prompt": instruction,
+                    "solution": response,
+                    "code": response,
+                    "id": source_id,
+                    "source_id": source_id,
+                    **(extra or {}),
+                }
+            )
+        except Exception:
+            return
 
     def record_event(
         self,
@@ -136,7 +160,8 @@ class ContinuousExperienceBridge:
         rec = self._pipeline().process_observation(raw)
         # Map pipeline lowercase eligibility onto explicit states when needed
         elig = rec.eligibility
-        if elig == "accepted":
+        elig_l = str(elig or "").lower()
+        if elig_l in ("accepted", LearningEligibility.ACCEPTED.value.lower()):
             if pending:
                 # Downgrade high-quality but lower-trust accepts to PENDING_REVIEW
                 rec.eligibility = LearningEligibility.PENDING_REVIEW.value
@@ -149,7 +174,25 @@ class ContinuousExperienceBridge:
                 if rec.eligibility != LearningEligibility.ACCEPTED.value:
                     rec.eligibility = LearningEligibility.ACCEPTED.value
                     self._pipeline().store.upsert(rec)
-        elif elig == "rejected":
+                # Mirror high-trust accepts into rediscoverable outcome store
+                if attribution in (
+                    ExperienceSource.CODE_TEST_PASS.value,
+                    ExperienceSource.CORRECTED_FAILURE.value,
+                ):
+                    self._mirror_outcome(
+                        kind="coding_passed",
+                        instruction=instruction,
+                        response=response,
+                        source_id=source_id or rec.candidate_id,
+                    )
+                elif attribution == ExperienceSource.EVALUATION.value:
+                    self._mirror_outcome(
+                        kind="evaluation",
+                        instruction=instruction,
+                        response=response,
+                        source_id=source_id or rec.candidate_id,
+                    )
+        elif elig_l in ("rejected", LearningEligibility.REJECTED.value.lower()):
             elig = LearningEligibility.REJECTED.value
             if rec.eligibility != LearningEligibility.REJECTED.value:
                 rec.eligibility = LearningEligibility.REJECTED.value
@@ -157,7 +200,7 @@ class ContinuousExperienceBridge:
                     self._pipeline().store.upsert(rec)
                 except Exception:
                     pass
-        elif elig == "pending":
+        elif elig_l in ("pending", "pending_review", LearningEligibility.PENDING_REVIEW.value.lower()):
             elig = LearningEligibility.PENDING_REVIEW.value
 
         self.orch.audit.record(

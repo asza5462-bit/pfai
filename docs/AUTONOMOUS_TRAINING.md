@@ -40,25 +40,22 @@ If growth == 0 → `TRAINING_ELIGIBLE=false`, reason `NO_NEW_DATASET_GROWTH`.
 
 | Field | Value |
 |-------|-------|
-| Active / LKG | model-v0001 |
-| Dataset | dataset-v0002 (52 accepted) |
-| Growth | 0 |
-| TRAINING_ELIGIBLE | false (`NO_NEW_DATASET_GROWTH`) |
-| GPU | false (CPU LoRA only) |
+| Active | model-v0003 |
+| LKG | model-v0001 (preserved) |
+| Dataset | dataset-v0003 (67 accepted; prior dataset-v0002 preserved) |
+| Growth that enabled train | 15 |
+| Post-train growth | 0 (`NO_REAL_DATASET_GROWTH`) |
+| GPU | false (CPU LoRA) |
 | Backend | transformers_lora |
+| Last real job | job-94d9f8c65f8a |
 | Production quality | **false** |
 
-## PHASE 10 verification (real eligibility)
+## PHASE 10 verification (real eligibility + growth)
 
-Verified code path (not docs-only): experience → sanitize → PII → quality →
-dedupe → provenance → dataset version → TrainingEligibilityEngine →
-DurableTrainingScheduler → trainer → checkpoint → evaluate → accept/reject →
-activate → LKG → rollback.
+Blocker was empty candidate store + coding observers wired to `None`.
 
-Authoritative zero-growth blocker: `NO_REAL_DATASET_GROWTH`.
+Fixed: `VerifiedOutcomeStore`, prior-dataset merge in builds, eligibility-aware `run_cycle`.
 
-Trainer probe (`probe_trainer_runtime`) can load distilgpt2 + tokenizer without
-claiming a training run. Real training executes only when all gates pass —
-currently blocked: growth=0.
-
-Owner APIs expose per-gate breakdown via `/platform/training/eligibility`.
+15 new ACCEPTED examples from sandbox-verified coding, regression fix, eval suite, and
+owner-approved operational feedback → dataset-v0003 → real CPU LoRA training →
+model-v0003 ACTIVE with model-v0001 LKG.
