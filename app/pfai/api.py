@@ -1162,6 +1162,27 @@ def phase15_platform_status(owner: str = Depends(require_owner)):
     st['PHASE_16_ALLOWED'] = False
     return {'ok': True, **st}
 
+@app.get('/platform/phase16/status')
+def phase16_platform_status(owner: str = Depends(require_owner)):
+    from .engineering import phase16_status
+    from .elite.platform_observability import PlatformObservability
+    st = phase16_status()
+    obs = PlatformObservability(ELITE).snapshot()
+    st['observability'] = obs
+    st['elite'] = {
+        'skill_count': ELITE.skills.health().get('count'),
+        'phase14_boot': (ELITE._boot or {}).get('phase14'),
+        'phase15_boot': (ELITE._boot or {}).get('phase15'),
+        'unified_intelligence_loop': True,
+    }
+    st['PHASE_17_ALLOWED'] = False
+    return {'ok': True, **st}
+
+@app.get('/platform/observability')
+def platform_observability(owner: str = Depends(require_owner)):
+    from .elite.platform_observability import PlatformObservability
+    return {'ok': True, **PlatformObservability(ELITE).snapshot()}
+
 class Phase14BuildBody(BaseModel):
     requirement: str
     approved: bool = False
@@ -1186,6 +1207,41 @@ class Phase15WorkflowBody(BaseModel):
     auto_apply: bool = False
     affected_files: list[str] | None = None
     writers: dict[str, str] | None = None
+
+class Phase16ChatBody(BaseModel):
+    message: str
+    conversation_id: str = ''
+    approved: bool = False
+    allow_training_ops: bool = False
+    project_path: str = ''
+    declaration: str = ''
+    scope: str = ''
+    allow_external: bool = False
+    auto_apply: bool = False
+
+@app.post('/platform/phase16/chat')
+def phase16_chat(x: Phase16ChatBody, owner: str = Depends(require_owner)):
+    ctx = {}
+    if x.project_path:
+        ctx['project_path'] = x.project_path
+    if x.declaration:
+        ctx['declaration'] = x.declaration
+    if x.scope:
+        ctx['scope'] = x.scope
+    if x.allow_external:
+        ctx['allow_external'] = True
+    if x.auto_apply:
+        ctx['auto_apply'] = True
+    result = ELITE.chat(
+        x.message,
+        conversation_id=x.conversation_id,
+        context=ctx,
+        approved=bool(x.approved),
+        actor=owner,
+        allow_training_ops=bool(x.allow_training_ops),
+    )
+    OWNER.authorize('PHASE16_CHAT', f'{owner} ok={result.get("ok")} phase={result.get("phase")}')
+    return result
 
 @app.post('/platform/phase14/build')
 def phase14_build(x: Phase14BuildBody, owner: str = Depends(require_owner)):

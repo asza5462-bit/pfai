@@ -67,7 +67,7 @@ class EliteOrchestrator:
         self.skill_metrics = SkillEvaluationLedger(path=str(self.root / "skill_evaluations.jsonl"))
         self.audit_path = self.root / "elite_audit.jsonl"
         self._lock = threading.RLock()
-        self._boot = {"skills": None, "tools": None, "phase14": None, "phase15": None}
+        self._boot = {"skills": None, "tools": None, "phase14": None, "phase15": None, "phase16": True}
         if bootstrap_skills:
             from pfai.engineering.phase14_skills import register_phase14_skills
             from pfai.engineering.phase15_skills import register_phase15_skills
@@ -76,6 +76,9 @@ class EliteOrchestrator:
             self._boot["phase14"] = register_phase14_skills(self.skills, activate=True)
             self._boot["phase15"] = register_phase15_skills(self.skills, activate=True)
             self._boot["tools"] = self.tools.bootstrap_safe_tools()
+        from pfai.elite.unified_intelligence_loop import UnifiedIntelligenceLoop
+
+        self.intelligence = UnifiedIntelligenceLoop(self)
 
     def _audit(self, event: str, **detail: Any) -> None:
         row = {"ts": time.time(), "event": event, "detail": sanitize_args(detail)}
@@ -217,7 +220,7 @@ class EliteOrchestrator:
                 "execution_id": execution_id,
                 "mode": mode,
                 "security": {"rejected": True},
-                "phase": 14,
+                "phase": 16,
             }
 
         # Reject unauthorized offensive / third-party attack language
@@ -245,7 +248,7 @@ class EliteOrchestrator:
                 "execution_id": execution_id,
                 "mode": mode,
                 "security": {"rejected": True, "offensive_blocked": True},
-                "phase": 14,
+                "phase": 16,
             }
 
         # Task planner (lightweight)
@@ -595,10 +598,11 @@ class EliteOrchestrator:
             "sandbox_metadata": sandbox_meta,
             "timeline": timeline,
             "latency_seconds": time.time() - started,
-            "phase": 15,
+            "phase": 16,
             "phase14": phase14_result,
             "phase15": phase15_result,
             "optional_future_training": True,
+            "PHASE_17_ALLOWED": False,
         }
         self._audit("elite_handle", execution_id=execution_id, mode=mode, status=status, actor=actor)
         return out
@@ -607,11 +611,13 @@ class EliteOrchestrator:
         tool_status = self.tools.status_registry()
         from pfai.engineering.phase14_skills import phase14_status
         from pfai.engineering.phase15_gates import phase15_status
+        from pfai.engineering.phase16_gates import phase16_status
 
         p14 = phase14_status()
         p15 = phase15_status()
+        p16 = phase16_status()
         return {
-            "phase": 15,
+            "phase": 16,
             "skills": self.skills.health(),
             "tools": {
                 "count": len(self.tools.catalog()),
@@ -628,11 +634,38 @@ class EliteOrchestrator:
             "EMAIL_NOTE": "see /platform/email/status",
             "phase14": p14,
             "phase15": p15,
+            "phase16": p16,
             "PHASE_14_ALLOWED": bool(p14.get("PHASE_14_ALLOWED")),
             "PHASE_15_ALLOWED": bool(p15.get("PHASE_15_ALLOWED")),
-            "PHASE_16_ALLOWED": False,
+            "PHASE_16_ALLOWED": bool(p16.get("PHASE_16_ALLOWED")),
+            "PHASE_17_ALLOWED": False,
             "skill_metrics": self.skill_metrics.summary(),
+            "unified_intelligence_loop": True,
         }
+
+    def chat(
+        self,
+        message: str,
+        *,
+        conversation_id: str = "",
+        context: dict[str, Any] | None = None,
+        requested_mode: str | None = None,
+        approved: bool = False,
+        actor: str = "",
+        attachments: list[Any] | None = None,
+        allow_training_ops: bool = False,
+    ) -> dict[str, Any]:
+        """Primary command surface — routes through UnifiedIntelligenceLoop."""
+        return self.intelligence.run(
+            message,
+            conversation_id=conversation_id,
+            context=context,
+            requested_mode=requested_mode,
+            approved=approved,
+            actor=actor,
+            attachments=attachments,
+            allow_training_ops=allow_training_ops,
+        )
 
     def export_learning_to_training(self, limit: int = 20) -> dict[str, Any]:
         return self.learning.export_to_experience_bridge(self.experience_bridge, limit=limit)

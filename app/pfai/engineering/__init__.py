@@ -9,6 +9,7 @@ from pfai.engineering.phase14_skills import register_phase14_skills, phase14_sta
 from pfai.engineering.phase14_gates import evaluate_phase14_gates, stamp_phase14_suite_evidence
 from pfai.engineering.phase15_skills import register_phase15_skills
 from pfai.engineering.phase15_gates import evaluate_phase15_gates, stamp_phase15_suite_evidence, phase15_status
+from pfai.engineering.phase16_gates import evaluate_phase16_gates, stamp_phase16_suite_evidence, phase16_status
 from pfai.engineering.unified_coding_workflow import UnifiedCodingWorkflow
 from pfai.engineering.project_inspector import ProjectInspector
 from pfai.engineering.engineering_workflow import EngineeringWorkflow
@@ -29,6 +30,9 @@ __all__ = [
     "phase15_status",
     "evaluate_phase15_gates",
     "stamp_phase15_suite_evidence",
+    "phase16_status",
+    "evaluate_phase16_gates",
+    "stamp_phase16_suite_evidence",
     "UnifiedCodingWorkflow",
     "ProjectInspector",
     "EngineeringWorkflow",
