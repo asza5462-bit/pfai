@@ -16,6 +16,7 @@ from .checkpoints import CheckpointStore
 from .collector import ExperienceCollector, collect_from_learning_pipeline
 from .compatibility import ModelCompatibilityChecker
 from .dataset import DatasetBuilder, DatasetVersionRegistry
+from .dataset_quality import DatasetQualityGate
 from .evaluation_gate import EvaluationGate
 from .isolation import TrainingSafetyIsolation
 from .model_registry import ModelRegistry
@@ -61,13 +62,17 @@ class AutonomousTrainingOrchestrator:
         self.gates = EvaluationGate(eval_runner=eval_runner)
         self.active_runtime = ActiveModelRuntime(str(self.root / "active_runtime.json"))
         self.rollback_mgr = ModelRollbackManager(
-            self.models, audit_fn=self.audit.record, active_runtime=self.active_runtime
+            self.models,
+            audit_fn=self.audit.record,
+            active_runtime=self.active_runtime,
+            checkpoints=self.checkpoints,
         )
         self.isolation = TrainingSafetyIsolation()
         self.triggers = TrainingTriggerPolicy()
         self.detector = TrainingRuntimeDetector()
         self.compat = ModelCompatibilityChecker(self.detector)
         self.resources = TrainingResourceManager(self.detector)
+        self.dataset_quality = DatasetQualityGate()
         self.canary = CanaryController()
         self._lock = threading.RLock()
         env_mock = (os.environ.get("TRAINING_ALLOW_MOCK") or "").lower() in ("1", "true", "yes")
@@ -78,9 +83,15 @@ class AutonomousTrainingOrchestrator:
             "yes",
         )
         self.min_dataset_quality = float(os.environ.get("TRAINING_MIN_DATASET_QUALITY", "0.55"))
+        self.training_code_version = os.environ.get("PFAI_TRAINING_CODE_VERSION") or "phase8-v1"
         self._ensure_default_sources()
         self._state = self._load_state()
         self.reconcile_stale_jobs()
+        # Safe reload of active pointer after restart
+        try:
+            self.active_runtime.reload()
+        except Exception:
+            pass
 
     def _ensure_default_sources(self) -> None:
         if "durable_learning" not in getattr(self.collector, "_sources", {}):
@@ -222,9 +233,12 @@ class AutonomousTrainingOrchestrator:
                 "failure_threshold": self.canary.failure_threshold,
             },
             "rollback": {
-                "last_known_good": (self.rollback_mgr.last_known_good() or {}).get("model_id"),
-                "available": bool(self.rollback_mgr.last_known_good()),
+                "last_known_good": (self.models.last_known_good() or {}).get("model_id")
+                or (self.rollback_mgr.last_known_good() or {}).get("model_id"),
+                "available": bool(self.models.last_known_good() or self.rollback_mgr.last_known_good()),
             },
+            "lkg_model": self.models.last_known_good(),
+            "resource_status": self.resources.admit(dataset_rows=0, method="lora", running_jobs=0),
             "autonomous_training_enabled": self.autonomous_enabled,
             "paused": bool(self._state.get("paused")),
             "authority_isolation": True,
@@ -248,7 +262,16 @@ class AutonomousTrainingOrchestrator:
                     ((st.get("active_runtime") or {}).get("model_id"))
                     and not ((st.get("active_model") or {}).get("meta") or {}).get("is_mock")
                 ),
+                "LKG_AVAILABLE": bool(self.models.last_known_good()),
+                "ROLLBACK_AVAILABLE": bool(
+                    self.models.last_known_good()
+                    and (self.models.active() or {}).get("model_id")
+                    != (self.models.last_known_good() or {}).get("model_id")
+                )
+                or bool((self.models.active() or {}).get("previous_model_id")),
+                "AUTONOMOUS_TRAINING_READY": bool(self.autonomous_enabled and self.triggers.enabled),
             },
+            "quality_disclaimer": "Pipeline/dataset size does not by itself prove production model quality.",
         }
 
     def status(self) -> dict[str, Any]:
@@ -304,24 +327,29 @@ class AutonomousTrainingOrchestrator:
 
     def build_dataset_from_sources(self, *, sources: list[str] | None = None) -> dict[str, Any]:
         rows = self.collector.collect(sources=sources)
-        built = self.builder.build(rows)
-        if built["accepted"] < 1:
-            return {"ok": False, "error": "INSUFFICIENT_DATA", "built": built}
-        # Quality threshold
-        qualities = [float(e.quality_score) for e in built["examples"]]
-        avg_q = sum(qualities) / len(qualities) if qualities else 0.0
+        quality = self.dataset_quality.evaluate(rows)
+        if not quality.get("ok"):
+            return {
+                "ok": False,
+                "error": quality.get("status") or "INSUFFICIENT_DATA",
+                "quality": quality,
+                "built": quality.get("built"),
+            }
+        built = quality["built"]
         quality_report = {
             "total_input": len(rows),
-            "accepted": built["accepted"],
-            "rejected": built["rejected"],
-            "avg_quality": avg_q,
-            "min_required": self.min_dataset_quality,
-            "train": len(built["splits"]["train"]),
-            "validation": len(built["splits"]["validation"]),
-            "test": len(built["splits"]["test"]),
+            "accepted": quality["accepted"],
+            "rejected": quality["rejected"],
+            "avg_quality": quality["avg_quality"],
+            "min_required": quality["min_avg_quality"],
+            "min_samples": quality["min_samples"],
+            "train": quality["splits"]["train"],
+            "validation": quality["splits"]["validation"],
+            "test": quality["splits"]["test"],
+            "provenance_ok": quality["provenance_ok"],
+            "quality_note": quality["quality_note"],
+            "model_quality_claim": False,
         }
-        if avg_q < self.min_dataset_quality:
-            return {"ok": False, "error": "DATASET_QUALITY_BELOW_THRESHOLD", "quality": quality_report}
         parent = None
         versions = self.datasets.list_versions(limit=1)
         if versions:
@@ -613,6 +641,12 @@ class AutonomousTrainingOrchestrator:
             training_config=cfg.to_dict(),
             checkpoint_ref=result.checkpoint_path,
             status=ModelStatus.CANDIDATE,
+            base_model_hash=str((cfg.extra or {}).get("base_model_hash") or ""),
+            base_model_revision=str(result.model_revision or (cfg.extra or {}).get("revision") or ""),
+            training_code_version=self.training_code_version,
+            training_backend=result.backend,
+            metrics=dict(result.metrics or {}),
+            parent_model_id=(self.models.active() or {}).get("model_id"),
             meta={
                 "job_id": job_id,
                 "backend": result.backend,
@@ -621,6 +655,7 @@ class AutonomousTrainingOrchestrator:
                 "real_weight_update": result.real_weight_update,
                 "model_revision": result.model_revision,
                 "license": (cfg.extra or {}).get("license") or os.environ.get("MODEL_LICENSE") or "unverified",
+                "hardware": result.hardware,
             },
         )
         job["model_id"] = model["model_id"]
@@ -631,17 +666,27 @@ class AutonomousTrainingOrchestrator:
         self._state["phase"] = "evaluating"
         self._save_state()
         self.models.update_status(model["model_id"], ModelStatus.VALIDATING)
+        lkg = self.models.last_known_good()
+        lkg_scores = None
+        if lkg and isinstance(lkg.get("evaluation"), dict):
+            lkg_scores = (lkg.get("evaluation") or {}).get("candidate_scores")
         eval_report = self.gates.evaluate_candidate(
             candidate_id=model["model_id"],
             candidate_bonus=0.05 if result.ok else 0.0,
+            checkpoint_ref=result.checkpoint_path,
+            lkg_scores=lkg_scores,
         )
         job["evaluation"] = eval_report
         job["state"] = JobState.SHADOW.value
         job["updated_at"] = time.time()
         self._write_job(job)
-        shadow = self.gates.shadow_compare(eval_report, {"overall_candidate": eval_report.get("overall_active", 0.5)})
+        shadow = self.gates.shadow_compare(
+            eval_report,
+            {"overall_candidate": eval_report.get("overall_lkg") or eval_report.get("overall_active", 0.5)},
+        )
         job["shadow"] = shadow
         job["state"] = JobState.CANARY.value
+        self.models.update_status(model["model_id"], ModelStatus.CANARY, evaluation=eval_report)
         job["updated_at"] = time.time()
         self._write_job(job)
         canary = self.canary.evaluate_shadow(shadow)
@@ -679,6 +724,8 @@ class AutonomousTrainingOrchestrator:
                 "real_evaluation_executed": True,
                 "canary_executed": True,
                 "model_activated": False,
+                "lkg_preserved": True,
+                "lkg_model_id": (lkg or {}).get("model_id"),
             }
 
         self.models.update_status(model["model_id"], ModelStatus.VALIDATED, evaluation=eval_report)
@@ -689,6 +736,21 @@ class AutonomousTrainingOrchestrator:
         activation = None
         runtime_switch = None
         if can_activate:
+            # Pre-activation gates: integrity + reload + inference compatibility
+            pre = ActiveModelRuntime.verify_checkpoint(result.checkpoint_path)
+            if not pre.get("ok"):
+                self.models.update_status(model["model_id"], ModelStatus.REJECTED, evaluation=eval_report)
+                job["state"] = JobState.REJECTED.value
+                job["error"] = "pre_activation_integrity_failed"
+                job["updated_at"] = time.time()
+                self._write_job(job)
+                return {
+                    "ok": False,
+                    "status": "REJECTED",
+                    "error": "pre_activation_integrity_failed",
+                    "job": job,
+                    "integrity": pre,
+                }
             job["state"] = JobState.ACTIVATING.value
             job["updated_at"] = time.time()
             self._write_job(job)
@@ -697,14 +759,35 @@ class AutonomousTrainingOrchestrator:
                 model_id=model["model_id"],
                 checkpoint_ref=result.checkpoint_path,
                 dataset_version=dataset_id,
+                base_model=str(result.base_model or cfg.base_model),
+                require_inference_compatible=True,
                 meta={
                     "job_id": job_id,
                     "is_mock": result.is_mock,
                     "real_training": bool(getattr(result, "real_training", False)),
+                    "base_model": result.base_model or cfg.base_model,
                 },
             )
+            if runtime_switch.get("status") != "ACTIVE":
+                # Fail closed: keep LKG, reject candidate
+                self.models.update_status(model["model_id"], ModelStatus.REJECTED)
+                if (self.models.last_known_good() or {}).get("model_id"):
+                    self.rollback_mgr.rollback(reason="activation_runtime_failed")
+                job["state"] = JobState.REJECTED.value
+                job["error"] = runtime_switch.get("error") or "runtime_switch_failed"
+                job["runtime_switch"] = runtime_switch
+                job["updated_at"] = time.time()
+                self._write_job(job)
+                return {
+                    "ok": False,
+                    "status": "REJECTED",
+                    "error": job["error"],
+                    "job": job,
+                    "runtime_switch": runtime_switch,
+                }
             job["activation"] = activation
             job["runtime_switch"] = runtime_switch
+            job["lkg"] = self.models.last_known_good()
             self.audit.record(
                 "model_activated",
                 job_id=job_id,
@@ -714,8 +797,15 @@ class AutonomousTrainingOrchestrator:
                 real_weight_update=result.real_weight_update,
                 real_training=bool(getattr(result, "real_training", False)),
                 runtime_loaded=bool(runtime_switch.get("loaded")),
+                lkg_model_id=(job["lkg"] or {}).get("model_id"),
             )
             job["state"] = JobState.ACTIVE.value
+            # Cleanup old non-LKG artifacts only
+            protect = set()
+            for m in (self.models.last_known_good(), self.models.active()):
+                if m and m.get("checkpoint_ref"):
+                    protect.add(str(Path(m["checkpoint_ref"]).resolve()))
+            self.resources.cleanup_old_checkpoints(self.root / "artifacts", protect_paths=protect)
         else:
             job["state"] = JobState.COMPLETED.value
             job["activation"] = {
@@ -731,6 +821,7 @@ class AutonomousTrainingOrchestrator:
         self._state["last_model_id"] = model["model_id"]
         self._state["cycles"] = int(self._state.get("cycles") or 0) + 1
         self._save_state()
+        lkg_now = self.models.last_known_good()
         return {
             "ok": True,
             "status": job["state"],
@@ -745,27 +836,50 @@ class AutonomousTrainingOrchestrator:
             "canary_executed": True,
             "is_mock": result.is_mock,
             "model_activated": bool(can_activate and activation),
-            "rollback_available": bool(self.rollback_mgr.last_known_good()),
+            "lkg_available": bool(lkg_now),
+            "lkg_model_id": (lkg_now or {}).get("model_id"),
+            "rollback_available": bool(
+                lkg_now and (lkg_now.get("model_id") != (self.models.active() or {}).get("model_id"))
+            )
+            or bool((self.models.active() or {}).get("previous_model_id")),
+            "model_quality_validated": bool(eval_report.get("ok")),
+            "production_scale_training": False,
+            "quality_note": "Bounded/tiny runs prove the pipeline — not production model quality.",
         }
 
     def activate_model(self, model_id: str) -> dict[str, Any]:
         model = self.models.get(model_id)
         if not model:
             return {"ok": False, "error": "model_not_found"}
-        if model.get("status") not in (ModelStatus.VALIDATED.value, ModelStatus.CANDIDATE.value, ModelStatus.ACTIVE.value):
+        if model.get("status") not in (
+            ModelStatus.VALIDATED.value,
+            ModelStatus.CANDIDATE.value,
+            ModelStatus.CANARY.value,
+            ModelStatus.ACTIVE.value,
+        ):
             return {"ok": False, "error": "model_not_validated"}
         cp = model.get("checkpoint_ref") or ""
         integrity = self.checkpoints.verify_integrity(cp)
         if not integrity.get("ok"):
             return {"ok": False, "error": "checkpoint_integrity_failed", "integrity": integrity}
+        load = self.gates.verify_checkpoint_load(cp)
+        if not load.get("ok"):
+            return {"ok": False, "error": "checkpoint_reload_failed", "load": load}
         activation = self.models.activate(model_id)
         runtime = self.active_runtime.switch_to(
             model_id=model_id,
             checkpoint_ref=cp,
             dataset_version=str(model.get("dataset_version") or ""),
+            base_model=str(model.get("base_model") or ""),
+            meta={"base_model": model.get("base_model")},
         )
         self.audit.record("model_activated_manual", model_id=model_id, runtime_loaded=runtime.get("loaded"))
-        return {"ok": runtime.get("status") == "ACTIVE", "activation": activation, "runtime": runtime}
+        return {
+            "ok": runtime.get("status") == "ACTIVE",
+            "activation": activation,
+            "runtime": runtime,
+            "lkg": self.models.last_known_good(),
+        }
 
     def resume_job(self, job_id: str) -> dict[str, Any]:
         job = self._read_job(job_id)
@@ -777,6 +891,7 @@ class AutonomousTrainingOrchestrator:
             JobState.REJECTED.value,
             JobState.FAILED.value,
             JobState.CANCELLED.value,
+            JobState.ACTIVE.value,
         ):
             return {"ok": True, "resumed": False, "job": job}
         self._state["paused"] = False
@@ -793,14 +908,63 @@ class AutonomousTrainingOrchestrator:
             ),
         )
 
+    def maybe_run_autonomous_tick(self) -> dict[str, Any]:
+        """Safe autonomous trigger — NEVER runs on chat messages.
+
+        Collect → quality gate → trigger policy → optional cycle.
+        """
+        if not self.autonomous_enabled:
+            return {"ok": False, "status": "AUTONOMOUS_DISABLED", "trained": False}
+        if self._state.get("paused"):
+            return {"ok": False, "status": "PAUSED", "trained": False}
+        self.reconcile_stale_jobs()
+        # Monitor active model health first
+        monitor = self.monitor_and_maybe_rollback(force_regression=False)
+        if monitor.get("action") == "rollback":
+            return {"ok": bool(monitor.get("ok")), "status": "ROLLED_BACK", "trained": False, "monitor": monitor}
+        rows = self.collector.collect()
+        quality = self.dataset_quality.evaluate(rows)
+        decision = self.triggers.evaluate(
+            new_example_count=int(quality.get("accepted") or 0),
+            owner_requested=False,
+            explicit_retrain=False,
+            regression_recovery=False,
+            performance_opportunity=False,
+        )
+        if not decision.get("should_train"):
+            return {
+                "ok": True,
+                "status": "TRIGGER_NOT_MET",
+                "trained": False,
+                "trigger": decision,
+                "quality_status": quality.get("status"),
+                "note": "Autonomous tick does not train on chat; waits for dataset/schedule/eval triggers.",
+            }
+        if not quality.get("ok"):
+            return {
+                "ok": False,
+                "status": quality.get("status") or "INSUFFICIENT_DATA",
+                "trained": False,
+                "quality": {k: quality.get(k) for k in ("accepted", "reasons", "quality_note")},
+            }
+        return self.run_cycle(owner_requested=False, activate_if_pass=True)
+
     def monitor_and_maybe_rollback(self, *, force_regression: bool = False) -> dict[str, Any]:
         active = self.models.active()
         if not active:
             return {"ok": True, "action": "none", "reason": "no_active_model"}
         report = self.gates.evaluate_candidate(
-            candidate_id=active["model_id"], candidate_bonus=-0.5 if force_regression else 0.0
+            candidate_id=active["model_id"],
+            candidate_bonus=-0.5 if force_regression else 0.0,
+            checkpoint_ref=active.get("checkpoint_ref"),
         )
         if force_regression or not report.get("ok"):
             rb = self.rollback_mgr.rollback(reason="post_activation_regression")
+            self.audit.record(
+                "automatic_rollback",
+                ok=rb.get("ok"),
+                reason="post_activation_regression",
+                restored=rb.get("restored_model_id"),
+            )
             return {"ok": rb.get("ok"), "action": "rollback", "monitor": report, "rollback": rb}
         return {"ok": True, "action": "healthy", "monitor": report}

@@ -12,6 +12,9 @@ Last updated: 2026-09-27 (Longevity PHASE 8)
 | Training runtime (this env) | **AVAILABLE** (CPU; torch/transformers/peft/datasets/safetensors) |
 | Real training executed | **true** (bounded LoRA on local tiny-random-gpt2) |
 | Real model active | **true** (phase8 verify run; adapter safetensors) |
+| LKG | **implemented** (first activation marks LKG; auto-rollback tested) |
+| Autonomous tick | **ready** (dataset/schedule/owner — not per-chat) |
+| Model quality claim | **false** for 9-example tiny run (pipeline proof only) |
 | Skill packs | versioned registry enabled |
 | Anthropic required | false |
 

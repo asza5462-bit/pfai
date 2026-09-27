@@ -1614,6 +1614,12 @@ def platform_training_status(owner: str = Depends(require_owner)):
         'REAL_TRAINING_AVAILABLE': bool((cc.get('labels') or {}).get('REAL_TRAINING_AVAILABLE')),
         'REAL_TRAINING_EXECUTED': bool((cc.get('labels') or {}).get('REAL_TRAINING_EXECUTED')),
         'REAL_MODEL_ACTIVE': bool((cc.get('labels') or {}).get('REAL_MODEL_ACTIVE')),
+        'LKG_AVAILABLE': bool((cc.get('labels') or {}).get('LKG_AVAILABLE')),
+        'ROLLBACK_AVAILABLE': bool((cc.get('labels') or {}).get('ROLLBACK_AVAILABLE')),
+        'AUTONOMOUS_TRAINING_READY': bool((cc.get('labels') or {}).get('AUTONOMOUS_TRAINING_READY')),
+        'lkg_model': cc.get('lkg_model'),
+        'resource_status': cc.get('resource_status'),
+        'quality_disclaimer': cc.get('quality_disclaimer'),
         'orchestrator': st.get('orchestrator'),
         'datasets': st.get('datasets'),
         'models': st.get('models'),
@@ -1676,6 +1682,14 @@ def platform_training_cancel(job_id: str, owner: str = Depends(require_owner)):
 def platform_training_autonomous(x: AutonomousToggleBody, owner: str = Depends(require_owner)):
     result = AUTONOMOUS_TRAINING.set_autonomous(x.enabled)
     OWNER.authorize('PLATFORM_TRAINING_AUTONOMOUS', f'{owner} autonomous={x.enabled}')
+    return result
+
+
+@app.post('/platform/training/tick')
+def platform_training_tick(owner: str = Depends(require_owner)):
+    """Owner-triggered autonomous tick (dataset/schedule triggers). Never chat-driven."""
+    result = AUTONOMOUS_TRAINING.maybe_run_autonomous_tick()
+    OWNER.authorize('PLATFORM_TRAINING_TICK', f"{owner} tick status={result.get('status')}")
     return result
 
 

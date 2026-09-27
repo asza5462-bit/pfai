@@ -11,15 +11,26 @@
 - Control Center honest labels: REAL_TRAINING_AVAILABLE / EXECUTED / REAL_MODEL_ACTIVE
 - Tests `test_v99_phase8_real_training.py`; ADR-028; `docs/TRAINING_RUNTIME.md`
 
+### Hardening (same day, still PHASE 8)
+- Immutable model metadata: backend, metrics, parent, code version, base hash/revision
+- Explicit LKG pointer (`model_lkg`); first activation marks LKG; never auto-deleted
+- Automatic rollback to LKG on regression with audit + runtime restore
+- DatasetQualityGate (min samples/splits/provenance/quality) → INSUFFICIENT_DATA without training
+- Evaluation vs LKG + load/reload/inference checks; CANARY model state
+- Resource admission: CPU honesty, max RAM/disk/time; checkpoint cleanup protects LKG
+- Autonomous tick (`/platform/training/tick`) — dataset/schedule triggers only, never per-chat
+- Tests `test_v99b_phase8_hardening.py`; full suite **445 passed**
+
 ### Verified (this environment)
 - Runtime: **AVAILABLE** (CPU torch 2.5.1; no CUDA)
 - Model: local `data/models/tiny-random-gpt2` (operator-declared license metadata)
 - REAL_TRAINING_EXECUTED = **true**
 - REAL_CHECKPOINT_CREATED = **true** (`adapter_model.safetensors`)
 - REAL_EVALUATION_EXECUTED = **true**; CANARY_EXECUTED = **true**; MODEL_ACTIVATED = **true**
-- Full pytest: **434 passed**; smoke **11/11**
+- Full pytest: **445 passed**; smoke **8/8** hardening checks
 - Mock remains tests-only and never labeled as real
-- ROLLBACK mechanism implemented; first activation had no prior LKG pointer
+- LKG + automatic rollback verified in tests
+- **Not claimed:** 9-example tiny-model run = production model quality
 
 ### Not done
 - No deploy; no Phase 9; QLoRA blocked honestly without CUDA+bitsandbytes

@@ -33,10 +33,12 @@ class ModelStatus(str, Enum):
     TRAINING = "TRAINING"
     VALIDATING = "VALIDATING"
     VALIDATED = "VALIDATED"
+    CANARY = "CANARY"
     ACTIVE = "ACTIVE"
     REJECTED = "REJECTED"
     ROLLED_BACK = "ROLLED_BACK"
     FAILED = "FAILED"
+    LKG = "LKG"  # marked last-known-good (may also be ACTIVE)
 
 
 class DatasetStatus(str, Enum):

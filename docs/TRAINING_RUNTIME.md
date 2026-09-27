@@ -95,6 +95,8 @@ Never mark mock success as real training.
 ## Known limitations
 
 - First verified run used a tiny open-weight test model for pipeline proof, not production quality
+- A small accepted dataset (e.g. ~9 examples) proves the pipeline only — **not** model quality
 - QLoRA unavailable without CUDA + bitsandbytes
 - Inference endpoint probe is separate from training availability
 - Training never modifies owner auth, OTP, permissions, secrets, or app source
+- Checkpoint cleanup never deletes LKG/active paths
