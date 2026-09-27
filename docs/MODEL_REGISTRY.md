@@ -26,7 +26,8 @@ Rollback restores LKG + ActiveModelRuntime atomically with audit.
 
 ## Current pointers (verified)
 
-- Active + LKG = **model-v0007** (`production_ready=true`, `serving_tier=production_ready`)
-- Previous LKG checkpoint retained = model-v0001 (rollback available)
+- Previous LKG checkpoint retained = model-v0001 (rollback available via promotion history)
+- PREVIOUS_LKG_MODEL resolved from durable `promotion_history.jsonl` (not current LKG pointer alone)
 - PRODUCTION_VALIDATED = true / PRODUCTION_READY = true
 - LKG is updated only after ProductionQualityGate pass; internal ACTIVE never implied production_ready
+- ROLLBACK_AVAILABLE = full (history → model-v0001)

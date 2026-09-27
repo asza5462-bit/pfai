@@ -1,5 +1,20 @@
 # Agent Context Changelog
 
+## 2026-09-27 — PHASE 11 FINAL: durable promotion/rollback history
+
+### Root cause
+After promoting model-v0007 to LKG, `ModelRollbackManager` only consulted the current LKG pointer (equal to active), so rollback returned `lkg_is_already_active` and could not resolve to model-v0001.
+
+### Fix
+- Append-only `promotion_history.jsonl` (PROMOTION + ROLLBACK)
+- `resolve_previous_production_model()` from history
+- Live seed: previous_lkg=model-v0001 → new_lkg=model-v0007
+- Real rollback verification: v0007→v0001 then restore; artifact hashes unchanged
+- Tests: `test_v111_phase11_rollback_history.py` (A–M)
+
+### Not changed
+- Thresholds, datasets, model weights, auth/security, deploy, remote push
+
 ## 2026-09-27 — PHASE 11 FINAL: model-v0007 production-validated
 
 ### Root cause + fix
