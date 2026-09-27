@@ -1,0 +1,49 @@
+# PFAI — Agent Operating Guide
+
+This file is the durable entry point for any AI/human agent working on PFAI.
+Do not rely on chat memory alone. Read the docs below before making changes.
+
+## Product
+
+PFAI 8.0 is a production-oriented AI control plane:
+
+- Backend: FastAPI + Uvicorn (Python)
+- Frontend: single RTL Arabic dashboard at `app/pfai/static/index.html`
+- Persistence: local SQLite / JSON under `app/data/`
+- Model providers: Anthropic (default), OpenAI-compatible, Echo (offline)
+- Continuous learning is enabled in config but **never auto-promotes** models
+
+## Mandatory context files
+
+1. `docs/memory/PROJECT_MEMORY.md` — current facts and open risks
+2. `docs/ARCHITECTURE.md` — system shape and module boundaries
+3. `docs/OPERATIONS.md` — run, deploy, env vars, health
+4. `docs/DECISIONS.md` — architectural decisions (ADR-style)
+5. `docs/CHANGELOG_AGENT_CONTEXT.md` — what agents changed and why
+6. `.cursor/rules/` — hard rules for edits
+
+## Hard rules
+
+1. Never delete or disable an existing user-facing feature without an explicit request.
+2. Never break existing API routes or response contracts.
+3. Never commit secrets (`ANTHROPIC_API_KEY`, owner plaintext secret, `.env`).
+4. Never put API keys in source, README examples as real values, or chat.
+5. Continuous learning may curate/evaluate candidates; **promotion to active requires owner approval**.
+6. Network access is deny-by-default (`security.allow_network` + exact `allowed_domains`).
+7. Prefer small, modular fixes over rewrites.
+8. After meaningful changes: update memory docs and run real tests (not build-only).
+9. Do not force Vercel. Prefer Docker + long-running host (Render/Railway/VM).
+10. If unsure, inspect code first — do not invent project facts.
+
+## Working directory
+
+Application code lives under `app/`. Package import root is `pfai` (set `PYTHONPATH` / run from `app/`).
+
+## Quick verify
+
+```bash
+cd app
+pip install -r requirements.txt
+python -c "from pfai.api import app; print('ok', app.title)"
+python -m pytest tests/test_api_wiring.py tests/test_v81_continuous_enable_gate.py -q
+```

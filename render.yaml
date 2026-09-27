@@ -1,0 +1,31 @@
+services:
+  - type: web
+    name: pfai-v8
+    runtime: docker
+    dockerfilePath: ./Dockerfile
+    dockerContext: .
+    healthCheckPath: /health
+    autoDeploy: true
+    envVars:
+      - key: PFAI_HOST
+        value: 0.0.0.0
+      - key: PORT
+        value: 8000
+      - key: PFAI_LOG_LEVEL
+        value: INFO
+      - key: PFAI_CONTINUOUS_TRAINING_ENABLED
+        value: "true"
+      - key: PFAI_OWNER_EMAIL
+        sync: false
+      - key: PFAI_OWNER_SECRET_HASH
+        sync: false
+      - key: ANTHROPIC_API_KEY
+        sync: false
+      - key: PFAI_LOCAL_MODEL_ID
+        sync: false
+      - key: PFAI_CORS_ORIGINS
+        sync: false
+    disk:
+      name: pfai-data
+      mountPath: /app/data
+      sizeGB: 10
