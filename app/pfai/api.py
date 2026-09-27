@@ -2166,6 +2166,20 @@ def platform_training_cycle(x: TrainingCycleBody, owner: str = Depends(require_o
     }
 
 
+@app.post('/platform/training/validate')
+def platform_training_validate(
+    apply_decision: bool = True,
+    candidate_model_id: str | None = None,
+    owner: str = Depends(require_owner),
+):
+    """Owner-only real post-train validation of candidate vs LKG."""
+    _ = owner
+    return AUTONOMOUS_TRAINING.validate_active_against_lkg(
+        apply_decision=bool(apply_decision),
+        candidate_model_id=candidate_model_id,
+    )
+
+
 @app.post('/platform/training/rollback')
 def platform_training_rollback(x: TrainingRollbackBody, owner: str = Depends(require_owner)):
     if x.force_regression:

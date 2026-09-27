@@ -43,12 +43,15 @@ If growth == 0 → `TRAINING_ELIGIBLE=false`, reason `NO_NEW_DATASET_GROWTH`.
 | Active | model-v0003 |
 | LKG | model-v0001 (preserved) |
 | Dataset | dataset-v0003 (67 accepted; prior dataset-v0002 preserved) |
-| Growth that enabled train | 15 |
-| Post-train growth | 0 (`NO_REAL_DATASET_GROWTH`) |
-| GPU | false (CPU LoRA) |
+| Post-train validation | complete (real PEFT inference + perplexity vs LKG) |
+| Quality gate | PASS (no regression vs LKG) |
+| Production quality | **false** (suite too small / CPU LoRA insufficient) |
+| GPU | false |
 | Backend | transformers_lora |
 | Last real job | job-94d9f8c65f8a |
-| Production quality | **false** |
+
+Owner API: `POST /platform/training/validate`
+
 
 ## PHASE 10 verification (real eligibility + growth)
 

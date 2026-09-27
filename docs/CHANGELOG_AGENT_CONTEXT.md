@@ -1,5 +1,20 @@
 # Agent Context Changelog
 
+## 2026-09-27 — Post-train validation of model-v0003 vs LKG model-v0001
+
+### Added
+- `PostTrainValidator`: real PEFT load, deterministic inference tasks, dataset perplexity
+- `AutonomousTrainingOrchestrator.validate_active_against_lkg`
+- Owner API `POST /platform/training/validate`
+- Auditable report at `artifacts/post_train_validation.json`
+
+### Result
+- Real evaluation executed for both checkpoints (distinct adapter hashes)
+- Quality gate PASS (no regression; candidate ppl slightly better)
+- KEEP model-v0003 active; LKG remains model-v0001
+- PRODUCTION_QUALITY_VALIDATED=false (eval suite / CPU LoRA insufficient for production bar)
+- Failed candidate checkpoints are never deleted
+
 ## 2026-09-27 — PHASE 10: legitimate dataset growth + real CPU training
 
 ### Root cause

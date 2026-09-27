@@ -42,6 +42,7 @@ from .triggers import TrainingTriggerPolicy
 from .types import JobState, LearningEligibility, ModelStatus, TrainingConfig, TrainingResult
 from .validator import TrainingExampleValidator
 from .verified_outcomes import VerifiedOutcomeStore
+from .post_train_validation import PostTrainValidator, write_report
 
 
 class AutonomousTrainingOrchestrator:
@@ -1811,6 +1812,180 @@ class AutonomousTrainingOrchestrator:
             {**out, "job_id": (job or {}).get("job_id"), "reason": out.get("status")}
         )
         return out
+
+    def validate_active_against_lkg(
+        self,
+        *,
+        apply_decision: bool = True,
+        report_name: str = "post_train_validation.json",
+        candidate_model_id: str | None = None,
+    ) -> dict[str, Any]:
+        """Real post-train validation of candidate vs LKG.
+
+        Uses PEFT load + deterministic inference tasks + dataset perplexity.
+        Does not fabricate suite scores. Does not claim production validation
+        unless production gates are actually met (typically false for CPU smoke).
+        """
+        lkg = self.models.last_known_good()
+        if not lkg:
+            return {"ok": False, "error": "no_lkg_model"}
+        if candidate_model_id:
+            active = self.models.get(candidate_model_id)
+        else:
+            active = self.models.active()
+        if not active:
+            return {"ok": False, "error": "no_candidate_model"}
+        # If validating a non-active candidate, still compare artifacts offline
+        candidate_is_active = (self.models.active() or {}).get("model_id") == active.get("model_id")
+
+        dataset_id = str(active.get("dataset_version") or self._state.get("last_dataset_id") or "")
+        rows: list[dict[str, Any]] = []
+        if dataset_id:
+            try:
+                rows = list(self.datasets.load_split(dataset_id, "test") or [])
+                if not rows:
+                    rows = list(self.datasets.load_split(dataset_id, "validation") or [])
+            except Exception:
+                rows = []
+        # Fall back to a few train rows for perplexity if needed
+        if len(rows) < 4 and dataset_id:
+            try:
+                rows = list(self.datasets.load_split(dataset_id, "train") or [])[:12]
+            except Exception:
+                pass
+
+        validator = PostTrainValidator()
+        base = str(
+            active.get("base_model")
+            or lkg.get("base_model")
+            or "data/models/distilgpt2"
+        )
+        baseline = validator.evaluate_model(
+            model_id=str(lkg.get("model_id")),
+            checkpoint_ref=str(lkg.get("checkpoint_ref")),
+            base_model=base,
+            dataset_rows=rows,
+        )
+        candidate = validator.evaluate_model(
+            model_id=str(active.get("model_id")),
+            checkpoint_ref=str(active.get("checkpoint_ref")),
+            base_model=base,
+            dataset_rows=rows,
+        )
+        eval_examples = len(validator.tasks) + int(candidate.perplexity_n or 0)
+        comparison = validator.compare(
+            baseline=baseline,
+            candidate=candidate,
+            evaluation_dataset=dataset_id or "deterministic_post_train_suite",
+            evaluation_examples=eval_examples,
+        )
+
+        decision = comparison.get("decision")
+        rollback_result = None
+        real_rollback = False
+        activation_result = None
+        if apply_decision and decision == "ROLLBACK_TO_LKG":
+            if candidate_is_active or (self.models.active() or {}).get("model_id") == active.get("model_id"):
+                rollback_result = self.rollback_mgr.rollback(reason="post_train_validation_regression")
+                real_rollback = bool(rollback_result.get("ok"))
+            else:
+                # Candidate not active — mark rejected/rolled_back without deleting
+                real_rollback = False
+                rollback_result = {
+                    "ok": True,
+                    "action": "mark_rolled_back_offline",
+                    "restored_model_id": lkg.get("model_id"),
+                }
+            self.models.update_status(str(active.get("model_id")), ModelStatus.ROLLED_BACK)
+            self.audit.record(
+                "post_train_rollback",
+                candidate=active.get("model_id"),
+                restored=(rollback_result or {}).get("restored_model_id") or lkg.get("model_id"),
+                reasons=comparison.get("reasons"),
+            )
+            self._record_rollback_result(
+                {
+                    "ok": True,
+                    "action": "rollback",
+                    "reason": "post_train_validation_regression",
+                    "rollback": rollback_result,
+                }
+            )
+        elif apply_decision and decision == "KEEP_CANDIDATE_ACTIVE":
+            if not candidate_is_active:
+                # Re-validation may revive a previously rolled-back candidate
+                if active.get("status") in (
+                    ModelStatus.ROLLED_BACK.value,
+                    ModelStatus.REJECTED.value,
+                ):
+                    self.models.update_status(str(active.get("model_id")), ModelStatus.VALIDATED)
+                activation_result = self.activate_model(str(active.get("model_id")))
+            self.audit.record(
+                "post_train_keep_active",
+                candidate=active.get("model_id"),
+                lkg=lkg.get("model_id"),
+                production_quality_validated=bool(comparison.get("production_quality_validated")),
+                reasons=comparison.get("reasons"),
+                activation=activation_result,
+            )
+
+        report = {
+            "ok": True,
+            "post_train_validation": "complete",
+            "baseline_model": baseline.model_id,
+            "candidate_model": candidate.model_id,
+            "baseline_checkpoint_hash": baseline.checkpoint_hash,
+            "candidate_checkpoint_hash": candidate.checkpoint_hash,
+            "evaluation_dataset": comparison.get("evaluation_dataset"),
+            "evaluation_examples": comparison.get("evaluation_examples"),
+            "baseline_metrics": {
+                "pass_rate": baseline.pass_rate,
+                "passed": baseline.passed,
+                "failed": baseline.failed,
+                "mean_perplexity": baseline.mean_perplexity,
+                "suite_pass_rates": baseline.suite_pass_rates,
+                "runtime_seconds": baseline.runtime_seconds,
+                "load_ok": baseline.load_ok,
+                "inference_ok": baseline.inference_ok,
+            },
+            "candidate_metrics": {
+                "pass_rate": candidate.pass_rate,
+                "passed": candidate.passed,
+                "failed": candidate.failed,
+                "mean_perplexity": candidate.mean_perplexity,
+                "suite_pass_rates": candidate.suite_pass_rates,
+                "runtime_seconds": candidate.runtime_seconds,
+                "load_ok": candidate.load_ok,
+                "inference_ok": candidate.inference_ok,
+            },
+            "regression_detected": comparison.get("regression_detected"),
+            "quality_gate": comparison.get("quality_gate"),
+            "quality_gate_result": comparison.get("quality_gate_result"),
+            "production_quality_validated": bool(comparison.get("production_quality_validated")),
+            "decision": decision,
+            "decision_reasons": comparison.get("reasons"),
+            "real_evaluation_executed": bool(baseline.load_ok or candidate.load_ok),
+            "real_rollback_executed": real_rollback,
+            "rollback": rollback_result,
+            "activation": activation_result,
+            "current_active_model": (self.models.active() or {}).get("model_id"),
+            "current_lkg": (self.models.last_known_good() or {}).get("model_id"),
+            "rollback_available": bool(self.models.last_known_good()),
+            "comparison": comparison,
+            "baseline_detail": baseline.to_dict(),
+            "candidate_detail": candidate.to_dict(),
+            "at": time.time(),
+        }
+        report_path = write_report(self.root / "artifacts" / report_name, report)
+        report["report_path"] = report_path
+        self.audit.record(
+            "post_train_validation",
+            decision=decision,
+            quality_gate_result=comparison.get("quality_gate_result"),
+            production_quality_validated=bool(comparison.get("production_quality_validated")),
+            report_path=report_path,
+        )
+        return report
 
     def monitor_and_maybe_rollback(self, *, force_regression: bool = False) -> dict[str, Any]:
         active = self.models.active()
