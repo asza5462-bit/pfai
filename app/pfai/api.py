@@ -1144,7 +1144,6 @@ def sandbox_status(owner: str = Depends(require_owner)):
 def phase14_platform_status(owner: str = Depends(require_owner)):
     from .engineering import phase14_status
     st = phase14_status()
-    st['PHASE_14_ALLOWED'] = False
     st['elite'] = {
         'skill_count': ELITE.skills.health().get('count'),
         'phase14_boot': (ELITE._boot or {}).get('phase14'),

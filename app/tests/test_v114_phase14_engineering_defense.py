@@ -14,6 +14,7 @@ from pfai.engineering.remediation import RemediationLoop
 from pfai.engineering.secure_analyzer import SecureCodeAnalyzer
 from pfai.engineering.skill_metrics import SkillEvaluationLedger
 from pfai.engineering.target_authorization import TargetAuthorizationGate
+from pfai.engineering.phase14_gates import evaluate_phase14_gates
 from pfai.elite.skill_registry_v2 import SkillRegistry2
 from pfai.model_router import ModelRouter
 
@@ -173,6 +174,41 @@ class TestUnifiedChatPhase14(unittest.TestCase):
 
         con = sqlite3.connect(str(root / "model_registry.sqlite3"))
         self.assertEqual(con.execute("select model_id from model_active where slot='default'").fetchone()[0], "model-v0007")
+
+
+class TestPhase14Gates(unittest.TestCase):
+    def test_gates_allow_when_evidence_passes(self):
+        g = evaluate_phase14_gates(full_tests={"ran": True, "failed": 0, "passed": 10, "skipped": 0})
+        self.assertEqual(g["EXACT_BLOCKERS"], [], g)
+        self.assertTrue(g["PHASE_14_ALLOWED"], g)
+        self.assertEqual(g["PHASE_14_STATUS"], "PASS")
+        self.assertTrue(g["evidence"]["MODEL_V0007"]["active"])
+        self.assertTrue(g["evidence"]["MODEL_V0007"]["production_ready"])
+        self.assertTrue(g["evidence"]["MODEL_V0001"]["intact"])
+        self.assertEqual(g["target_authorization_default"], "DENY")
+
+    def test_gates_block_when_tests_failed(self):
+        g = evaluate_phase14_gates(full_tests={"ran": True, "failed": 2, "passed": 0})
+        self.assertFalse(g["PHASE_14_ALLOWED"])
+        self.assertTrue(any("tests_failed" in b for b in g["EXACT_BLOCKERS"]))
+
+    def test_gates_block_without_suite_evidence(self):
+        # Isolate from any stamped evidence by forcing empty suite via failed path:
+        # evaluate without full_tests uses stamped file — stamp a failing one then restore.
+        from pfai.engineering import phase14_gates as gmod
+
+        path = gmod._evidence_path()
+        backup = path.read_text(encoding="utf-8") if path.is_file() else None
+        try:
+            if path.is_file():
+                path.unlink()
+            g = evaluate_phase14_gates()
+            self.assertFalse(g["PHASE_14_ALLOWED"])
+            self.assertIn("full_suite_evidence_missing", g["EXACT_BLOCKERS"])
+        finally:
+            if backup is not None:
+                path.parent.mkdir(parents=True, exist_ok=True)
+                path.write_text(backup, encoding="utf-8")
 
 
 if __name__ == "__main__":

@@ -8,7 +8,6 @@ from pathlib import Path
 from typing import Any
 
 from pfai.authorized_execution import ActionPermissionGate, AuthorizedExecutor, sanitize_args
-from pfai.elite.sandbox import Sandbox
 from pfai.engineering.project_workspace import ProjectWorkspace
 from pfai.engineering.remediation import RemediationLoop
 from pfai.engineering.secure_analyzer import SecureCodeAnalyzer
@@ -91,8 +90,10 @@ class ApplicationBuilder:
             files = ws.list_files()
             test_files = [f for f in files if f.startswith("tests/")]
             validation: dict[str, Any] = {"files_exist": bool(files), "tests_exist": bool(test_files)}
-            # Run tests in sandbox
+            # Run tests in sandbox (lazy import avoids elite↔engineering cycle)
             if run_tests and test_files:
+                from pfai.elite.sandbox import Sandbox
+
                 sb = Sandbox(root=str(project_root / ".pfai" / "sandbox_run"), timeout=20.0, allow_network=False)
                 try:
                     # Execute pytest against project if available

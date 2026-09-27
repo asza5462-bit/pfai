@@ -243,16 +243,11 @@ def register_phase14_skills(registry: SkillRegistry2, *, activate: bool = True) 
     return {"ok": True, "registered": registered, "skipped": skipped, "count": len(registered)}
 
 
-def phase14_status() -> dict[str, Any]:
-    return {
-        "phase": 14,
-        "APPLICATION_ENGINEERING_STATUS": "READY",
-        "SECURITY_ANALYSIS_STATUS": "READY",
-        "AUTHORIZED_TESTING_STATUS": "READY_BOUNDED",
-        "REMEDIATION_STATUS": "READY",
-        "PHASE_14_ALLOWED": True,  # set only after gates in final audit — status helper reports capability readiness
-        "target_authorization_default": "DENY",
-        "offensive_capabilities": False,
-        "learning_cannot_grant_privileges": True,
-        "skill_metrics": SkillEvaluationLedger().summary(),
-    }
+def phase14_status(*, full_tests: dict | None = None) -> dict[str, Any]:
+    """Capability + gate status. PHASE_14_ALLOWED only when evaluate_phase14_gates passes."""
+    from pfai.engineering.phase14_gates import evaluate_phase14_gates
+
+    gates = evaluate_phase14_gates(full_tests=full_tests)
+    gates["phase"] = 14
+    gates["skill_metrics"] = SkillEvaluationLedger().summary()
+    return gates

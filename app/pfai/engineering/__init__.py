@@ -6,6 +6,7 @@ from pfai.engineering.authorized_testing import AuthorizedSecurityTester
 from pfai.engineering.secure_analyzer import SecureCodeAnalyzer
 from pfai.engineering.remediation import RemediationLoop
 from pfai.engineering.phase14_skills import register_phase14_skills, phase14_status
+from pfai.engineering.phase14_gates import evaluate_phase14_gates, stamp_phase14_suite_evidence
 from pfai.engineering.skill_metrics import SkillEvaluationLedger
 
 __all__ = [
@@ -16,5 +17,7 @@ __all__ = [
     "RemediationLoop",
     "register_phase14_skills",
     "phase14_status",
+    "evaluate_phase14_gates",
+    "stamp_phase14_suite_evidence",
     "SkillEvaluationLedger",
 ]

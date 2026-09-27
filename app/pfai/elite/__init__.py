@@ -1,6 +1,9 @@
-"""PHASE 12/13 Elite AI Skills + Tool Fabric."""
+"""PHASE 12/13 Elite AI Skills + Tool Fabric.
 
-from pfai.elite.unified_orchestrator import EliteOrchestrator
+EliteOrchestrator is lazy-imported to avoid circular imports with
+pfai.engineering (engineering → sandbox → elite → orchestrator → engineering).
+"""
+
 from pfai.elite.skill_registry_v2 import SkillRegistry2
 from pfai.elite.discovery import SkillDiscoveryEngine
 from pfai.elite.composer import SkillComposer
@@ -27,3 +30,11 @@ __all__ = [
     "WebProviderRegistry",
     "WebResearchExecutor",
 ]
+
+
+def __getattr__(name: str):
+    if name == "EliteOrchestrator":
+        from pfai.elite.unified_orchestrator import EliteOrchestrator
+
+        return EliteOrchestrator
+    raise AttributeError(f"module {__name__!r} has no attribute {name!r}")

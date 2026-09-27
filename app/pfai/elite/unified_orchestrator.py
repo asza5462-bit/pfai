@@ -19,11 +19,6 @@ from pfai.elite.skill_registry_v2 import SkillRegistry2
 from pfai.elite.tool_fabric import ToolFabric
 from pfai.elite.types import OrchestratorMode, new_id
 from pfai.elite.web_fabric import WEB_PROVIDER_UNAVAILABLE, WebInformationFabric
-from pfai.engineering.phase14_skills import register_phase14_skills
-from pfai.engineering.application_builder import ApplicationBuilder
-from pfai.engineering.authorized_testing import AuthorizedSecurityTester
-from pfai.engineering.skill_metrics import SkillEvaluationLedger
-from pfai.engineering.secure_analyzer import SecureCodeAnalyzer
 from pfai.model_router import ModelRouter
 
 
@@ -67,11 +62,15 @@ class EliteOrchestrator:
         self.self_check = SelfCheckEngine()
         self.recovery = FailureRecovery(max_retries=2)
         self.learning = SkillLearningBridge(path=str(self.root / "skill_learning.jsonl"))
+        from pfai.engineering.skill_metrics import SkillEvaluationLedger
+
         self.skill_metrics = SkillEvaluationLedger(path=str(self.root / "skill_evaluations.jsonl"))
         self.audit_path = self.root / "elite_audit.jsonl"
         self._lock = threading.RLock()
         self._boot = {"skills": None, "tools": None, "phase14": None}
         if bootstrap_skills:
+            from pfai.engineering.phase14_skills import register_phase14_skills
+
             self._boot["skills"] = register_elite_skills(self.skills, activate=True)
             self._boot["phase14"] = register_phase14_skills(self.skills, activate=True)
             self._boot["tools"] = self.tools.bootstrap_safe_tools()
@@ -275,6 +274,8 @@ class EliteOrchestrator:
                 "build a web application",
             )
         ):
+            from pfai.engineering.application_builder import ApplicationBuilder
+
             builder = ApplicationBuilder(root=str(self.root / "generated_projects"))
             phase14_result = builder.build(message, approved=approved, actor=actor)
             timeline.append({"event": "application_build", "ok": phase14_result.get("ok"), "complete": phase14_result.get("complete")})
@@ -296,6 +297,9 @@ class EliteOrchestrator:
                 "vulnerability",
             )
         ):
+            from pfai.engineering.authorized_testing import AuthorizedSecurityTester
+            from pfai.engineering.secure_analyzer import SecureCodeAnalyzer
+
             project_path = str(ctx.get("project_path") or ctx.get("path") or "")
             if project_path:
                 phase14_result = SecureCodeAnalyzer(project_path).analyze()
@@ -546,7 +550,6 @@ class EliteOrchestrator:
         from pfai.engineering.phase14_skills import phase14_status
 
         p14 = phase14_status()
-        p14["PHASE_14_ALLOWED"] = False  # true only after final audit gates
         return {
             "phase": 14,
             "skills": self.skills.health(),
@@ -564,6 +567,7 @@ class EliteOrchestrator:
             "sandbox": Sandbox(timeout=1.0).metadata(),
             "EMAIL_NOTE": "see /platform/email/status",
             "phase14": p14,
+            "PHASE_14_ALLOWED": bool(p14.get("PHASE_14_ALLOWED")),
             "skill_metrics": self.skill_metrics.summary(),
         }
 
