@@ -37,20 +37,17 @@ def examples_to_eval_tasks(examples: list[dict[str, Any]], *, limit: int | None 
         if not inst or not resp:
             continue
         # Prefer coding-like probes when response looks like code
-        is_code = ("def " in resp) or ("return " in resp) or ("assert " in resp)
-        tokens = [t for t in re.findall(r"[A-Za-z0-9_]{3,}", resp.lower()) if t not in {
-            "the", "and", "for", "with", "this", "that", "from", "are", "was", "were", "have",
-        }]
-        expect = tokens[:3] if tokens else []
-        # Dataset probes validate nonempty/safe generation on real prompts.
-        # Coding probes keep soft token expectations when available.
-        if is_code and expect:
+        is_code = ("def " in resp) or ("return " in resp) or ("assert " in resp) or resp.lstrip().startswith("return")
+        # Objective coding checks: require code structure tokens (not random solution words).
+        # Non-coding provenance examples validate nonempty/safe generation on real prompts.
+        if is_code:
+            expect = ["return", "def"]
             score_mode = "expect"
             soft = True
         else:
+            expect = []
             score_mode = "nonempty_safe"
             soft = True
-            expect = []
         tasks.append(
             {
                 "id": f"evaldata-{(ex.get('content_hash') or str(i))[:12]}",

@@ -56,6 +56,14 @@ def approved_pfai_seed_examples() -> list[dict[str, Any]]:
                     "provenance": {"category": "owner_approved_seed", "phase": "9"},
                 }
             )
+    # Phase 11: merge validated production training bank (disjoint from eval bank)
+    try:
+        from .production_banks import production_train_examples
+
+        for row in production_train_examples():
+            rows.append(row)
+    except Exception:
+        pass
     return rows
 
 

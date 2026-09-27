@@ -134,6 +134,15 @@ class EvaluationDatasetBuilder:
                 [exclude_train_dataset_dir / "train.jsonl"]
             )
 
+        # Always exclude production train-bank hashes from evaluation harvest
+        try:
+            from .production_banks import production_train_examples
+
+            exclude |= {r["content_hash"] for r in production_train_examples()}
+            filtering["production_train_bank_exclusion"] = True
+        except Exception:
+            filtering["production_train_bank_exclusion"] = False
+
         # 1) Held-out splits from nominated dataset (validation/test only)
         if exclude_train_dataset_dir and exclude_train_dataset_dir.exists():
             for split in ("validation", "test"):
@@ -273,17 +282,26 @@ class EvaluationDatasetBuilder:
                 continue
 
         # 4) Approved seeds + curriculum (external to train split ideally)
+        # Never include production train-bank rows in evaluation (leakage).
         try:
             from .experience_seeds import approved_pfai_seed_examples
+            from .production_banks import production_train_examples
 
+            train_bank_hashes = {r["content_hash"] for r in production_train_examples()}
+            exclude = set(exclude) | train_bank_hashes
             for i, row in enumerate(approved_pfai_seed_examples()):
+                prov = row.get("provenance") or {}
+                if prov.get("bank") == "train":
+                    continue
+                if row.get("content_hash") in train_bank_hashes:
+                    continue
                 self._add(
                     bucket,
                     instruction=row.get("instruction") or "",
                     response=row.get("response") or "",
                     source="approved_seed",
                     source_id=str(row.get("source_id") or i),
-                    provenance={"kind": "owner_approved_seed"},
+                    provenance={"kind": "owner_approved_seed", **prov},
                     exclude_hashes=exclude,
                 )
         except Exception:
@@ -429,6 +447,23 @@ class EvaluationDatasetBuilder:
                 con.close()
             except Exception:
                 continue
+
+        # 6) Production evaluation bank (disjoint from production train bank)
+        try:
+            from .production_banks import production_eval_examples
+
+            for row in production_eval_examples():
+                self._add(
+                    bucket,
+                    instruction=row.get("instruction") or "",
+                    response=row.get("response") or "",
+                    source=str(row.get("source") or "production_bank_eval"),
+                    source_id=str(row.get("source_id") or ""),
+                    provenance=row.get("provenance") or {"bank": "eval"},
+                    exclude_hashes=exclude,
+                )
+        except Exception:
+            pass
 
         examples = list(bucket.values())
         by_source: dict[str, int] = {}
