@@ -1,6 +1,6 @@
 # PFAI Project Memory
 
-Last updated: 2026-09-27 (Longevity PHASE 8)
+Last updated: 2026-09-27 (Longevity PHASE 9)
 
 ## Snapshot
 
@@ -8,18 +8,18 @@ Last updated: 2026-09-27 (Longevity PHASE 8)
 |---|---|
 | Schema | target **5** |
 | Owner auth | Email OTP intact (PHASE 5) |
-| Autonomous training | Orchestrator + detector + real LoRA backend (PHASE 6–8) |
-| Training runtime (this env) | **AVAILABLE** (CPU; torch/transformers/peft/datasets/safetensors) |
-| Real training executed | **true** (bounded LoRA on local tiny-random-gpt2) |
-| Real model active | **true** (phase8 verify run; adapter safetensors) |
-| LKG | **implemented** (first activation marks LKG; auto-rollback tested) |
-| Autonomous tick | **ready** (dataset/schedule/owner — not per-chat) |
-| Model quality claim | **false** for 9-example tiny run (pipeline proof only) |
-| Skill packs | versioned registry enabled |
+| Training runtime | **AVAILABLE** (CPU) |
+| GPU_AVAILABLE | **false** |
+| Base open-weight | `data/models/distilgpt2` (~82M, operator-approved) |
+| Tiny test model | `tiny-random-gpt2` (TEST_ONLY; not production) |
+| Real training executed | **true** (Phase 9 LoRA on distilgpt2) |
+| LKG / rollback | **implemented + verified** |
+| Autonomous tick | **ready** (not per-chat) |
+| MODEL_QUALITY_PRODUCTION_VALIDATED | **false** |
 | Anthropic required | false |
 
 ## Honesty
 
-- MOCK TESTS: CI/unit path with `allow_mock_backend`
-- REAL TRAINING VERIFIED: PEFT Trainer loop + reloadable adapter checkpoint
-- Never conflate the two
+- MOCK ≠ REAL
+- Pipeline success ≠ production quality
+- No silent model downloads

@@ -43,6 +43,7 @@ class AutonomousTrainingOrchestrator:
         eval_runner=None,
         collector: ExperienceCollector | None = None,
         allow_mock_backend: bool | None = None,
+        include_approved_seeds: bool | None = None,
     ) -> None:
         self.root = Path(root)
         self.root.mkdir(parents=True, exist_ok=True)
@@ -84,6 +85,12 @@ class AutonomousTrainingOrchestrator:
         )
         self.min_dataset_quality = float(os.environ.get("TRAINING_MIN_DATASET_QUALITY", "0.55"))
         self.training_code_version = os.environ.get("PFAI_TRAINING_CODE_VERSION") or "phase8-v1"
+        env_seeds = (os.environ.get("TRAINING_INCLUDE_APPROVED_SEEDS") or "false").lower() in (
+            "1",
+            "true",
+            "yes",
+        )
+        self.include_approved_seeds = env_seeds if include_approved_seeds is None else bool(include_approved_seeds)
         self._ensure_default_sources()
         self._state = self._load_state()
         self.reconcile_stale_jobs()
@@ -99,6 +106,10 @@ class AutonomousTrainingOrchestrator:
                 "durable_learning",
                 lambda: collect_from_learning_pipeline(self.learning_pipeline),
             )
+        if self.include_approved_seeds and "approved_seed" not in getattr(self.collector, "_sources", {}):
+            from .experience_seeds import approved_pfai_seed_examples
+
+            self.collector.register("approved_seed", approved_pfai_seed_examples)
 
     def _load_state(self) -> dict[str, Any]:
         if self.state_path.exists():
@@ -238,6 +249,11 @@ class AutonomousTrainingOrchestrator:
                 "available": bool(self.models.last_known_good() or self.rollback_mgr.last_known_good()),
             },
             "lkg_model": self.models.last_known_good(),
+            "active_model_runtime_status": self.active_runtime.describe_status(
+                lkg=self.models.last_known_good(),
+                training_backend="transformers_lora",
+            ),
+            "open_weight_selection": None,  # filled by API when requested
             "resource_status": self.resources.admit(dataset_rows=0, method="lora", running_jobs=0),
             "autonomous_training_enabled": self.autonomous_enabled,
             "paused": bool(self._state.get("paused")),

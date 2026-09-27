@@ -123,6 +123,23 @@ Promotion to active **never** happens automatically. Use owner-authenticated API
 See also `docs/OWNER_AUTH.md` for first-time setup, sessions, and rotation.
 See `docs/TRAINING_RUNTIME.md` for real LoRA enablement, rollback, and honesty labels.
 
+## Real open-weight model (PHASE 9)
+
+```bash
+# Explicit install only (requires --approve):
+python -m pfai.longevity.autonomous_training.install_open_weight \
+  --model distilgpt2 --dest data/models/distilgpt2 --approve
+
+export MODEL_PATH=data/models/distilgpt2
+export MODEL_PROVIDER=transformers_local
+export MODEL_LICENSE=apache-2.0
+
+# Discover / status (owner-gated):
+curl -H "X-Owner-Secret: …" 'http://127.0.0.1:8000/platform/models/open-weight?probe_load=false'
+```
+
+See `docs/REAL_MODEL_RUNTIME.md` and `docs/TRAINING_LIMITATIONS.md`.
+
 ## Real training (PHASE 8)
 
 ```bash

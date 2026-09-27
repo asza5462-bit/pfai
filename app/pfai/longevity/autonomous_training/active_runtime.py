@@ -163,3 +163,48 @@ class ActiveModelRuntime:
             meta={"via": "rollback"},
         )
         return {"ok": switched.get("status") == "ACTIVE", "runtime": switched}
+
+    def describe_status(
+        self,
+        *,
+        lkg: dict[str, Any] | None = None,
+        training_backend: str | None = None,
+    ) -> dict[str, Any]:
+        """Honest ActiveModelRuntime status for Control Center / APIs."""
+        cur = self.current()
+        cp = cur.get("checkpoint_ref") or cur.get("adapter_path")
+        integrity = self.verify_checkpoint(str(cp)) if cp else {"ok": False, "error": "no_checkpoint"}
+        base = cur.get("base_model")
+        gpu = False
+        try:
+            import torch
+
+            gpu = bool(torch.cuda.is_available())
+        except Exception:
+            gpu = False
+        return {
+            "MODEL_AVAILABLE": bool(base or cp),
+            "MODEL_LOADABLE": bool(integrity.get("ok")),
+            "MODEL_ACTIVE": cur.get("status") == "ACTIVE" and bool(cur.get("loaded")),
+            "MODEL_VERSION": cur.get("model_id"),
+            "BASE_MODEL": base,
+            "ADAPTER": cur.get("adapter_path") or cp,
+            "LKG_VERSION": (lkg or {}).get("model_id"),
+            "GPU_AVAILABLE": gpu,
+            "TRAINING_BACKEND": training_backend,
+            "runtime": cur,
+            "integrity": integrity,
+        }
+
+    def bind_inference_provider(self, provider: Any) -> dict[str, Any]:
+        """If provider supports bind_adapter, point it at the active checkpoint."""
+        cur = self.current()
+        adapter = cur.get("adapter_path") or cur.get("checkpoint_ref")
+        bind = getattr(provider, "bind_adapter", None)
+        if callable(bind) and adapter:
+            return bind(adapter)
+        ensure = getattr(provider, "ensure_loaded", None)
+        if callable(ensure):
+            return ensure()
+        return {"ok": False, "error": "provider_does_not_support_local_bind"}
+

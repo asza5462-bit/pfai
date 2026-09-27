@@ -95,3 +95,11 @@ Training is forbidden from modifying owner authentication, OTP, authorization, s
 - Full state machine including SHADOW → CANARY → ACTIVATING → ACTIVE
 - Honest dashboard/API labels distinguishing mock tests from real training
 - See `docs/TRAINING_RUNTIME.md`
+
+## PHASE 9 additions
+
+- Local open-weight discovery/selection (`OpenWeightModelSelector`); tiny-random classified TEST_ONLY
+- Explicit model install path (no silent downloads)
+- `transformers_local` inference provider wired through ProviderRegistry
+- Expanded approved experience seeds; dataset leakage/quality statuses
+- See `docs/REAL_MODEL_RUNTIME.md`, `docs/AUTONOMOUS_TRAINING.md`, `docs/TRAINING_LIMITATIONS.md`

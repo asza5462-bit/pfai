@@ -95,6 +95,17 @@ class ProviderRegistry:
                 ),
                 lambda **kw: _make_local("open_weight", **kw),
             )
+        if "transformers_local" not in self._specs:
+            self.register(
+                ProviderSpec(
+                    provider_id="transformers_local",
+                    kind="transformers_local",
+                    description="In-process local HF/transformers open-weight loader (MODEL_PATH)",
+                    offline_capable=True,
+                    requires_api_key=False,
+                ),
+                _make_transformers_local,
+            )
         if "anthropic" not in self._specs:
             self.register(
                 ProviderSpec(
@@ -154,6 +165,19 @@ def _factory_kwargs(provider_id: str, cfg: dict[str, Any]) -> dict[str, Any]:
             "context_length": cfg.get("context_length", settings["context_length"]),
             "probe_on_init": cfg.get("probe_on_init", True),
         }
+    if provider_id == "transformers_local":
+        import os as _os
+
+        return {
+            "model_path": cfg.get("model_path")
+            or cfg.get("model")
+            or _os.environ.get("MODEL_PATH")
+            or "",
+            "adapter_path": cfg.get("adapter_path"),
+            "max_new_tokens": int(cfg.get("max_tokens") or cfg.get("max_new_tokens") or 64),
+            "temperature": float(cfg.get("temperature") or 0.2),
+            "context_length": int(cfg.get("context_length") or _os.environ.get("MODEL_CONTEXT_LENGTH") or 512),
+        }
     if provider_id == "anthropic":
         return {
             "model": cfg.get("model", "claude-opus-5"),
@@ -178,6 +202,18 @@ def _make_local(provider_id: str, **kwargs: Any) -> ModelProvider:
     from pfai.model_local import build_local_or_open_weight
 
     return build_local_or_open_weight(provider_id, **kwargs)
+
+
+def _make_transformers_local(**kwargs: Any) -> ModelProvider:
+    from pfai.model_transformers_local import TransformersLocalProvider
+
+    return TransformersLocalProvider(
+        model_path=kwargs.get("model_path"),
+        adapter_path=kwargs.get("adapter_path"),
+        max_new_tokens=int(kwargs.get("max_new_tokens") or 64),
+        temperature=float(kwargs.get("temperature") or 0.2),
+        context_length=int(kwargs.get("context_length") or 512),
+    )
 
 
 def _make_anthropic(**kwargs: Any) -> ModelProvider:

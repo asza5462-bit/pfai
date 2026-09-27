@@ -286,6 +286,7 @@ AUTONOMOUS_TRAINING = AutonomousTrainingOrchestrator(
     learning_pipeline=PLATFORM_LEARNING,
     eval_runner=_platform_eval_runner,
     allow_mock_backend=False,
+    include_approved_seeds=True,
 )
 
 # Migration runner: backup longevity learning DB before apply
@@ -1570,7 +1571,28 @@ class AutonomousToggleBody(BaseModel):
 def platform_runtime_status(owner: str = Depends(require_owner)):
     _ = owner
     probe = TrainingRuntimeDetector().detect()
-    return {'ok': True, **probe.to_dict(), 'active_runtime': AUTONOMOUS_TRAINING.active_runtime.current()}
+    from pfai.longevity.autonomous_training.open_weight_catalog import OpenWeightModelSelector
+
+    selection = OpenWeightModelSelector().select_production_candidate(probe_load=False)
+    return {
+        'ok': True,
+        **probe.to_dict(),
+        'active_runtime': AUTONOMOUS_TRAINING.active_runtime.current(),
+        'active_model_runtime_status': AUTONOMOUS_TRAINING.active_runtime.describe_status(
+            lkg=AUTONOMOUS_TRAINING.models.last_known_good(),
+            training_backend='transformers_lora',
+        ),
+        'open_weight': selection,
+        'hardware': selection.get('hardware') or OpenWeightModelSelector.hardware_audit(),
+    }
+
+
+@app.get('/platform/models/open-weight')
+def platform_open_weight_models(owner: str = Depends(require_owner), probe_load: bool = False):
+    _ = owner
+    from pfai.longevity.autonomous_training.open_weight_catalog import OpenWeightModelSelector
+
+    return OpenWeightModelSelector().select_production_candidate(probe_load=bool(probe_load))
 
 
 @app.get('/platform/training/runtime')

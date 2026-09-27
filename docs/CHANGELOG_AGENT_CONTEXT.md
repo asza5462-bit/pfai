@@ -1,5 +1,21 @@
 # Agent Context Changelog
 
+## 2026-09-27 — Longevity PHASE 9: Real open-weight upgrade + autonomous training
+
+### Added
+- `OpenWeightModelSelector` + hardware audit (honest GPU/VRAM)
+- Explicit installer `install_open_weight` (requires `--approve`; no silent download)
+- `transformers_local` provider (in-process MODEL_PATH + optional LoRA adapter)
+- Approved experience seeds + stronger DatasetQualityGate (`DATASET_READY` / leakage)
+- Docs: REAL_MODEL_RUNTIME, AUTONOMOUS_TRAINING, MODEL_REGISTRY, DATASET_PIPELINE, TRAINING_LIMITATIONS
+- Tests `test_v100_phase9_open_weight.py`
+
+### Executed (this environment)
+- Installed **distilgpt2** locally with explicit `--approve`
+- Real LoRA on distilgpt2 → safetensors checkpoint → eval/canary → activate → LKG → rollback
+- GPU_AVAILABLE=false; CPU LoRA strategy
+- MODEL_QUALITY_PRODUCTION_VALIDATED=**false** (small dataset / bounded steps)
+
 ## 2026-09-27 — Longevity PHASE 8: Real training runtime enablement + first verified real training
 
 ### Added
