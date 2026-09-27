@@ -7,6 +7,7 @@ from .migration_runner import MigrationRunner
 from .versioned_store import InMemoryVersionedStore
 from .export_bundle import ExportBundleScaffold
 from .compat_layer import CompatibilityLayer
+from .migrations import PLATFORM_MIGRATIONS, register_platform_migrations
 
 __all__ = [
     "ProviderRegistry",
@@ -18,4 +19,6 @@ __all__ = [
     "InMemoryVersionedStore",
     "ExportBundleScaffold",
     "CompatibilityLayer",
+    "PLATFORM_MIGRATIONS",
+    "register_platform_migrations",
 ]

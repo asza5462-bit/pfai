@@ -1,5 +1,24 @@
 # Agent Context Changelog
 
+## 2026-09-27 — Longevity PHASE 3: LTM / Knowledge / Migrations / Export
+
+### Added
+- Durable `LongTermMemory` version history (SQLite) + dedicated LTM content store
+- `KnowledgeLayer` ↔ `KnowledgeVersionStore` (search/publish/history/rollback)
+- `MigrationRunner` apply with mandatory backup; schema → **2**; `longevity/migrations.py`
+- Populated `pfai-export-v1` export/import; durable eval baselines + `longevity` suite
+- Additive owner-gated routes: `/platform/ltm*`, `/platform/knowledge/versions*`, `/platform/eval*`, `/platform/migrations*`, `/platform/export*`
+- Tests `test_v94_phase3_longevity.py`; ADR-023
+
+### Behavior
+- `/chat/*`, Dashboard, owner auth unchanged
+- Learning still `allows_weight_mutation()==False`; Anthropic not required
+- Memory substring hits preferred alongside semantic index (search merge)
+
+### Verified
+- pytest: **362 passed**
+- No deploy; no git remote added
+
 ## 2026-09-27 — Owner Authentication + first-time setup
 
 ### Added

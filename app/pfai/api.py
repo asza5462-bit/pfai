@@ -37,10 +37,16 @@ from .orchestrator import Orchestrator
 from .memory_system import LongTermMemory, MemorySystem
 from .knowledge_layer import KnowledgeLayer
 from .longevity.durable_learning import DurableSafeLearningPipeline, KnowledgeVersionStore, LearningAuditLog
+from .longevity.migration_runner import MigrationRunner
+from .longevity.migrations import register_platform_migrations
+from .longevity.export_bundle import ExportBundleScaffold
+from .backup_manager import BackupManager
+from .memory import MemoryStore
 from .platform_evaluation import PlatformEvaluation
 from .self_check import SelfCheck, SelfHeal
 from .longevity.compat_layer import CompatibilityLayer
 from .interfaces.types import OrchestratorRequest
+from .interfaces.memory import MemoryKind, MemoryRecord
 from .interfaces.skills import Skill
 from .interfaces.tools import ToolPermission
 from .skills.registry import SkillRegistry
@@ -221,7 +227,7 @@ COMMAND_AGENT.coding_agent = CODING_AGENT
 log.info('command chat brain ready provider_probe=%s', COMMAND_AGENT.provider_name())
 log.info('coding academy ready provider_probe=%s tracks=%s', CODING_AGENT.provider_name(), len(CODING_CURRICULUM.list_tracks()))
 
-# --- PHASE 2: ProviderRegistry + ModelRouter + Orchestrator (additive) ---
+# --- PHASE 2/3: ProviderRegistry + ModelRouter + Orchestrator + deep LTM/Knowledge ---
 _MODEL_CFG = Config.load('configs/default.json').get('model', {})
 PROVIDER_REGISTRY = ProviderRegistry()
 PROVIDER_REGISTRY.bootstrap_defaults()
@@ -229,23 +235,52 @@ MODEL_ROUTER = ModelRouter.from_config(_MODEL_CFG, registry=PROVIDER_REGISTRY)
 # Bind the live runtime model as DEFAULT without requiring Anthropic for Core.
 MODEL_ROUTER.bind('default', runtime.model)
 
-PLATFORM_LTM = LongTermMemory(COMMAND_MEMORY)
+# PHASE 3: dedicated LTM store (kinds preserved; isolated from Command Chat memory)
+PLATFORM_LTM_STORE = MemoryStore('data/longevity/ltm_content.sqlite3')
+PLATFORM_LTM = LongTermMemory(
+    PLATFORM_LTM_STORE,
+    versions_path='data/longevity/ltm_versions.sqlite3',
+)
 PLATFORM_MEMORY = MemorySystem(ltm=PLATFORM_LTM)
+PLATFORM_KNOWLEDGE_VERSIONS = KnowledgeVersionStore('data/longevity/knowledge_versions.sqlite3')
 PLATFORM_KNOWLEDGE = KnowledgeLayer(
     search_fn=lambda q, limit: runtime.store.search(q, int(limit or 5)),
+    version_store=PLATFORM_KNOWLEDGE_VERSIONS,
+    curriculum_search=lambda q, limit: CODING_CURRICULUM.knowledge_search(q, int(limit or 8)),
 )
-PLATFORM_KNOWLEDGE_VERSIONS = KnowledgeVersionStore('data/longevity/knowledge_versions.sqlite3')
 PLATFORM_LEARNING_AUDIT = LearningAuditLog('data/longevity/learning_audit.jsonl')
 PLATFORM_LEARNING = DurableSafeLearningPipeline(
     'data/longevity/learning.sqlite3',
     knowledge_store=PLATFORM_KNOWLEDGE_VERSIONS,
     audit=PLATFORM_LEARNING_AUDIT,
-    memory_remember=lambda kind, content, source='', confidence=0.8: COMMAND_MEMORY.remember(
+    memory_remember=lambda kind, content, source='', confidence=0.8: PLATFORM_LTM.remember_kind(
         kind, content, source=source or 'safe_learning', confidence=confidence
     ),
 )
-PLATFORM_EVAL = PlatformEvaluation()
-PLATFORM_COMPAT = CompatibilityLayer()
+PLATFORM_EVAL = PlatformEvaluation(baselines_path='data/longevity/eval_baselines.json')
+
+# Migration runner: backup longevity learning DB before apply
+_LONGEVITY_BACKUP_SRC = Path('data/longevity/learning.sqlite3')
+_LONGEVITY_BACKUP_SRC.parent.mkdir(parents=True, exist_ok=True)
+if not _LONGEVITY_BACKUP_SRC.exists():
+    _LONGEVITY_BACKUP_SRC.write_bytes(b'')
+
+
+def _platform_migration_backup() -> dict:
+    mgr = BackupManager(str(_LONGEVITY_BACKUP_SRC), 'data/longevity/migration_backups', retention=5)
+    return mgr.create(label='pre_migrate')
+
+
+PLATFORM_MIGRATIONS_RUNNER = MigrationRunner(
+    state_path='data/longevity/schema_version.json',
+    backup_fn=_platform_migration_backup,
+)
+register_platform_migrations(PLATFORM_MIGRATIONS_RUNNER)
+
+PLATFORM_COMPAT = CompatibilityLayer(
+    current_schema=PLATFORM_MIGRATIONS_RUNNER.current_version(),
+    migration_status=PLATFORM_MIGRATIONS_RUNNER.status(),
+)
 PLATFORM_SELF_CHECK = SelfCheck({
     'runtime_health': lambda: {'ok': True, **{k: runtime.health().get(k) for k in ('status', 'version')}},
     'compat': lambda: {'ok': PLATFORM_COMPAT.check().python_ok, 'schema': PLATFORM_COMPAT.schema_version()},
@@ -254,9 +289,55 @@ PLATFORM_SELF_CHECK = SelfCheck({
         'ok': any(p.offline_capable for p in PROVIDER_REGISTRY.list_providers()),
         'providers': [p.provider_id for p in PROVIDER_REGISTRY.list_providers()],
     },
+    'ltm_ready': lambda: {'ok': True, 'phase': 3},
 })
 PLATFORM_SELF_HEAL = SelfHeal(PLATFORM_SELF_CHECK)
 PLATFORM_SKILLS = SkillRegistry()
+
+
+def _export_knowledge_rows():
+    return [
+        {
+            'knowledge_id': kv.knowledge_id,
+            'version': kv.version,
+            'content': kv.content,
+            'source': kv.source,
+            'confidence': kv.confidence,
+            'status': kv.status.value if hasattr(kv.status, 'value') else kv.status,
+        }
+        for kv in PLATFORM_KNOWLEDGE_VERSIONS.list_active(limit=5000)
+    ]
+
+
+def _import_knowledge_rows(rows):
+    n = 0
+    for i, row in enumerate(rows or []):
+        kid = str(row.get('knowledge_id') or f'import-{i}')
+        PLATFORM_KNOWLEDGE.publish(
+            kid,
+            str(row.get('content') or ''),
+            source=str(row.get('source') or 'import'),
+            confidence=float(row.get('confidence') or 0.5),
+        )
+        n += 1
+    return n
+
+
+PLATFORM_EXPORT = ExportBundleScaffold(
+    memory_export=lambda: PLATFORM_LTM.export_records(),
+    knowledge_export=_export_knowledge_rows,
+    config_export=lambda: {
+        'schema_version': PLATFORM_MIGRATIONS_RUNNER.target_version(),
+        'providers': [p.provider_id for p in PROVIDER_REGISTRY.list_providers()],
+        'anthropic_required': False,
+    },
+    skills_export=lambda: [
+        {'name': getattr(s, 'name', str(s)), 'version': getattr(s, 'version', '1')}
+        for s in (PLATFORM_SKILLS.list_skills() if hasattr(PLATFORM_SKILLS, 'list_skills') else [])
+    ],
+    memory_import=lambda rows: PLATFORM_LTM.import_records(rows),
+    knowledge_import=_import_knowledge_rows,
+)
 
 ORCHESTRATOR = Orchestrator(
     model_router=MODEL_ROUTER,
@@ -279,7 +360,7 @@ PLATFORM_SKILLS.register(
     lambda ctx=None, **_k: PLATFORM_LEARNING.training_readiness(),
 )
 log.info(
-    'orchestrator ready providers=%s roles=%s anthropic_required=false',
+    'orchestrator ready providers=%s roles=%s anthropic_required=false phase=3',
     [p.provider_id for p in PROVIDER_REGISTRY.list_providers()],
     MODEL_ROUTER.available_roles(),
 )
@@ -482,6 +563,11 @@ def health():
             'anthropic_required': False,
             'providers': [p.provider_id for p in PROVIDER_REGISTRY.list_providers()],
             'schema_version': PLATFORM_COMPAT.schema_version(),
+            'schema_current': PLATFORM_MIGRATIONS_RUNNER.current_version(),
+            'schema_pending': PLATFORM_MIGRATIONS_RUNNER.status().get('pending_count', 0),
+            'ltm': True,
+            'eval_suites': len(PLATFORM_EVAL.list_suites()),
+            'phase': 3,
         },
     })
 
@@ -812,6 +898,273 @@ def platform_providers(owner: str = Depends(require_owner)):
         'router': MODEL_ROUTER.describe(),
         'anthropic_required': False,
     }
+
+
+# --- PHASE 3: LTM / Knowledge versions / Eval / Migrations / Export ---
+class LtmStoreBody(BaseModel):
+    content: str
+    kind: str = 'semantic'
+    source: str = 'api'
+    confidence: float = 0.8
+    record_id: str = ''
+
+
+class KnowledgePublishBody(BaseModel):
+    knowledge_id: str
+    content: str
+    source: str = 'manual'
+    confidence: float = 0.8
+    meta: dict = {}
+
+
+class KnowledgeRollbackBody(BaseModel):
+    knowledge_id: str
+    to_version: int
+
+
+class EvalBaselineBody(BaseModel):
+    baseline_id: str
+    suite: str = 'longevity'
+
+
+class EvalCompareBody(BaseModel):
+    baseline_id: str
+    candidate_id: str
+    suite: str = 'longevity'
+
+
+class MigrationRunBody(BaseModel):
+    target: int | None = None
+    dry_run: bool = True
+
+
+class ExportBody(BaseModel):
+    target_dir: str = 'data/longevity/exports/latest'
+    include: list[str] | None = None
+
+
+class ImportBody(BaseModel):
+    source_dir: str
+    dry_run: bool = True
+
+
+@app.get('/platform/ltm/search')
+def platform_ltm_search(
+    q: str = '',
+    kind: str | None = None,
+    limit: int = 20,
+    owner: str = Depends(require_owner),
+):
+    _ = owner
+    rows = PLATFORM_LTM.query(kind=kind, query=q, limit=limit)
+    return {
+        'results': [
+            {
+                'record_id': r.record_id,
+                'kind': r.kind.value if hasattr(r.kind, 'value') else r.kind,
+                'content': r.content,
+                'source': r.source,
+                'confidence': r.confidence,
+                'version': r.version,
+                'status': r.status,
+            }
+            for r in rows
+        ]
+    }
+
+
+@app.post('/platform/ltm')
+def platform_ltm_store(x: LtmStoreBody, owner: str = Depends(require_owner)):
+    if not x.content.strip():
+        raise HTTPException(400, 'content is required')
+    rec = PLATFORM_LTM.store(
+        MemoryRecord(
+            record_id=x.record_id or '',
+            kind=x.kind or MemoryKind.SEMANTIC.value,
+            content=x.content.strip(),
+            source=x.source or owner,
+            confidence=float(x.confidence),
+        )
+    )
+    OWNER.authorize('PLATFORM_LTM_STORE', f'{owner} stored ltm {rec.record_id} v{rec.version}')
+    return {
+        'ok': True,
+        'record_id': rec.record_id,
+        'version': rec.version,
+        'kind': rec.kind.value if hasattr(rec.kind, 'value') else rec.kind,
+        'status': rec.status,
+    }
+
+
+@app.get('/platform/ltm/{record_id}/history')
+def platform_ltm_history(record_id: str, owner: str = Depends(require_owner)):
+    _ = owner
+    return {
+        'items': [
+            {
+                'record_id': r.record_id,
+                'version': r.version,
+                'kind': r.kind.value if hasattr(r.kind, 'value') else r.kind,
+                'content': r.content,
+                'status': r.status,
+                'source': r.source,
+            }
+            for r in PLATFORM_LTM.history(record_id)
+        ]
+    }
+
+
+@app.post('/platform/ltm/{record_id}/rollback')
+def platform_ltm_rollback(record_id: str, to_version: int | None = None, owner: str = Depends(require_owner)):
+    try:
+        rec = PLATFORM_LTM.rollback(record_id, to_version)
+    except KeyError:
+        raise HTTPException(404, 'ltm record/version not found')
+    OWNER.authorize('PLATFORM_LTM_ROLLBACK', f'{owner} rolled back {record_id}')
+    return {'ok': True, 'record_id': rec.record_id, 'version': rec.version, 'status': rec.status}
+
+
+@app.get('/platform/knowledge/versions')
+def platform_knowledge_versions(knowledge_id: str, owner: str = Depends(require_owner)):
+    _ = owner
+    hist = PLATFORM_KNOWLEDGE.history(knowledge_id)
+    active = PLATFORM_KNOWLEDGE.active(knowledge_id)
+    return {
+        'knowledge_id': knowledge_id,
+        'active_version': active.version if active else None,
+        'items': [
+            {
+                'version': kv.version,
+                'content': kv.content,
+                'status': kv.status.value if hasattr(kv.status, 'value') else kv.status,
+                'source': kv.source,
+                'confidence': kv.confidence,
+            }
+            for kv in hist
+        ],
+    }
+
+
+@app.post('/platform/knowledge/versions')
+def platform_knowledge_publish(x: KnowledgePublishBody, owner: str = Depends(require_owner)):
+    if not x.knowledge_id.strip() or not x.content.strip():
+        raise HTTPException(400, 'knowledge_id and content are required')
+    kv = PLATFORM_KNOWLEDGE.publish(
+        x.knowledge_id.strip(),
+        x.content.strip(),
+        source=x.source,
+        confidence=float(x.confidence),
+        actor=owner,
+        meta=x.meta,
+    )
+    OWNER.authorize('PLATFORM_KNOWLEDGE_PUBLISH', f'{owner} published {kv.knowledge_id} v{kv.version}')
+    return {'ok': True, 'knowledge_id': kv.knowledge_id, 'version': kv.version, 'status': kv.status}
+
+
+@app.post('/platform/knowledge/versions/rollback')
+def platform_knowledge_rollback(x: KnowledgeRollbackBody, owner: str = Depends(require_owner)):
+    try:
+        kv = PLATFORM_KNOWLEDGE.rollback(x.knowledge_id, x.to_version)
+    except KeyError:
+        raise HTTPException(404, 'knowledge version not found')
+    OWNER.authorize('PLATFORM_KNOWLEDGE_ROLLBACK', f'{owner} rolled back {x.knowledge_id} to {x.to_version}')
+    return {'ok': True, 'knowledge_id': kv.knowledge_id, 'version': kv.version, 'status': kv.status}
+
+
+@app.get('/platform/eval/suites')
+def platform_eval_suites(owner: str = Depends(require_owner)):
+    _ = owner
+    return {'suites': PLATFORM_EVAL.list_suites()}
+
+
+@app.post('/platform/eval/run')
+def platform_eval_run(suite: str = 'longevity', owner: str = Depends(require_owner)):
+    _ = owner
+    report = PLATFORM_EVAL.run_suite(suite)
+    return {
+        'suite': report.suite,
+        'ok': report.ok,
+        'passed': report.passed,
+        'failed': report.failed,
+        'fingerprint': report.fingerprint,
+        'cases': report.cases,
+        'meta': report.meta,
+    }
+
+
+@app.post('/platform/eval/baseline')
+def platform_eval_baseline(x: EvalBaselineBody, owner: str = Depends(require_owner)):
+    report = PLATFORM_EVAL.run_suite(x.suite)
+    PLATFORM_EVAL.record_baseline(x.baseline_id, report)
+    OWNER.authorize('PLATFORM_EVAL_BASELINE', f'{owner} recorded baseline {x.baseline_id}')
+    return {'ok': True, 'baseline_id': x.baseline_id, 'suite': report.suite, 'passed': report.passed, 'failed': report.failed}
+
+
+@app.post('/platform/eval/compare')
+def platform_eval_compare(x: EvalCompareBody, owner: str = Depends(require_owner)):
+    _ = owner
+    cmp = PLATFORM_EVAL.compare(x.baseline_id, x.candidate_id, suite=x.suite)
+    return {
+        'baseline_id': cmp.baseline_id,
+        'candidate_id': cmp.candidate_id,
+        'baseline_score': cmp.baseline_score,
+        'candidate_score': cmp.candidate_score,
+        'regressions': cmp.regressions,
+        'improvements': cmp.improvements,
+        'ok_to_promote': cmp.ok_to_promote,
+        'requires_owner': cmp.requires_owner,
+    }
+
+
+@app.get('/platform/migrations')
+def platform_migrations(owner: str = Depends(require_owner)):
+    _ = owner
+    st = PLATFORM_MIGRATIONS_RUNNER.status()
+    return {
+        **st,
+        'plan': [
+            {'version': m.version, 'name': m.name, 'description': m.description}
+            for m in PLATFORM_MIGRATIONS_RUNNER.plan()
+        ],
+    }
+
+
+@app.post('/platform/migrations/run')
+def platform_migrations_run(x: MigrationRunBody, owner: str = Depends(require_owner)):
+    """Dry-run by default. Non-dry-run requires owner and always backs up first."""
+    report = PLATFORM_MIGRATIONS_RUNNER.run(target=x.target, dry_run=bool(x.dry_run))
+    if not x.dry_run:
+        OWNER.authorize('PLATFORM_MIGRATE', f'{owner} applied migrations dry_run=false ok={report.ok}')
+        # Refresh compat view after apply
+        PLATFORM_COMPAT._current_schema = PLATFORM_MIGRATIONS_RUNNER.current_version()
+        PLATFORM_COMPAT._migration_status = PLATFORM_MIGRATIONS_RUNNER.status()
+    if not report.ok:
+        raise HTTPException(409, report.error or 'migration failed')
+    return {
+        'ok': report.ok,
+        'dry_run': report.dry_run,
+        'from_version': report.from_version,
+        'to_version': report.to_version,
+        'applied': report.applied,
+        'error': report.error,
+    }
+
+
+@app.post('/platform/export')
+def platform_export(x: ExportBody, owner: str = Depends(require_owner)):
+    manifest = PLATFORM_EXPORT.export_bundle(x.target_dir, include=x.include)
+    OWNER.authorize('PLATFORM_EXPORT', f'{owner} exported bundle sections={manifest.get("sections")}')
+    return {'ok': True, 'manifest': manifest, 'target_dir': x.target_dir}
+
+
+@app.post('/platform/export/import')
+def platform_export_import(x: ImportBody, owner: str = Depends(require_owner)):
+    result = PLATFORM_EXPORT.import_bundle(x.source_dir, dry_run=bool(x.dry_run))
+    if not result.get('ok'):
+        raise HTTPException(400, result.get('error') or 'import failed')
+    if not x.dry_run:
+        OWNER.authorize('PLATFORM_IMPORT', f'{owner} imported bundle dry_run=false')
+    return result
 
 
 # --- Command Chat API (Brain ↔ Heart) ---------------------------------

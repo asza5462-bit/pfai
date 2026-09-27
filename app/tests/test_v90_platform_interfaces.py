@@ -72,7 +72,7 @@ class TestScaffoldImports(unittest.TestCase):
         import pfai.task_planner as task_planner
 
         self.assertEqual(memory_system.PHASE, 3)
-        self.assertEqual(knowledge_layer.PHASE, 2)
+        self.assertEqual(knowledge_layer.PHASE, 3)
         self.assertEqual(task_planner.PHASE, 4)
         self.assertEqual(self_check.PHASE, 7)
         self.assertEqual(self_heal.PHASE, 8)

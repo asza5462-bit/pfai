@@ -156,7 +156,7 @@ Guides upgrades of runtime, deps, DB, model APIs, OS, deploy env.
 |---|---|
 | **1** | Contracts, docs, ADRs, non-wired scaffolds, tests |
 | **2 (done)** | ProviderRegistry + ModelRouter + Orchestrator wiring; durable gated learning; additive `/orchestrate` |
-| **3** | Deep LTM/Knowledge adapters, richer eval baselines, migration apply (non-dry-run) with backups |
+| **3 (done)** | Deep LTM/Knowledge adapters, richer eval baselines, migration apply (non-dry-run) with backups, portable export |
 | 4+ | Planner/Tool permission unification, skill/tool versioning UX, bounded heal actions beyond re-check |
 
 Do not skip phases. Do not replace FastAPI/Dashboard in foundation work.

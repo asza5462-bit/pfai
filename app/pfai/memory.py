@@ -34,6 +34,7 @@ class MemoryStore:
             rows=self.db.execute('SELECT id,kind,content,source,confidence,created_at FROM memories WHERE content LIKE ? ORDER BY id DESC LIMIT ?',(f'%{query}%',limit)).fetchall()
         return [dict(id=r[0],kind=r[1],content=r[2],source=r[3],confidence=r[4],created_at=r[5]) for r in rows]
     def search(self,query,limit=10):
+        like = self._like_search(query, limit)
         if self.vector_store is not None:
             try:
                 hits=self.vector_store.search(query,limit=limit)
@@ -44,10 +45,17 @@ class MemoryStore:
                     with self._lock:
                         row=self.db.execute('SELECT id,kind,content,source,confidence,created_at FROM memories WHERE id=?',(mid,)).fetchone()
                     if row: hydrated.append(dict(id=row[0],kind=row[1],content=row[2],source=row[3],confidence=row[4],created_at=row[5],score=h.get('score')))
-                if hydrated: return hydrated[:limit]
+                if hydrated:
+                    # Prefer substring hits, then semantic — never drop exact matches.
+                    seen=set(); merged=[]
+                    for r in like + hydrated:
+                        rid=r.get('id')
+                        if rid in seen: continue
+                        seen.add(rid); merged.append(r)
+                    return merged[:limit]
             except Exception:
                 pass
-        return self._like_search(query,limit)
+        return like
 
     def get(self, memory_id: int):
         with self._lock:

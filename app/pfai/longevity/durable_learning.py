@@ -193,6 +193,37 @@ class KnowledgeVersionStore:
             ).fetchone()
         return self._row_to_kv(row) if row else None
 
+    def list_active(self, limit: int = 50) -> list[KnowledgeVersion]:
+        with self._lock:
+            rows = self.db.execute(
+                "SELECT knowledge_id, version, content, timestamp, source, confidence, status, provenance, meta "
+                "FROM knowledge_versions WHERE status=? ORDER BY version DESC LIMIT ?",
+                (VersionStatus.ACTIVE.value, int(limit)),
+            ).fetchall()
+        return [self._row_to_kv(r) for r in rows]
+
+    def search_active(self, query: str, limit: int = 10) -> list[dict[str, Any]]:
+        """Substring search over active knowledge (portable; no vendor embedder required)."""
+        q = (query or "").strip().lower()
+        out: list[dict[str, Any]] = []
+        for kv in self.list_active(limit=max(int(limit) * 10, 50)):
+            content = kv.content or ""
+            if q and q not in content.lower() and q not in (kv.knowledge_id or "").lower():
+                continue
+            out.append(
+                {
+                    "knowledge_id": kv.knowledge_id,
+                    "version": kv.version,
+                    "content": content,
+                    "source": kv.source,
+                    "confidence": kv.confidence,
+                    "score": 1.0 if not q else (2.0 if q in content.lower() else 1.0),
+                }
+            )
+            if len(out) >= int(limit):
+                break
+        return out
+
     def _row_to_kv(self, row, status: str | None = None) -> KnowledgeVersion:
         prov_raw = json.loads(row[7] or "{}")
         meta = json.loads(row[8] or "{}")

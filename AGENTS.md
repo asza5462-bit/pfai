@@ -67,10 +67,11 @@ python -m pytest tests/test_api_wiring.py tests/test_v81_continuous_enable_gate.
 
 ## Orchestrator platform (phased)
 
-- PHASE 1 (current): contracts in `pfai/interfaces/` + scaffold modules — **not** wired into `api.py`
-- Do not start PHASE 2 until operator reviews the PHASE 1 report
-- Constraints: additive only; no Anthropic force; no auto fine-tune; no external deploy; no new auth in early phases
-- See `docs/ARCHITECTURE.md` and ADR-008..011 in `docs/DECISIONS.md`
+- PHASE 1: contracts in `pfai/interfaces/` + scaffold modules
+- PHASE 2: `Orchestrator` + `ProviderRegistry`/`ModelRouter` wired; `/chat/*` preserved; `/orchestrate` additive
+- PHASE 3: deep LTM/Knowledge adapters, migration apply+backup, eval baselines, portable export (`/platform/ltm|eval|migrations|export*`)
+- Constraints: additive only; no Anthropic force; no auto fine-tune; no external deploy unless asked
+- See `docs/ARCHITECTURE.md`, `docs/LONGEVITY.md`, ADRs 008–023 in `docs/DECISIONS.md`
 
 ## Longevity mission (20–30 years)
 
@@ -78,5 +79,6 @@ python -m pytest tests/test_api_wiring.py tests/test_v81_continuous_enable_gate.
 - Core must remain model/provider/storage agnostic via ports
 - Memory is structured & portable (not tied to one LLM)
 - Production learning ≠ automatic weight mutation
-- ADRs 012–021 capture longevity decisions
+- ADRs 012–023 capture longevity decisions
 - PHASE 2: `Orchestrator` + `ProviderRegistry`/`ModelRouter` wired; `/chat/*` preserved; `/orchestrate` additive
+- PHASE 3: durable LTM versions + knowledge version search + schema migrations with backup + export populate

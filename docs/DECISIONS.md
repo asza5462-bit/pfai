@@ -219,3 +219,16 @@
   - Any passcode shared in development is considered compromised; require a new production hash before deploy.
   - Production requires HTTPS; private knowledge/regression reads are owner-gated; `/health`/`/system`/`/metrics` stay public observability.
 - Consequences: Dashboard authenticates via login/setup UI without retaining plaintext secrets; owner APIs remain server-gated.
+
+## ADR-023 — PHASE 3 deep LTM / Knowledge / Migration / Export
+
+- Status: Accepted (2026-09-27)
+- Context: PHASE 2 wired Orchestrator; LTM versions were in-memory, KnowledgeLayer ignored version store, migrations were dry-run only, export was empty scaffold.
+- Decision:
+  - Durable LTM versions in SQLite (`ltm_versions`) over a dedicated `MemoryStore`; kinds preserved across restarts; supersede/rollback audited.
+  - `KnowledgeLayer` merges versioned knowledge + store + curriculum; publish/history/rollback via `KnowledgeVersionStore`.
+  - `MigrationRunner` persists schema version; non-dry-run requires backup first; `PFAI_SCHEMA_VERSION=2` with registered longevity migration.
+  - `ExportBundleScaffold` populates `pfai-export-v1` from live stores (no secrets); import dry-run default.
+  - `PlatformEvaluation` adds longevity suites + durable baselines; compare still owner-gated for promote.
+  - Additive owner-gated `/platform/ltm|knowledge/versions|eval|migrations|export*` routes; `/chat/*` + Dashboard unchanged.
+- Consequences: Memory/knowledge are portable and versioned; schema upgrades are backup-gated; Core still never requires Anthropic or weight mutation.
