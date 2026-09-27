@@ -3,63 +3,67 @@
 ## High-level shape
 
 ```
-Browser (RTL Dashboard)
-        │  HTTP + optional X-Owner-Secret
+Browser (RTL Dashboard + AI Command Chat)
+        │  HTTP + X-Owner-Secret
         ▼
 FastAPI app (`pfai.api:app`)
-  ├── static `/` → dashboard
-  ├── public: /health, /system, /metrics, /modules, search-ish reads
-  └── owner-gated: /ask, /continuous/*, /code/*, /deploy/*, /recovery/drill, ...
-        │
-        ├── PFAIRuntime → Agent / Memory / RAG / Metrics / Deploy
-        ├── ContinuousLearningOrchestrator (curate → evaluate → pending approval)
-        ├── CodeLearningPipeline + SandboxedCodeEvaluator
-        ├── ResearchGate + Policy (deny-by-default network)
-        └── OwnerControl (auth + append-only ledger)
+  ├── static `/` + `/assets/chat.js`
+  ├── Command Chat `/chat/*`  → CommandAgent (Brain)
+  │         ↓
+  │    ToolRouter (whitelist + approval)
+  │         ↓
+  │    Heart callbacks → Runtime / Continuous / Recovery / Memory / Metrics
+  ├── public: /health, /system, /metrics, …
+  └── owner-gated legacy routes (/ask, /continuous/*, /code/*, …)
         │
         ▼
 Local data plane (`app/data/`)
-  SQLite memory/vectors, JSON registries, audit/events logs
+  SQLite memory/vectors, command_chat.sqlite3, command_audit.jsonl, registries
 ```
+
+## Command Chat roles
+
+| Layer | Module | Role |
+|---|---|---|
+| Brain | `command_agent.py` | Plan, call tools, compose reply, approval flow |
+| Router | `tool_router.py` | Whitelist tools; block sensitive until approved |
+| Memory | `command_memory.py` | Conversations + pending actions + MemoryStore bridge |
+| Audit | `command_audit.py` | Append-only executable command audit |
+| Mock | `model_mock.py` | Offline planner when Anthropic key absent |
+| Heart | existing core | Real health/system/continuous/memory/metrics services |
 
 ## Process roles
 
 | Process | Entry | Role |
 |---|---|---|
-| API / Web | `run_web.py` / `uvicorn pfai.api:app` | Dashboard + HTTP API |
+| API / Web | `run_web.py` / `uvicorn pfai.api:app` | Dashboard + HTTP API + Command Chat |
 | Continuous learner | `run_continuous.py` | 24/7 learning cycles (no auto-promote) |
 | Production core | `run_production.py` | Scheduler/orchestrator loop (dry_run default) |
 
 ## Frontend
 
-- Single file: `app/pfai/static/index.html`
-- Talks only to backend REST endpoints
-- Owner secret lives in `sessionStorage` only
-- Optional separate hosting via `PFAI_CORS_ORIGINS`
+- `app/pfai/static/index.html` + `assets/chat.js`
+- Owner secret in `sessionStorage` only
+- Optional CORS via `PFAI_CORS_ORIGINS`
 
 ## Model providers
 
-Configured in `configs/default.json` → `model.provider`:
+- `anthropic` — env `ANTHROPIC_API_KEY` only
+- `openai_compatible` / `echo`
+- Command Chat uses Mock when Anthropic key is unset
 
-- `anthropic` — Messages API; key from env (`ANTHROPIC_API_KEY`)
-- `openai_compatible` — local/gateway chat completions
-- `echo` — offline placeholder
+## Safety boundaries
 
-## Safety boundaries (non-negotiable)
-
-1. `LearningLoop.require_human_approval=True` for continuous service wiring
-2. `ContinuousConfig.auto_promote=False` hard-coded in `run_continuous.py`
-3. Owner gate on promote/approve/deploy/recovery-destructive actions
-4. Network: both `allow_network` and non-empty exact host allowlist required
-5. Secrets never loaded from committed config files for Anthropic/owner secret
+1. Continuous `require_human_approval=True` / `auto_promote=False`
+2. Owner gate on deploy/promote/recovery-destructive actions
+3. Command Chat sensitive tools require `/chat/approve`
+4. Network deny-by-default
+5. Phase-1 chat learning = memory/feedback/corrections — not weight mutation
 
 ## Module map (selected)
 
-- `api.py` — HTTP surface
-- `runtime.py` / `app.py` — composition root
-- `continuous_learning_orchestrator.py` — learning coordination
-- `code_learning_pipeline.py` — solve → verify → curate
-- `research_gate.py` / `policy.py` — outbound web policy
-- `owner_control.py` — authentication + authorization ledger
-- `logging_setup.py` — structured application logging
-- `continuous_gate.py` — config + env enable/disable gate
+- `api.py`, `runtime.py`, `app.py`
+- `command_agent.py`, `tool_router.py`, `command_memory.py`, `command_audit.py`
+- `continuous_learning_orchestrator.py`, `code_learning_pipeline.py`
+- `research_gate.py`, `policy.py`, `owner_control.py`
+- `logging_setup.py`, `continuous_gate.py`

@@ -1,39 +1,33 @@
 # PFAI Project Memory
 
-Last updated: 2026-09-27 (phases 2–7 completed in Cloud Agent)
+Last updated: 2026-09-27 (Command Chat Brain↔Heart)
 
 ## Snapshot
 
 | Item | Value |
 |---|---|
 | Version | 8.0.0 |
-| Stack | Python FastAPI + static RTL dashboard |
-| Default model provider | Anthropic (`ANTHROPIC_API_KEY` env/platform secret only) |
-| Continuous training config | `enabled: true` |
-| Kill switch | `PFAI_CONTINUOUS_TRAINING_ENABLED=false` |
-| Auto-promote | Hard-disabled; owner approval required |
-| Frontend | `app/pfai/static/index.html` at `/` |
-| Health | `GET /health` (includes continuous gate + owner_configured) |
-| Preferred deploy | Docker Compose / Render / Railway / VM with persistent `/app/data` |
-| Vercel | Not suitable |
+| Stack | FastAPI + RTL dashboard + AI Command Chat |
+| Command Chat | `/chat/*` via CommandAgent + ToolRouter |
+| Model | Anthropic env secret; Mock fallback without key |
+| Continuous training | `enabled: true` + `PFAI_CONTINUOUS_TRAINING_ENABLED` kill switch |
+| Auto-promote | Hard-disabled |
+| Chat learning (phase 1) | Memory / feedback / corrections — not weight training |
 
-## Safety invariants (do not weaken)
+## Safety invariants
 
-1. Continuous learning may curate/evaluate; promotion requires owner API + ledger.
-2. `auto_promote` forced false in continuous wiring.
-3. Anthropic/owner secrets never in git or committed files.
-4. Network deny-by-default (`allow_network` + exact allowlist).
+1. Promotion requires owner API + ledger.
+2. Command Chat sensitive tools require `/chat/approve`.
+3. Secrets never in git/source/frontend/logs.
+4. Network deny-by-default.
 
-## Current runtime verification (this agent)
+## Verification
 
-- pytest: full suite green
-- Local server: health/dashboard/code-eval/owner auth OK without Anthropic key (fail-closed for live model calls)
-- Docker files ready; container build blocked by VM overlayfs limits here — use operator Docker host or Render/Railway build
+- pytest: 279 passed
+- Live Mock chat + legacy `/health` OK
 
-## Operator still must provide (platform secrets)
+## Operator secrets (platform only)
 
 - `ANTHROPIC_API_KEY`
 - `PFAI_OWNER_EMAIL`
 - `PFAI_OWNER_SECRET_HASH`
-- Persistent disk for `/app/data`
-- Optional second service/profile for `run_continuous.py`
