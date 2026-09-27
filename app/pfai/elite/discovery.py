@@ -10,6 +10,24 @@ from pfai.elite.types import SkillCandidate
 
 _INTENT_HINTS: dict[str, list[str]] = {
     "code": ["code", "function", "bug", "test", "refactor", "api", "debug", "implement"],
+    "engineering": [
+        "build me a website",
+        "build a website",
+        "full-stack",
+        "web application",
+        "create an application",
+        "project structure",
+        "architecture design",
+    ],
+    "security": [
+        "security review",
+        "vulnerability",
+        "security weaknesses",
+        "authorized test",
+        "remediation",
+        "security headers",
+        "secure code",
+    ],
     "research": ["research", "source", "evidence", "cite", "fact", "paper", "compare sources"],
     "web": ["web search", "search the web", "fetch url", "http://", "https://", "browse", "online"],
     "data": ["dataset", "statistics", "mean", "plot", "experiment", "numeric"],
@@ -46,6 +64,8 @@ class SkillDiscoveryEngine:
         intents = self.infer_intents(task)
         category_map = {
             "code": "software_engineering",
+            "engineering": "application_engineering",
+            "security": "cyber_defense",
             "research": "research",
             "web": "web_information",
             "data": "data_science",

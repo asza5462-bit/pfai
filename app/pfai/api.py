@@ -500,7 +500,12 @@ ELITE = EliteOrchestrator(
     experience_bridge=getattr(AUTONOMOUS_TRAINING, 'experience', None),
     bootstrap_skills=True,
 )
-log.info('phase13 elite fabric ready skills=%s tools=%s', ELITE.skills.health().get('count'), len(ELITE.tools.catalog()))
+log.info(
+    'phase14 elite fabric ready skills=%s tools=%s phase14=%s',
+    ELITE.skills.health().get('count'),
+    len(ELITE.tools.catalog()),
+    (ELITE._boot or {}).get('phase14', {}).get('count'),
+)
 PLATFORM_SKILLS.register(
     Skill(name='platform_status', description='Orchestrator/platform status', permission=ToolPermission.READ, version='1'),
     lambda ctx=None, **_k: ORCHESTRATOR.status(),
@@ -1134,6 +1139,67 @@ def model_router_status(owner: str = Depends(require_owner)):
 def sandbox_status(owner: str = Depends(require_owner)):
     from .elite.sandbox import Sandbox
     return {'ok': True, **Sandbox(timeout=1.0).metadata()}
+
+@app.get('/platform/phase14/status')
+def phase14_platform_status(owner: str = Depends(require_owner)):
+    from .engineering import phase14_status
+    st = phase14_status()
+    st['PHASE_14_ALLOWED'] = False
+    st['elite'] = {
+        'skill_count': ELITE.skills.health().get('count'),
+        'phase14_boot': (ELITE._boot or {}).get('phase14'),
+    }
+    return {'ok': True, **st}
+
+class Phase14BuildBody(BaseModel):
+    requirement: str
+    approved: bool = False
+    run_tests: bool = True
+
+class Phase14SecurityBody(BaseModel):
+    target: str = ''
+    project_path: str = ''
+    declaration: str = ''
+    scope: str = ''
+    approved: bool = False
+    allow_external: bool = False
+    auto_apply: bool = False
+
+@app.post('/platform/phase14/build')
+def phase14_build(x: Phase14BuildBody, owner: str = Depends(require_owner)):
+    from .engineering import ApplicationBuilder
+    builder = ApplicationBuilder(root='data/longevity/engineering/generated')
+    result = builder.build(x.requirement, approved=bool(x.approved), actor=owner, run_tests=bool(x.run_tests))
+    OWNER.authorize('PHASE14_BUILD', f'{owner} build complete={result.get("complete")}')
+    return result
+
+@app.post('/platform/phase14/security/analyze')
+def phase14_security_analyze(x: Phase14SecurityBody, owner: str = Depends(require_owner)):
+    from .engineering import SecureCodeAnalyzer, AuthorizedSecurityTester
+    if x.project_path:
+        result = SecureCodeAnalyzer(x.project_path).analyze()
+    else:
+        result = AuthorizedSecurityTester().run(
+            x.target,
+            declaration=x.declaration,
+            scope=x.scope,
+            approved=bool(x.approved),
+            actor=owner,
+            allow_external=bool(x.allow_external),
+        )
+    OWNER.authorize('PHASE14_SECURITY', f'{owner} security ok={result.get("ok")} denied={result.get("denied")}')
+    return result
+
+@app.post('/platform/phase14/security/remediate')
+def phase14_security_remediate(x: Phase14SecurityBody, owner: str = Depends(require_owner)):
+    from .engineering import ApplicationBuilder
+    if not x.project_path:
+        raise HTTPException(400, 'project_path required')
+    result = ApplicationBuilder().remediate_project(
+        x.project_path, approved=bool(x.approved), actor=owner, auto_apply=bool(x.auto_apply)
+    )
+    OWNER.authorize('PHASE14_REMEDIATE', f'{owner} remediate rolled_back={result.get("rolled_back")}')
+    return result
 
 @app.get('/platform/elite/skills')
 def elite_skills(owner: str = Depends(require_owner), category: str | None = None):

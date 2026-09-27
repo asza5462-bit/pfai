@@ -19,6 +19,11 @@ from pfai.elite.skill_registry_v2 import SkillRegistry2
 from pfai.elite.tool_fabric import ToolFabric
 from pfai.elite.types import OrchestratorMode, new_id
 from pfai.elite.web_fabric import WEB_PROVIDER_UNAVAILABLE, WebInformationFabric
+from pfai.engineering.phase14_skills import register_phase14_skills
+from pfai.engineering.application_builder import ApplicationBuilder
+from pfai.engineering.authorized_testing import AuthorizedSecurityTester
+from pfai.engineering.skill_metrics import SkillEvaluationLedger
+from pfai.engineering.secure_analyzer import SecureCodeAnalyzer
 from pfai.model_router import ModelRouter
 
 
@@ -62,11 +67,13 @@ class EliteOrchestrator:
         self.self_check = SelfCheckEngine()
         self.recovery = FailureRecovery(max_retries=2)
         self.learning = SkillLearningBridge(path=str(self.root / "skill_learning.jsonl"))
+        self.skill_metrics = SkillEvaluationLedger(path=str(self.root / "skill_evaluations.jsonl"))
         self.audit_path = self.root / "elite_audit.jsonl"
         self._lock = threading.RLock()
-        self._boot = {"skills": None, "tools": None}
+        self._boot = {"skills": None, "tools": None, "phase14": None}
         if bootstrap_skills:
             self._boot["skills"] = register_elite_skills(self.skills, activate=True)
+            self._boot["phase14"] = register_phase14_skills(self.skills, activate=True)
             self._boot["tools"] = self.tools.bootstrap_safe_tools()
 
     def _audit(self, event: str, **detail: Any) -> None:
@@ -89,6 +96,8 @@ class EliteOrchestrator:
             "reason": OrchestratorMode.REASON.value,
             "write": OrchestratorMode.CHAT.value,
             "ai": OrchestratorMode.PLAN.value,
+            "engineering": OrchestratorMode.CODE.value,
+            "security": OrchestratorMode.TOOL.value,
         }
         return mapping.get(intents[0], OrchestratorMode.CHAT.value)
 
@@ -207,7 +216,35 @@ class EliteOrchestrator:
                 "execution_id": execution_id,
                 "mode": mode,
                 "security": {"rejected": True},
-                "phase": 13,
+                "phase": 14,
+            }
+
+        # Reject unauthorized offensive / third-party attack language
+        if any(
+            p in lowered
+            for p in (
+                "exploit this website",
+                "hack into",
+                "steal credentials",
+                "ransomware",
+                "persist malware",
+                "evade detection",
+                "attack example.com",
+            )
+        ):
+            self._audit("offensive_reject", message=message[:200], actor=actor)
+            return {
+                "ok": False,
+                "answer": "Rejected: unauthorized/offensive exploitation requests are not supported. Use authorized defensive analysis on owned targets only.",
+                "execution_status": "FAILED",
+                "verification_status": "FAILED",
+                "skills_used": [],
+                "models_used": [],
+                "tools_used": [],
+                "execution_id": execution_id,
+                "mode": mode,
+                "security": {"rejected": True, "offensive_blocked": True},
+                "phase": 14,
             }
 
         # Task planner (lightweight)
@@ -223,6 +260,63 @@ class EliteOrchestrator:
             "mode": mode,
         }
         timeline.append({"event": "task_planner", "plan": plan})
+
+        # Phase 14 specialized engineering / authorized defense paths
+        phase14_result = None
+        if any(
+            w in lowered
+            for w in (
+                "build me a website",
+                "build a website",
+                "create a full-stack",
+                "full-stack application",
+                "build an api",
+                "create an application",
+                "build a web application",
+            )
+        ):
+            builder = ApplicationBuilder(root=str(self.root / "generated_projects"))
+            phase14_result = builder.build(message, approved=approved, actor=actor)
+            timeline.append({"event": "application_build", "ok": phase14_result.get("ok"), "complete": phase14_result.get("complete")})
+            self.skill_metrics.record(
+                skill_id="application_build",
+                success=bool(phase14_result.get("complete")),
+                validation_ok=bool(phase14_result.get("complete")),
+                security_findings=int(((phase14_result.get("artifact") or {}).get("security") or {}).get("finding_count") or 0),
+                user_approved=approved or None,
+                duration_seconds=time.time() - started,
+            )
+        elif any(
+            w in lowered
+            for w in (
+                "review this project for security",
+                "security problems",
+                "find security weaknesses",
+                "secure code analysis",
+                "vulnerability",
+            )
+        ):
+            project_path = str(ctx.get("project_path") or ctx.get("path") or "")
+            if project_path:
+                phase14_result = SecureCodeAnalyzer(project_path).analyze()
+            else:
+                # Unauthorized external testing without declaration → deny via tester
+                tester = AuthorizedSecurityTester()
+                phase14_result = tester.run(
+                    str(ctx.get("target") or message),
+                    declaration=str(ctx.get("declaration") or ""),
+                    scope=str(ctx.get("scope") or ""),
+                    approved=approved,
+                    actor=actor,
+                    allow_external=bool(ctx.get("allow_external")),
+                )
+            timeline.append({"event": "security_analysis", "ok": phase14_result.get("ok"), "denied": phase14_result.get("denied")})
+            self.skill_metrics.record(
+                skill_id="secure_code_analysis",
+                success=bool(phase14_result.get("ok")),
+                security_findings=int(phase14_result.get("finding_count") or len(phase14_result.get("findings") or [])),
+                duration_seconds=time.time() - started,
+            )
 
         discovery = self.discovery.discover(message, context=ctx)
         timeline.append(
@@ -370,6 +464,16 @@ class EliteOrchestrator:
         if tool_result and tool_result.get("ok"):
             answer_parts.append(f"tool:{json.dumps(tool_result.get('result'), ensure_ascii=False)[:500]}")
         answer = "\n\n".join(p for p in answer_parts if p) or "Completed skill composition with verification."
+        if phase14_result is not None:
+            if phase14_result.get("complete") is False and phase14_result.get("artifact"):
+                answer = (phase14_result.get("artifact") or {}).get("report") or answer
+            elif phase14_result.get("denied"):
+                answer = f"Authorized testing denied: {phase14_result.get('error')}"
+            elif phase14_result.get("findings") is not None:
+                answer = f"Security analysis findings: {phase14_result.get('finding_count', len(phase14_result.get('findings') or []))}"
+            elif phase14_result.get("artifact"):
+                art = phase14_result["artifact"]
+                answer = art.get("report") or f"Built project at {art.get('root')} complete={phase14_result.get('complete')}"
 
         learn = self.learning.record_experience(
             task=message,
@@ -430,7 +534,8 @@ class EliteOrchestrator:
             "sandbox_metadata": sandbox_meta,
             "timeline": timeline,
             "latency_seconds": time.time() - started,
-            "phase": 13,
+            "phase": 14,
+            "phase14": phase14_result,
             "optional_future_training": True,
         }
         self._audit("elite_handle", execution_id=execution_id, mode=mode, status=status, actor=actor)
@@ -438,10 +543,17 @@ class EliteOrchestrator:
 
     def status(self) -> dict[str, Any]:
         tool_status = self.tools.status_registry()
+        from pfai.engineering.phase14_skills import phase14_status
+
+        p14 = phase14_status()
+        p14["PHASE_14_ALLOWED"] = False  # true only after final audit gates
         return {
-            "phase": 13,
+            "phase": 14,
             "skills": self.skills.health(),
-            "tools": {"count": len(self.tools.catalog()), **{k: tool_status.get(k) for k in ("REAL_TOOL_COUNT", "MOCK_TOOL_COUNT")}},
+            "tools": {
+                "count": len(self.tools.catalog()),
+                **{k: tool_status.get(k) for k in ("REAL_TOOL_COUNT", "MOCK_TOOL_COUNT")},
+            },
             "mcp_tools": len(self.mcp.list_tools()),
             "bootstrap": self._boot,
             "learning_events": len(self.learning.eligible_training_candidates())
@@ -451,6 +563,8 @@ class EliteOrchestrator:
             "web": self.web.status(),
             "sandbox": Sandbox(timeout=1.0).metadata(),
             "EMAIL_NOTE": "see /platform/email/status",
+            "phase14": p14,
+            "skill_metrics": self.skill_metrics.summary(),
         }
 
     def export_learning_to_training(self, limit: int = 20) -> dict[str, Any]:

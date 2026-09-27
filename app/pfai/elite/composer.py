@@ -60,6 +60,20 @@ _TEMPLATES: dict[str, list[str]] = {
         "execution_planning",
         "execution_verification",
     ],
+    "engineering": [
+        "requirements_analysis",
+        "project_planning_eng",
+        "architecture_design_eng",
+        "application_build",
+        "answer_verification",
+    ],
+    "security": [
+        "target_authorization_check",
+        "secure_code_analysis",
+        "authorized_security_test",
+        "security_remediation",
+        "answer_verification",
+    ],
 }
 
 _RISK_RANK = {"low": 0, "medium": 1, "high": 2, "critical": 3}
