@@ -98,6 +98,12 @@ Promotion to active **never** happens automatically. Use owner-authenticated API
 | `PFAI_OTP_TTL_SECONDS` / `RESEND_COOLDOWN` / `MAX_ATTEMPTS` | Optional | OTP lifetime / cooldown / attempts |
 | `MODEL_PROVIDER` / `MODEL_NAME` / `MODEL_ENDPOINT` | Optional | Local/open-weight/openai_compatible selection |
 | `MODEL_TIMEOUT` / `MAX_TOKENS` / `TEMPERATURE` / `CONTEXT_LENGTH` | Optional | Local adapter generation settings |
+| `TRAINING_ENABLED` | Optional | Autonomous training master switch (default true) |
+| `TRAINING_MIN_EXAMPLES` | Optional | Min validated examples before auto-trigger |
+| `TRAINING_SCHEDULE` | Optional | Seconds between scheduled training windows |
+| `TRAINING_MAX_RUNTIME` | Optional | Max seconds per training job |
+| `TRAINING_MAX_RESOURCE_BUDGET` | Optional | Max concurrent training jobs |
+| `TRAINING_ALLOW_MOCK` | Optional | Tests/dev only — never pretends real weight updates |
 | `PFAI_CONTINUOUS_TRAINING_ENABLED` | Optional | Override continuous loop |
 | `PFAI_CORS_ORIGINS` | Optional | Comma-separated origins |
 | `PFAI_HOST` | Optional | Default `0.0.0.0` in `run_web.py` |
