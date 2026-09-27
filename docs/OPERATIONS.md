@@ -49,6 +49,20 @@ Without `ANTHROPIC_API_KEY`, Mock provider plans tools for UI/dev testing. Set t
 
 Sensitive tools (continuous start/stop, remember/forget/correct, …) never execute until owner approval.
 
+## Coding Academy
+
+```bash
+curl -H "X-Owner-Secret: YOUR_SECRET" http://127.0.0.1:8000/coding/tracks
+curl -X POST -H "X-Owner-Secret: YOUR_SECRET" -H "Content-Type: application/json" \
+  http://127.0.0.1:8000/coding/sandbox \
+  -d '{"code":"def answer():\n return 15\n","test_code":"assert answer()==15"}'
+```
+
+Routes include `/coding/assessment`, `/coding/path`, `/coding/lesson/...`, `/coding/hint`, `/coding/exercise/submit`, `/coding/review`, `/coding/debug/*`, `/coding/projects`, `/coding/chat`.
+Extend languages/tracks via JSON in `configs/coding/` without rewriting the engine. Python sandbox reuses the isolated evaluator; other languages are taught/reviewed without false runtime claims.
+
+## Continuous learning worker
+
 ```bash
 cd app
 python run_continuous.py
