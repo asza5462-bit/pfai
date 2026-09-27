@@ -29,6 +29,10 @@ __all__ = [
     "WEB_PROVIDER_UNAVAILABLE",
     "WebProviderRegistry",
     "WebResearchExecutor",
+    "WebProvider",
+    "SearchProvider",
+    "FetchProvider",
+    "MockWebProvider",
 ]
 
 
@@ -37,4 +41,8 @@ def __getattr__(name: str):
         from pfai.elite.unified_orchestrator import EliteOrchestrator
 
         return EliteOrchestrator
+    if name in ("WebProvider", "SearchProvider", "FetchProvider", "MockWebProvider"):
+        from pfai.elite import web_fabric as wf
+
+        return getattr(wf, name)
     raise AttributeError(f"module {__name__!r} has no attribute {name!r}")

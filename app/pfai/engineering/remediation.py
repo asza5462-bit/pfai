@@ -134,6 +134,33 @@ class RemediationLoop:
             self.workspace.rollback(ckpt["checkpoint_id"])
             rolled_back = True
             recheck = SecureCodeAnalyzer(self.workspace.root).analyze()
+
+        # VERIFY — never mark fixed unless the finding is gone on recheck
+        verified_findings: list[dict[str, Any]] = []
+        for item in applied:
+            prop = item.get("proposal") or {}
+            fid = prop.get("finding_id")
+            cat = prop.get("category")
+            path = prop.get("path") or ""
+            still = [
+                f
+                for f in (recheck.get("findings") or [])
+                if f.get("category") == cat
+                and (not path or path in str(f.get("file_path") or f.get("affected_component") or ""))
+            ]
+            verified = (not rolled_back) and bool(item.get("result", {}).get("ok")) and len(still) == 0
+            verified_findings.append(
+                {
+                    "finding_id": fid,
+                    "category": cat,
+                    "affected_component": path,
+                    "verification_status": "verified" if verified else "open",
+                    "remediation_status": "fixed" if verified else "unfixed",
+                    "marked_fixed": verified,
+                    "evidence": "absent_on_recheck" if verified else "still_present_or_unapplied",
+                }
+            )
+
         report = {
             "ok": True,
             "checkpoint_id": ckpt.get("checkpoint_id"),
@@ -144,18 +171,19 @@ class RemediationLoop:
             "rolled_back": rolled_back,
             "findings_before": prioritized,
             "findings_after": recheck.get("findings"),
+            "verifications": verified_findings,
+            "fixed_count": sum(1 for v in verified_findings if v.get("marked_fixed")),
             "loop": [
                 "DISCOVER",
-                "ANALYZE",
-                "PRIORITIZE",
+                "CLASSIFY",
+                "VERIFY",
+                "EXPLAIN",
                 "PROPOSE_FIX",
-                "OWNER_AUTHORIZATION_CHECK",
-                "APPLY_FIX",
+                "APPLY_AUTHORIZED_FIX",
                 "TEST",
-                "SECURITY_RECHECK",
-                "COMPARE",
-                "VERSION",
-                "REPORT",
+                "SECURITY_RETEST",
+                "REGRESSION_TEST",
+                "RECORD_RESULT",
             ],
         }
         (self.workspace.meta_dir / "remediation_report.json").write_text(

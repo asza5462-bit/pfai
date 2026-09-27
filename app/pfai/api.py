@@ -1150,6 +1150,18 @@ def phase14_platform_status(owner: str = Depends(require_owner)):
     }
     return {'ok': True, **st}
 
+@app.get('/platform/phase15/status')
+def phase15_platform_status(owner: str = Depends(require_owner)):
+    from .engineering import phase15_status
+    st = phase15_status()
+    st['elite'] = {
+        'skill_count': ELITE.skills.health().get('count'),
+        'phase14_boot': (ELITE._boot or {}).get('phase14'),
+        'phase15_boot': (ELITE._boot or {}).get('phase15'),
+    }
+    st['PHASE_16_ALLOWED'] = False
+    return {'ok': True, **st}
+
 class Phase14BuildBody(BaseModel):
     requirement: str
     approved: bool = False
@@ -1164,12 +1176,46 @@ class Phase14SecurityBody(BaseModel):
     allow_external: bool = False
     auto_apply: bool = False
 
+class Phase15WorkflowBody(BaseModel):
+    message: str
+    project_path: str = ''
+    declaration: str = ''
+    scope: str = ''
+    approved: bool = False
+    allow_external: bool = False
+    auto_apply: bool = False
+    affected_files: list[str] | None = None
+    writers: dict[str, str] | None = None
+
 @app.post('/platform/phase14/build')
 def phase14_build(x: Phase14BuildBody, owner: str = Depends(require_owner)):
     from .engineering import ApplicationBuilder
     builder = ApplicationBuilder(root='data/longevity/engineering/generated')
     result = builder.build(x.requirement, approved=bool(x.approved), actor=owner, run_tests=bool(x.run_tests))
     OWNER.authorize('PHASE14_BUILD', f'{owner} build complete={result.get("complete")}')
+    return result
+
+@app.post('/platform/phase15/workflow')
+def phase15_workflow(x: Phase15WorkflowBody, owner: str = Depends(require_owner)):
+    from .engineering import UnifiedCodingWorkflow
+    wf = UnifiedCodingWorkflow(root='data/longevity/engineering/coding_workflow')
+    ctx = {}
+    if x.affected_files:
+        ctx['affected_files'] = list(x.affected_files)
+    if x.writers:
+        ctx['writers'] = dict(x.writers)
+    result = wf.handle(
+        x.message,
+        project_path=x.project_path,
+        approved=bool(x.approved),
+        actor=owner,
+        declaration=x.declaration,
+        scope=x.scope,
+        allow_external=bool(x.allow_external),
+        auto_apply=bool(x.auto_apply),
+        context=ctx,
+    )
+    OWNER.authorize('PHASE15_WORKFLOW', f'{owner} intent={result.get("intent")} ok={result.get("ok")}')
     return result
 
 @app.post('/platform/phase14/security/analyze')

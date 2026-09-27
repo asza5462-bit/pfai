@@ -155,9 +155,10 @@ class TestUnifiedChatPhase14(unittest.TestCase):
             bootstrap_skills=True,
         )
         out = elite.handle("Build me a website for Lake Cafe", actor="owner", approved=True)
-        self.assertEqual(out["phase"], 14)
-        self.assertIsNotNone(out.get("phase14"))
-        self.assertTrue(out["phase14"].get("complete"), out["phase14"])
+        self.assertIn(out["phase"], (14, 15))
+        self.assertIsNotNone(out.get("phase14") or out.get("phase15"))
+        payload = out.get("phase15") or out.get("phase14")
+        self.assertTrue(payload.get("complete"), payload)
 
     def test_offensive_request_rejected(self):
         tmp = tempfile.mkdtemp()

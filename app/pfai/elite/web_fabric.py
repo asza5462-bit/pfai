@@ -941,3 +941,10 @@ class WebResearchExecutor:
 
     def status(self) -> dict[str, Any]:
         return self.fabric.status()
+
+
+# PHASE 15 documentation aliases — same provider abstractions, no parallel stack.
+WebProvider = WebInformationFabric
+SearchProvider = WebSearchProvider
+FetchProvider = WebFetchProvider
+MockWebProvider = MockWebSearchProvider

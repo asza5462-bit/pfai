@@ -67,12 +67,14 @@ class EliteOrchestrator:
         self.skill_metrics = SkillEvaluationLedger(path=str(self.root / "skill_evaluations.jsonl"))
         self.audit_path = self.root / "elite_audit.jsonl"
         self._lock = threading.RLock()
-        self._boot = {"skills": None, "tools": None, "phase14": None}
+        self._boot = {"skills": None, "tools": None, "phase14": None, "phase15": None}
         if bootstrap_skills:
             from pfai.engineering.phase14_skills import register_phase14_skills
+            from pfai.engineering.phase15_skills import register_phase15_skills
 
             self._boot["skills"] = register_elite_skills(self.skills, activate=True)
             self._boot["phase14"] = register_phase14_skills(self.skills, activate=True)
+            self._boot["phase15"] = register_phase15_skills(self.skills, activate=True)
             self._boot["tools"] = self.tools.bootstrap_safe_tools()
 
     def _audit(self, event: str, **detail: Any) -> None:
@@ -260,8 +262,9 @@ class EliteOrchestrator:
         }
         timeline.append({"event": "task_planner", "plan": plan})
 
-        # Phase 14 specialized engineering / authorized defense paths
+        # Phase 14/15 specialized engineering / authorized defense paths
         phase14_result = None
+        phase15_result = None
         if any(
             w in lowered
             for w in (
@@ -272,18 +275,33 @@ class EliteOrchestrator:
                 "build an api",
                 "create an application",
                 "build a web application",
+                "build me an app",
             )
         ):
-            from pfai.engineering.application_builder import ApplicationBuilder
+            from pfai.engineering.unified_coding_workflow import UnifiedCodingWorkflow
 
-            builder = ApplicationBuilder(root=str(self.root / "generated_projects"))
-            phase14_result = builder.build(message, approved=approved, actor=actor)
-            timeline.append({"event": "application_build", "ok": phase14_result.get("ok"), "complete": phase14_result.get("complete")})
+            ucw = UnifiedCodingWorkflow(
+                root=str(self.root / "coding_workflow"),
+                executor=self.executor,
+                experience_bridge=self.experience_bridge,
+                skill_metrics=self.skill_metrics,
+            )
+            phase15_result = ucw.handle(message, approved=approved, actor=actor, context=ctx)
+            phase14_result = phase15_result  # compatibility for existing consumers
+            timeline.append(
+                {
+                    "event": "unified_coding_build",
+                    "ok": phase15_result.get("ok"),
+                    "complete": phase15_result.get("complete"),
+                }
+            )
             self.skill_metrics.record(
                 skill_id="application_build",
-                success=bool(phase14_result.get("complete")),
-                validation_ok=bool(phase14_result.get("complete")),
-                security_findings=int(((phase14_result.get("artifact") or {}).get("security") or {}).get("finding_count") or 0),
+                success=bool(phase15_result.get("complete") or phase15_result.get("ok")),
+                validation_ok=bool(phase15_result.get("complete")),
+                security_findings=int(
+                    ((phase15_result.get("artifact") or {}).get("security") or {}).get("finding_count") or 0
+                ),
                 user_approved=approved or None,
                 duration_seconds=time.time() - started,
             )
@@ -295,32 +313,62 @@ class EliteOrchestrator:
                 "find security weaknesses",
                 "secure code analysis",
                 "vulnerability",
+                "check my application for security",
+                "fix the vulnerabilities",
+                "remediat",
             )
         ):
-            from pfai.engineering.authorized_testing import AuthorizedSecurityTester
-            from pfai.engineering.secure_analyzer import SecureCodeAnalyzer
+            from pfai.engineering.unified_coding_workflow import UnifiedCodingWorkflow
 
-            project_path = str(ctx.get("project_path") or ctx.get("path") or "")
-            if project_path:
-                phase14_result = SecureCodeAnalyzer(project_path).analyze()
-            else:
-                # Unauthorized external testing without declaration → deny via tester
-                tester = AuthorizedSecurityTester()
-                phase14_result = tester.run(
-                    str(ctx.get("target") or message),
-                    declaration=str(ctx.get("declaration") or ""),
-                    scope=str(ctx.get("scope") or ""),
-                    approved=approved,
-                    actor=actor,
-                    allow_external=bool(ctx.get("allow_external")),
-                )
-            timeline.append({"event": "security_analysis", "ok": phase14_result.get("ok"), "denied": phase14_result.get("denied")})
+            ucw = UnifiedCodingWorkflow(
+                root=str(self.root / "coding_workflow"),
+                executor=self.executor,
+                experience_bridge=self.experience_bridge,
+                skill_metrics=self.skill_metrics,
+            )
+            phase15_result = ucw.handle(
+                message,
+                project_path=str(ctx.get("project_path") or ctx.get("path") or ""),
+                approved=approved,
+                actor=actor,
+                declaration=str(ctx.get("declaration") or ""),
+                scope=str(ctx.get("scope") or ""),
+                allow_external=bool(ctx.get("allow_external")),
+                auto_apply=bool(ctx.get("auto_apply")),
+                context=ctx,
+            )
+            phase14_result = phase15_result
+            timeline.append(
+                {
+                    "event": "security_workflow",
+                    "ok": phase15_result.get("ok"),
+                    "denied": phase15_result.get("denied"),
+                    "intent": phase15_result.get("intent"),
+                }
+            )
             self.skill_metrics.record(
                 skill_id="secure_code_analysis",
-                success=bool(phase14_result.get("ok")),
-                security_findings=int(phase14_result.get("finding_count") or len(phase14_result.get("findings") or [])),
+                success=bool(phase15_result.get("ok")),
+                security_findings=int(
+                    phase15_result.get("finding_count") or len(phase15_result.get("findings") or [])
+                ),
                 duration_seconds=time.time() - started,
             )
+        elif any(
+            w in lowered
+            for w in ("inspect project", "analyze architecture", "repository inspection", "project structure")
+        ):
+            from pfai.engineering.unified_coding_workflow import UnifiedCodingWorkflow
+
+            ucw = UnifiedCodingWorkflow(root=str(self.root / "coding_workflow"), executor=self.executor)
+            phase15_result = ucw.handle(
+                message,
+                project_path=str(ctx.get("project_path") or ctx.get("path") or ""),
+                approved=approved,
+                actor=actor,
+                context=ctx,
+            )
+            timeline.append({"event": "project_inspection", "ok": phase15_result.get("ok")})
 
         discovery = self.discovery.discover(message, context=ctx)
         timeline.append(
@@ -475,9 +523,18 @@ class EliteOrchestrator:
                 answer = f"Authorized testing denied: {phase14_result.get('error')}"
             elif phase14_result.get("findings") is not None:
                 answer = f"Security analysis findings: {phase14_result.get('finding_count', len(phase14_result.get('findings') or []))}"
+            elif phase14_result.get("fixed_count") is not None:
+                answer = (
+                    f"Remediation complete: fixed={phase14_result.get('fixed_count')} "
+                    f"unverified={phase14_result.get('unverified_count')} "
+                    f"rolled_back={phase14_result.get('rolled_back')}"
+                )
             elif phase14_result.get("artifact"):
                 art = phase14_result["artifact"]
                 answer = art.get("report") or f"Built project at {art.get('root')} complete={phase14_result.get('complete')}"
+            elif phase14_result.get("architecture"):
+                answer = f"Project inspection architecture={phase14_result.get('architecture')}"
+
 
         learn = self.learning.record_experience(
             task=message,
@@ -538,8 +595,9 @@ class EliteOrchestrator:
             "sandbox_metadata": sandbox_meta,
             "timeline": timeline,
             "latency_seconds": time.time() - started,
-            "phase": 14,
+            "phase": 15,
             "phase14": phase14_result,
+            "phase15": phase15_result,
             "optional_future_training": True,
         }
         self._audit("elite_handle", execution_id=execution_id, mode=mode, status=status, actor=actor)
@@ -548,10 +606,12 @@ class EliteOrchestrator:
     def status(self) -> dict[str, Any]:
         tool_status = self.tools.status_registry()
         from pfai.engineering.phase14_skills import phase14_status
+        from pfai.engineering.phase15_gates import phase15_status
 
         p14 = phase14_status()
+        p15 = phase15_status()
         return {
-            "phase": 14,
+            "phase": 15,
             "skills": self.skills.health(),
             "tools": {
                 "count": len(self.tools.catalog()),
@@ -567,7 +627,10 @@ class EliteOrchestrator:
             "sandbox": Sandbox(timeout=1.0).metadata(),
             "EMAIL_NOTE": "see /platform/email/status",
             "phase14": p14,
+            "phase15": p15,
             "PHASE_14_ALLOWED": bool(p14.get("PHASE_14_ALLOWED")),
+            "PHASE_15_ALLOWED": bool(p15.get("PHASE_15_ALLOWED")),
+            "PHASE_16_ALLOWED": False,
             "skill_metrics": self.skill_metrics.summary(),
         }
 
