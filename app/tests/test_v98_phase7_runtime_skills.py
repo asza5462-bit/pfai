@@ -52,10 +52,13 @@ class TestRuntimeDetector(unittest.TestCase):
                 RuntimeAvailability.ERROR.value,
             ),
         )
-        # In this environment torch is missing → not AVAILABLE for training
+        # Honest coupling: training_available iff status AVAILABLE
+        if result.training_available:
+            self.assertEqual(result.status, RuntimeAvailability.AVAILABLE.value)
+        else:
+            self.assertNotEqual(result.status, RuntimeAvailability.AVAILABLE.value)
         if not result.modules.get("torch"):
             self.assertFalse(result.training_available)
-            self.assertNotEqual(result.status, RuntimeAvailability.AVAILABLE.value)
 
 
 class TestCompatibilityAndResources(unittest.TestCase):

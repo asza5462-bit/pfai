@@ -114,10 +114,15 @@ class TestTrainerSelection(unittest.TestCase):
     def test_mock_disabled_by_default(self):
         reg = TrainingBackendRegistry()
         reg.bootstrap_defaults()
-        trainer, sel = reg.select(TrainingConfig(allow_mock_backend=False, method="lora"))
-        # Without real torch stack, expect unavailable
+        trainer, sel = reg.select(
+            TrainingConfig(allow_mock_backend=False, method="lora", base_model="local")
+        )
+        # Without compatible model / runtime, expect honest unavailable status
         if trainer is None:
-            self.assertEqual(sel.get("status"), "TRAINING_RUNTIME_UNAVAILABLE")
+            self.assertIn(
+                sel.get("status"),
+                ("TRAINING_RUNTIME_UNAVAILABLE", "NO_COMPATIBLE_MODEL"),
+            )
         else:
             self.assertFalse(trainer.is_mock)
 
@@ -158,8 +163,15 @@ class TestOrchestratorCycle(unittest.TestCase):
             )
             # Without runtime and mock disabled path
             orch.allow_mock_backend = False
-            unavailable = orch.run_cycle(owner_requested=True, config=TrainingConfig(allow_mock_backend=False))
-            self.assertEqual(unavailable.get("status"), "TRAINING_RUNTIME_UNAVAILABLE")
+            unavailable = orch.run_cycle(
+                owner_requested=True,
+                config=TrainingConfig(allow_mock_backend=False, base_model="local"),
+            )
+            # Honest stop: either runtime missing or no compatible local/approved model.
+            self.assertIn(
+                unavailable.get("status"),
+                ("TRAINING_RUNTIME_UNAVAILABLE", "NO_COMPATIBLE_MODEL", "TRAINING_BLOCKED_MODEL_INCOMPATIBLE"),
+            )
             self.assertFalse(unavailable.get("actual_training_executed"))
 
             orch.allow_mock_backend = True

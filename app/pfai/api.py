@@ -1593,9 +1593,27 @@ def platform_training_status(owner: str = Depends(require_owner)):
         'training_available': (st.get('capabilities') or {}).get('training_available'),
         'inference_available': (st.get('capabilities') or {}).get('inference_available'),
         'gpu_available': (st.get('capabilities') or {}).get('gpu_available'),
+        'cpu_count': (st.get('capabilities') or {}).get('cpu_count'),
+        'ram_gb': (st.get('capabilities') or {}).get('ram_gb'),
+        'ram_available_gb': (st.get('capabilities') or {}).get('ram_available_gb'),
+        'vram_gb': (st.get('capabilities') or {}).get('vram_gb'),
+        'hardware': {
+            'cpu_count': (st.get('capabilities') or {}).get('cpu_count'),
+            'ram_gb': (st.get('capabilities') or {}).get('ram_gb'),
+            'ram_available_gb': (st.get('capabilities') or {}).get('ram_available_gb'),
+            'gpu_available': (st.get('capabilities') or {}).get('gpu_available'),
+            'gpu_name': (st.get('capabilities') or {}).get('gpu_name'),
+            'vram_gb': (st.get('capabilities') or {}).get('vram_gb'),
+            'cuda': (st.get('capabilities') or {}).get('cuda'),
+            'cuda_version': (st.get('capabilities') or {}).get('cuda_version'),
+        },
         'active_model': st.get('active_model'),
         'active_runtime': st.get('active_runtime'),
         'control_center': cc,
+        'labels': cc.get('labels') or {},
+        'REAL_TRAINING_AVAILABLE': bool((cc.get('labels') or {}).get('REAL_TRAINING_AVAILABLE')),
+        'REAL_TRAINING_EXECUTED': bool((cc.get('labels') or {}).get('REAL_TRAINING_EXECUTED')),
+        'REAL_MODEL_ACTIVE': bool((cc.get('labels') or {}).get('REAL_MODEL_ACTIVE')),
         'orchestrator': st.get('orchestrator'),
         'datasets': st.get('datasets'),
         'models': st.get('models'),
@@ -1606,6 +1624,7 @@ def platform_training_status(owner: str = Depends(require_owner)):
                 'dataset_id': j.get('dataset_id'),
                 'model_id': j.get('model_id'),
                 'is_mock': j.get('is_mock'),
+                'real_training': j.get('real_training'),
                 'real_weight_update': j.get('real_weight_update'),
                 'backend': j.get('backend'),
             }
@@ -1756,15 +1775,25 @@ def platform_training_cycle(x: TrainingCycleBody, owner: str = Depends(require_o
         'ok': bool(result.get('ok')),
         'status': result.get('status'),
         'actual_training_executed': bool(result.get('actual_training_executed')),
+        'real_training_executed': bool(result.get('real_training_executed') or result.get('actual_training_executed')),
+        'real_checkpoint_created': bool(result.get('real_checkpoint_created')),
+        'real_evaluation_executed': bool(result.get('real_evaluation_executed')),
+        'canary_executed': bool(result.get('canary_executed')),
         'is_mock': bool(result.get('is_mock')),
         'model_activated': bool(result.get('model_activated')),
+        'rollback_available': bool(result.get('rollback_available')),
+        'reason': result.get('reason') or result.get('error') or result.get('status'),
         'job_id': (result.get('job') or {}).get('job_id'),
         'dataset_id': (result.get('job') or {}).get('dataset_id') or result.get('dataset_id'),
         'model_id': (result.get('job') or {}).get('model_id'),
         'evaluation_decision': ((result.get('evaluation') or {}).get('decision')),
         'error': result.get('error'),
         'runtime_note': None
-        if result.get('status') not in ('TRAINING_RUNTIME_UNAVAILABLE', 'TRAINING_BLOCKED_RUNTIME_UNAVAILABLE')
+        if result.get('status') not in (
+            'TRAINING_RUNTIME_UNAVAILABLE',
+            'TRAINING_BLOCKED_RUNTIME_UNAVAILABLE',
+            'NO_COMPATIBLE_MODEL',
+        )
         else result.get('status'),
     }
 
@@ -1791,6 +1820,27 @@ def platform_training_rollback_status(owner: str = Depends(require_owner)):
         'active_runtime': AUTONOMOUS_TRAINING.active_runtime.current(),
         'last_known_good': {'model_id': lkg.get('model_id')} if lkg else None,
     }
+
+
+# PHASE 8 aliases — /platform/models* (same owner gate as /platform/training/models*)
+@app.get('/platform/models')
+def platform_models(owner: str = Depends(require_owner), limit: int = 50):
+    return platform_training_models(owner=owner, limit=limit)
+
+
+@app.get('/platform/models/{model_id}')
+def platform_model_get(model_id: str, owner: str = Depends(require_owner)):
+    return platform_training_model_get(model_id=model_id, owner=owner)
+
+
+@app.post('/platform/models/{model_id}/activate')
+def platform_model_activate(model_id: str, owner: str = Depends(require_owner)):
+    return platform_training_model_activate(model_id=model_id, owner=owner)
+
+
+@app.post('/platform/models/{model_id}/rollback')
+def platform_model_rollback(model_id: str, owner: str = Depends(require_owner), reason: str = 'owner_requested'):
+    return platform_training_model_rollback(model_id=model_id, owner=owner, reason=reason)
 
 
 @app.get('/platform/skills/packs')

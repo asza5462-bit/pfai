@@ -289,3 +289,17 @@
   - `SkillPackRegistry` versioned packs; skills cannot self-elevate permissions; still gated by AuthorizedExecutor.
   - Owner Control Center APIs + dashboard; schema **v5**.
 - Consequences: When a real torch/transformers/peft/trl stack exists, training can execute for real; otherwise status remains honest UNAVAILABLE.
+
+## ADR-028 — Real training runtime enablement + first verified LoRA run (PHASE 8)
+
+- Status: Accepted (2026-09-27)
+- Context: PHASE 7 reported RUNTIME_UNAVAILABLE and REAL_TRAINING_EXECUTED=false. Operator approved enabling a real training stack and proving one bounded LoRA pipeline without false claims.
+- Decision:
+  - Install path is explicit (`requirements-training.txt` / `python -m pfai.longevity.autonomous_training.setup_runtime`) — not silent, not AWS-coupled, not Anthropic/OpenAI-coupled.
+  - `TrainingRuntimeDetector` reports AVAILABLE / PARTIAL / UNAVAILABLE with module/hardware reasons and a setup_path.
+  - `RealLoRATrainingBackend` executes a real PEFT LoRA Trainer loop; returns `real_training` / `real_weight_update` only after adapter files + reload succeed.
+  - Models require local `MODEL_PATH`/`MODEL_NAME` path or `MODEL_DOWNLOAD_APPROVED=true`; otherwise `NO_COMPATIBLE_MODEL`.
+  - QLoRA only when CUDA + bitsandbytes present; otherwise honest failure.
+  - Activation still requires evaluation + shadow + canary gates; training cannot mutate auth/OTP/permissions/secrets.
+  - Control Center surfaces REAL_TRAINING_AVAILABLE / REAL_TRAINING_EXECUTED / REAL_MODEL_ACTIVE distinctly from mock test paths.
+- Consequences: Environments with the training stack can run real LoRA; CI without ML deps still uses mock tests and must not claim REAL TRAINING VERIFIED.

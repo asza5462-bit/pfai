@@ -66,17 +66,22 @@ class ModelCompatibilityChecker:
             reasons.append(CompatibilityBlockReason.INSUFFICIENT_DISK)
 
         # Model existence / format
-        base = model_path or config.base_model or os.environ.get("MODEL_NAME") or ""
+        path_env = (os.environ.get("MODEL_PATH") or "").strip()
+        base = model_path or path_env or config.base_model or os.environ.get("MODEL_NAME") or ""
         details["base_model"] = base
         details["model_revision"] = os.environ.get("MODEL_REVISION") or config.extra.get("revision")
+        details["model_provider"] = os.environ.get("MODEL_PROVIDER") or os.environ.get("PFAI_MODEL_PROVIDER") or "local_open_weight"
         license_meta = {
             "declared_license": (config.extra or {}).get("license") or os.environ.get("MODEL_LICENSE") or "unverified",
+            "source": os.environ.get("MODEL_LICENSE_SOURCE") or "operator_declared",
             "note": "License must be verified by operator; PFAI does not claim unrestricted use.",
         }
         details["license"] = license_meta
+        download_ok = (os.environ.get("MODEL_DOWNLOAD_APPROVED") or "").lower() in ("1", "true", "yes")
 
-        if not base:
+        if not base or base in ("local", "none", "unset"):
             reasons.append(CompatibilityBlockReason.MODEL_INCOMPATIBLE)
+            details["no_compatible_model"] = True
         else:
             local = Path(base)
             if local.exists():
@@ -89,10 +94,17 @@ class ModelCompatibilityChecker:
                 details["model_source"] = "local_path"
                 details["format_ok"] = bool(has_cfg or local.is_file())
             else:
-                # Hub id or symbolic name — cannot claim loaded; only that id is non-empty.
                 details["model_source"] = "id_or_remote"
-                details["format_ok"] = True  # deferred to trainer download/load
                 details["loaded"] = False
+                if not download_ok:
+                    reasons.append(CompatibilityBlockReason.MODEL_INCOMPATIBLE)
+                    details["no_compatible_model"] = True
+                    details["format_ok"] = False
+                    details["download_blocked"] = True
+                    details["note"] = "Set MODEL_DOWNLOAD_APPROVED=true or provide MODEL_PATH"
+                else:
+                    details["format_ok"] = True  # deferred to trainer download/load
+                    details["download_approved"] = True
 
         rows = dataset_rows or []
         if not rows:

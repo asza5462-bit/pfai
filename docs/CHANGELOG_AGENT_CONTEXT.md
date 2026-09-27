@@ -1,5 +1,29 @@
 # Agent Context Changelog
 
+## 2026-09-27 — Longevity PHASE 8: Real training runtime enablement + first verified real training
+
+### Added
+- Deterministic install path: `requirements-training.txt` + `setup_runtime.py`
+- Fully functional `RealLoRATrainingBackend` (PEFT LoRA loop, safetensors adapters, reload validation)
+- Explicit model gating: `MODEL_PATH` / `MODEL_NAME` + `MODEL_DOWNLOAD_APPROVED` (no silent hub downloads)
+- Job states: DATA_VALIDATION, TRAINING, SHADOW, CANARY, ACTIVATING, ACTIVE, ROLLED_BACK, NO_COMPATIBLE_MODEL
+- Owner aliases: `GET /platform/models`, `POST /platform/models/{id}/activate|rollback`
+- Control Center honest labels: REAL_TRAINING_AVAILABLE / EXECUTED / REAL_MODEL_ACTIVE
+- Tests `test_v99_phase8_real_training.py`; ADR-028; `docs/TRAINING_RUNTIME.md`
+
+### Verified (this environment)
+- Runtime: **AVAILABLE** (CPU torch 2.5.1; no CUDA)
+- Model: local `data/models/tiny-random-gpt2` (operator-declared license metadata)
+- REAL_TRAINING_EXECUTED = **true**
+- REAL_CHECKPOINT_CREATED = **true** (`adapter_model.safetensors`)
+- REAL_EVALUATION_EXECUTED = **true**; CANARY_EXECUTED = **true**; MODEL_ACTIVATED = **true**
+- Full pytest: **434 passed**; smoke **11/11**
+- Mock remains tests-only and never labeled as real
+- ROLLBACK mechanism implemented; first activation had no prior LKG pointer
+
+### Not done
+- No deploy; no Phase 9; QLoRA blocked honestly without CUDA+bitsandbytes
+
 ## 2026-09-27 — Longevity PHASE 7: Real runtime integration + Skill Packs + Control Center
 
 ### Added
@@ -15,7 +39,12 @@
 - PHASE 5 OTP + PHASE 6 orchestrator preserved
 
 ### Verified
-- See PHASE 7 completion report
+- Targeted PHASE 7 tests: 13 passed
+- Full pytest: **425 passed**
+- Smoke: 11/11; schema **5**; runtime **UNAVAILABLE**; OTP intact
+- REAL_TRAINING_EXECUTED = **false** (no torch/transformers/peft/trl in environment)
+- MOCK_TRAINING_EXECUTED = true (tests only)
+- No deploy; no git remote; no secrets exposed
 
 ## 2026-09-27 — Longevity PHASE 6: Autonomous Training + Model Lifecycle
 

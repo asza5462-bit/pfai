@@ -9,15 +9,23 @@ from typing import Any
 class JobState(str, Enum):
     QUEUED = "QUEUED"
     PREPARING = "PREPARING"
-    RUNNING = "RUNNING"
+    DATA_VALIDATION = "DATA_VALIDATION"
+    TRAINING = "TRAINING"
+    RUNNING = "RUNNING"  # legacy alias of TRAINING
     CHECKPOINTING = "CHECKPOINTING"
     EVALUATING = "EVALUATING"
+    SHADOW = "SHADOW"
+    CANARY = "CANARY"
+    ACTIVATING = "ACTIVATING"
+    ACTIVE = "ACTIVE"
     PAUSED = "PAUSED"
     COMPLETED = "COMPLETED"
     FAILED = "FAILED"
     CANCELLED = "CANCELLED"
     REJECTED = "REJECTED"
+    ROLLED_BACK = "ROLLED_BACK"
     TRAINING_RUNTIME_UNAVAILABLE = "TRAINING_RUNTIME_UNAVAILABLE"
+    NO_COMPATIBLE_MODEL = "NO_COMPATIBLE_MODEL"
 
 
 class ModelStatus(str, Enum):
@@ -99,7 +107,16 @@ class TrainingResult:
     metrics: dict[str, Any] = field(default_factory=dict)
     error: str | None = None
     is_mock: bool = False
+    real_training: bool = False
     real_weight_update: bool = False
+    runtime_status: str | None = None
+    base_model: str | None = None
+    model_revision: str | None = None
+    dataset_version: str | None = None
+    training_config: dict[str, Any] = field(default_factory=dict)
+    hardware: dict[str, Any] = field(default_factory=dict)
+    start_time: float | None = None
+    end_time: float | None = None
 
     def to_dict(self) -> dict[str, Any]:
         return asdict(self)

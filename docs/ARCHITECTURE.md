@@ -86,3 +86,12 @@ Training is forbidden from modifying owner authentication, OTP, authorization, s
 - `ActiveModelRuntime` — activation/rollback switches the served model pointer
 - `SkillPackRegistry` — versioned skill packs gated by AuthorizedExecutor
 - Learning Control Center — owner UI/API for training/skills observability
+
+## PHASE 8 additions
+
+- Real LoRA training backend executes PEFT forward/backward/optimizer steps
+- Deterministic optional install for torch/transformers/peft/datasets/accelerate/safetensors/trl
+- Model selection gated by local path or explicit download approval + license metadata
+- Full state machine including SHADOW → CANARY → ACTIVATING → ACTIVE
+- Honest dashboard/API labels distinguishing mock tests from real training
+- See `docs/TRAINING_RUNTIME.md`

@@ -109,6 +109,10 @@ Promotion to active **never** happens automatically. Use owner-authenticated API
 | `TRAINING_MAX_CONCURRENT_JOBS` | Optional | Concurrent training cap |
 | `MODEL_CANARY_ENABLED` / `MODEL_CANARY_REQUEST_LIMIT` / `MODEL_CANARY_FAILURE_THRESHOLD` | Optional | Shadow/canary controls |
 | `MODEL_REVISION` / `MODEL_LICENSE` / `TRAINING_METHOD` | Optional | Model metadata + lora/qlora/full |
+| `MODEL_PATH` | Optional | Local HF model directory for real training |
+| `MODEL_DOWNLOAD_APPROVED` | Optional | Must be true to pull hub models |
+| `TRAINING_BACKEND` | Optional | Default `transformers_lora` |
+| `TRAINING_MAX_STEPS` / `TRAINING_SEED` / `TRAINING_MAX_CHECKPOINTS` | Optional | Bounded real training knobs |
 | `PFAI_CONTINUOUS_TRAINING_ENABLED` | Optional | Override continuous loop |
 | `PFAI_CORS_ORIGINS` | Optional | Comma-separated origins |
 | `PFAI_HOST` | Optional | Default `0.0.0.0` in `run_web.py` |
@@ -117,6 +121,24 @@ Promotion to active **never** happens automatically. Use owner-authenticated API
 | `PFAI_LOCAL_MODEL_ID` | Optional | Local student model for SFT |
 
 See also `docs/OWNER_AUTH.md` for first-time setup, sessions, and rotation.
+See `docs/TRAINING_RUNTIME.md` for real LoRA enablement, rollback, and honesty labels.
+
+## Real training (PHASE 8)
+
+```bash
+cd app
+python -m pfai.longevity.autonomous_training.setup_runtime
+export MODEL_PATH=data/models/tiny-random-gpt2   # or your open-weight dir
+export MODEL_LICENSE=apache-2.0-or-upstream
+export TRAINING_MAX_STEPS=5
+# owner-gated:
+curl -s -H "X-Owner-Secret: …" http://127.0.0.1:8000/platform/runtime/status
+curl -s -X POST -H "X-Owner-Secret: …" -H "Content-Type: application/json" \
+  http://127.0.0.1:8000/platform/training/start \
+  -d '{"owner_requested":true,"activate_if_pass":true}'
+```
+
+Rollback: `POST /platform/training/rollback` or `POST /platform/models/{id}/rollback`.
 
 ## Docker
 

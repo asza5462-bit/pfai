@@ -134,9 +134,14 @@ class AutonomousTrainingOrchestrator:
             state = job.get("state")
             if state not in (
                 JobState.RUNNING.value,
+                JobState.TRAINING.value,
                 JobState.PREPARING.value,
+                JobState.DATA_VALIDATION.value,
                 JobState.CHECKPOINTING.value,
                 JobState.EVALUATING.value,
+                JobState.SHADOW.value,
+                JobState.CANARY.value,
+                JobState.ACTIVATING.value,
             ):
                 continue
             updated = float(job.get("updated_at") or job.get("created_at") or 0)
@@ -176,9 +181,14 @@ class AutonomousTrainingOrchestrator:
                 in (
                     JobState.QUEUED.value,
                     JobState.PREPARING.value,
+                    JobState.DATA_VALIDATION.value,
+                    JobState.TRAINING.value,
                     JobState.RUNNING.value,
                     JobState.CHECKPOINTING.value,
                     JobState.EVALUATING.value,
+                    JobState.SHADOW.value,
+                    JobState.CANARY.value,
+                    JobState.ACTIVATING.value,
                     JobState.PAUSED.value,
                 )
             ),
@@ -213,10 +223,32 @@ class AutonomousTrainingOrchestrator:
             },
             "rollback": {
                 "last_known_good": (self.rollback_mgr.last_known_good() or {}).get("model_id"),
+                "available": bool(self.rollback_mgr.last_known_good()),
             },
             "autonomous_training_enabled": self.autonomous_enabled,
             "paused": bool(self._state.get("paused")),
             "authority_isolation": True,
+            "real_training_available": bool((st.get("capabilities") or {}).get("training_available")),
+            "real_training_executed": bool(
+                (last_ok or {}).get("real_weight_update") or (last_ok or {}).get("real_training")
+            ),
+            "real_model_active": bool(
+                ((st.get("active_runtime") or {}).get("model_id"))
+                and not ((st.get("active_runtime") or {}).get("meta") or {}).get("is_mock")
+                and (
+                    (st.get("active_model") or {}).get("meta", {}).get("is_mock") is not True
+                )
+            ),
+            "labels": {
+                "REAL_TRAINING_AVAILABLE": bool((st.get("capabilities") or {}).get("training_available")),
+                "REAL_TRAINING_EXECUTED": bool(
+                    (last_ok or {}).get("real_weight_update") or (last_ok or {}).get("real_training")
+                ),
+                "REAL_MODEL_ACTIVE": bool(
+                    ((st.get("active_runtime") or {}).get("model_id"))
+                    and not ((st.get("active_model") or {}).get("meta") or {}).get("is_mock")
+                ),
+            },
         }
 
     def status(self) -> dict[str, Any]:
@@ -338,7 +370,12 @@ class AutonomousTrainingOrchestrator:
         cfg = config or TrainingConfig(
             max_runtime_seconds=self.triggers.max_runtime,
             allow_mock_backend=self.allow_mock_backend,
-            base_model=os.environ.get("MODEL_NAME") or os.environ.get("PFAI_MODEL_NAME") or "local",
+            base_model=(
+                os.environ.get("MODEL_PATH")
+                or os.environ.get("MODEL_NAME")
+                or os.environ.get("PFAI_MODEL_NAME")
+                or "local"
+            ),
             method=os.environ.get("TRAINING_METHOD") or "lora",
         )
         cfg.allow_mock_backend = bool(cfg.allow_mock_backend or self.allow_mock_backend)
@@ -346,6 +383,10 @@ class AutonomousTrainingOrchestrator:
             cfg.extra["revision"] = os.environ.get("MODEL_REVISION")
         if os.environ.get("MODEL_LICENSE"):
             cfg.extra["license"] = os.environ.get("MODEL_LICENSE")
+        if os.environ.get("TRAINING_MAX_STEPS"):
+            cfg.extra["max_steps"] = int(os.environ["TRAINING_MAX_STEPS"])
+        if os.environ.get("MODEL_CONTEXT_LENGTH"):
+            cfg.extra["max_seq_length"] = int(os.environ["MODEL_CONTEXT_LENGTH"])
 
         if force_dataset:
             manifest = self.datasets.get(force_dataset)
@@ -399,7 +440,16 @@ class AutonomousTrainingOrchestrator:
             j
             for j in self.list_jobs(limit=20)
             if j.get("state")
-            in (JobState.RUNNING.value, JobState.PREPARING.value, JobState.CHECKPOINTING.value)
+            in (
+                JobState.RUNNING.value,
+                JobState.TRAINING.value,
+                JobState.PREPARING.value,
+                JobState.DATA_VALIDATION.value,
+                JobState.CHECKPOINTING.value,
+                JobState.SHADOW.value,
+                JobState.CANARY.value,
+                JobState.ACTIVATING.value,
+            )
         ]
         admit = self.resources.admit(
             dataset_rows=len(train_rows), method=cfg.method, running_jobs=len(running)
@@ -422,6 +472,10 @@ class AutonomousTrainingOrchestrator:
         job["updated_at"] = time.time()
         self._write_job(job)
 
+        job["state"] = JobState.DATA_VALIDATION.value
+        job["updated_at"] = time.time()
+        self._write_job(job)
+
         # Compatibility — real backend requires pass; mock may skip runtime availability
         compat = self.compat.check(config=cfg, dataset_rows=train_rows)
         job["compatibility"] = {
@@ -429,21 +483,34 @@ class AutonomousTrainingOrchestrator:
             "reasons": compat.get("reasons"),
             "primary_reason": compat.get("primary_reason"),
             "runtime_availability": compat.get("runtime_availability"),
+            "details": {
+                "base_model": (compat.get("details") or {}).get("base_model"),
+                "model_source": (compat.get("details") or {}).get("model_source"),
+                "license": (compat.get("details") or {}).get("license"),
+                "no_compatible_model": (compat.get("details") or {}).get("no_compatible_model"),
+            },
         }
         trainer, selection = self.backends.select(cfg)
+        no_model = bool((compat.get("details") or {}).get("no_compatible_model")) or (
+            (selection or {}).get("status") == "NO_COMPATIBLE_MODEL"
+        )
         if trainer is None or (
             not cfg.allow_mock_backend and not compat.get("ok") and compat.get("primary_reason")
         ):
-            reason = compat.get("primary_reason") or "TRAINING_BLOCKED_RUNTIME_UNAVAILABLE"
-            if trainer is None:
-                reason = "TRAINING_RUNTIME_UNAVAILABLE"
-            job["state"] = JobState.TRAINING_RUNTIME_UNAVAILABLE.value
+            if no_model or (selection or {}).get("status") == "NO_COMPATIBLE_MODEL":
+                reason = "NO_COMPATIBLE_MODEL"
+                job["state"] = JobState.NO_COMPATIBLE_MODEL.value
+            else:
+                reason = compat.get("primary_reason") or "TRAINING_BLOCKED_RUNTIME_UNAVAILABLE"
+                if trainer is None:
+                    reason = "TRAINING_RUNTIME_UNAVAILABLE"
+                job["state"] = JobState.TRAINING_RUNTIME_UNAVAILABLE.value
             job["error"] = reason
             job["selection"] = selection
             job["updated_at"] = time.time()
             self._write_job(job)
-            self.audit.record("runtime_unavailable", job_id=job_id, reason=reason)
-            self._state["phase"] = "runtime_unavailable"
+            self.audit.record("runtime_or_model_unavailable", job_id=job_id, reason=reason)
+            self._state["phase"] = "runtime_unavailable" if reason != "NO_COMPATIBLE_MODEL" else "no_compatible_model"
             self._save_state()
             return {
                 "ok": False,
@@ -451,9 +518,11 @@ class AutonomousTrainingOrchestrator:
                 "job": job,
                 "selection": selection,
                 "actual_training_executed": False,
+                "real_training_executed": False,
+                "reason": reason,
             }
 
-        job["state"] = JobState.RUNNING.value
+        job["state"] = JobState.TRAINING.value
         job["backend"] = trainer.backend_id
         job["selection"] = selection
         job["updated_at"] = time.time()
@@ -501,11 +570,12 @@ class AutonomousTrainingOrchestrator:
 
         job["result"] = result.to_dict()
         job["is_mock"] = result.is_mock
+        job["real_training"] = bool(getattr(result, "real_training", False) or result.real_weight_update)
         job["real_weight_update"] = result.real_weight_update
         job["updated_at"] = time.time()
 
         if not result.ok:
-            job["state"] = result.status
+            job["state"] = result.status if result.status in {s.value for s in JobState} else JobState.FAILED.value
             job["error"] = result.error
             self._write_job(job)
             self.audit.record("training_not_completed", job_id=job_id, result=result.to_dict())
@@ -514,28 +584,43 @@ class AutonomousTrainingOrchestrator:
                 "status": result.status,
                 "job": job,
                 "actual_training_executed": bool(result.real_weight_update),
+                "real_training_executed": bool(getattr(result, "real_training", False)),
             }
 
         # Final checkpoint integrity gate
+        job["state"] = JobState.CHECKPOINTING.value
+        job["updated_at"] = time.time()
+        self._write_job(job)
         final_ok = self.checkpoints.verify_integrity(result.checkpoint_path)
         job["final_checkpoint_integrity"] = final_ok
         if not final_ok.get("ok"):
             job["state"] = JobState.FAILED.value
             job["error"] = "corrupted_checkpoint"
             self._write_job(job)
-            return {"ok": False, "status": "FAILED", "error": "corrupted_checkpoint", "job": job}
+            return {
+                "ok": False,
+                "status": "FAILED",
+                "error": "corrupted_checkpoint",
+                "job": job,
+                "actual_training_executed": bool(result.real_weight_update),
+                "real_training_executed": bool(getattr(result, "real_training", False)),
+                "real_checkpoint_created": False,
+            }
 
         model = self.models.register(
-            base_model=cfg.base_model,
+            base_model=result.base_model or cfg.base_model,
             dataset_version=dataset_id,
             training_config=cfg.to_dict(),
             checkpoint_ref=result.checkpoint_path,
-            status=ModelStatus.VALIDATING,
+            status=ModelStatus.CANDIDATE,
             meta={
                 "job_id": job_id,
                 "backend": result.backend,
                 "is_mock": result.is_mock,
-                "license": (cfg.extra or {}).get("license") or "unverified",
+                "real_training": bool(getattr(result, "real_training", False)),
+                "real_weight_update": result.real_weight_update,
+                "model_revision": result.model_revision,
+                "license": (cfg.extra or {}).get("license") or os.environ.get("MODEL_LICENSE") or "unverified",
             },
         )
         job["model_id"] = model["model_id"]
@@ -545,14 +630,21 @@ class AutonomousTrainingOrchestrator:
 
         self._state["phase"] = "evaluating"
         self._save_state()
+        self.models.update_status(model["model_id"], ModelStatus.VALIDATING)
         eval_report = self.gates.evaluate_candidate(
             candidate_id=model["model_id"],
             candidate_bonus=0.05 if result.ok else 0.0,
         )
         job["evaluation"] = eval_report
+        job["state"] = JobState.SHADOW.value
+        job["updated_at"] = time.time()
+        self._write_job(job)
         shadow = self.gates.shadow_compare(eval_report, {"overall_candidate": eval_report.get("overall_active", 0.5)})
-        canary = self.canary.evaluate_shadow(shadow)
         job["shadow"] = shadow
+        job["state"] = JobState.CANARY.value
+        job["updated_at"] = time.time()
+        self._write_job(job)
+        canary = self.canary.evaluate_shadow(shadow)
         job["canary"] = canary
         self._write_job(job)
         self.audit.record(
@@ -561,6 +653,7 @@ class AutonomousTrainingOrchestrator:
             model_id=model["model_id"],
             decision=eval_report.get("decision"),
             canary=canary.get("decision"),
+            real_training=bool(getattr(result, "real_training", False)),
         )
 
         if (
@@ -581,6 +674,11 @@ class AutonomousTrainingOrchestrator:
                 "job": job,
                 "evaluation": eval_report,
                 "actual_training_executed": bool(result.real_weight_update),
+                "real_training_executed": bool(getattr(result, "real_training", False)),
+                "real_checkpoint_created": True,
+                "real_evaluation_executed": True,
+                "canary_executed": True,
+                "model_activated": False,
             }
 
         self.models.update_status(model["model_id"], ModelStatus.VALIDATED, evaluation=eval_report)
@@ -591,12 +689,19 @@ class AutonomousTrainingOrchestrator:
         activation = None
         runtime_switch = None
         if can_activate:
+            job["state"] = JobState.ACTIVATING.value
+            job["updated_at"] = time.time()
+            self._write_job(job)
             activation = self.models.activate(model["model_id"])
             runtime_switch = self.active_runtime.switch_to(
                 model_id=model["model_id"],
                 checkpoint_ref=result.checkpoint_path,
                 dataset_version=dataset_id,
-                meta={"job_id": job_id, "is_mock": result.is_mock},
+                meta={
+                    "job_id": job_id,
+                    "is_mock": result.is_mock,
+                    "real_training": bool(getattr(result, "real_training", False)),
+                },
             )
             job["activation"] = activation
             job["runtime_switch"] = runtime_switch
@@ -607,9 +712,10 @@ class AutonomousTrainingOrchestrator:
                 dataset_id=dataset_id,
                 is_mock=result.is_mock,
                 real_weight_update=result.real_weight_update,
+                real_training=bool(getattr(result, "real_training", False)),
                 runtime_loaded=bool(runtime_switch.get("loaded")),
             )
-            job["state"] = JobState.COMPLETED.value
+            job["state"] = JobState.ACTIVE.value
         else:
             job["state"] = JobState.COMPLETED.value
             job["activation"] = {
@@ -633,8 +739,13 @@ class AutonomousTrainingOrchestrator:
             "activation": activation,
             "runtime_switch": runtime_switch,
             "actual_training_executed": bool(result.real_weight_update),
+            "real_training_executed": bool(getattr(result, "real_training", False) and result.real_weight_update),
+            "real_checkpoint_created": True,
+            "real_evaluation_executed": True,
+            "canary_executed": True,
             "is_mock": result.is_mock,
             "model_activated": bool(can_activate and activation),
+            "rollback_available": bool(self.rollback_mgr.last_known_good()),
         }
 
     def activate_model(self, model_id: str) -> dict[str, Any]:

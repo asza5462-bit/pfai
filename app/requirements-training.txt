@@ -1,6 +1,15 @@
-torch>=2.3
-transformers>=4.45
-peft>=0.12
-trl>=0.10
-datasets>=2.20
-accelerate>=0.34
+# PHASE 8 — optional real training runtime (CPU-compatible).
+# Install explicitly when enabling real LoRA training:
+#   pip install -r requirements-training.txt
+#
+# Do NOT treat these as required for core PFAI API/dashboard.
+torch==2.5.1
+transformers==4.46.3
+peft==0.13.2
+datasets==3.1.0
+accelerate==1.1.1
+safetensors==0.4.5
+trl==0.12.1
+sentencepiece==0.2.0
+protobuf==5.28.3
+psutil==6.1.0
