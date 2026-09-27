@@ -42,6 +42,15 @@ def examples_to_eval_tasks(examples: list[dict[str, Any]], *, limit: int | None 
             "the", "and", "for", "with", "this", "that", "from", "are", "was", "were", "have",
         }]
         expect = tokens[:3] if tokens else []
+        # Dataset probes validate nonempty/safe generation on real prompts.
+        # Coding probes keep soft token expectations when available.
+        if is_code and expect:
+            score_mode = "expect"
+            soft = True
+        else:
+            score_mode = "nonempty_safe"
+            soft = True
+            expect = []
         tasks.append(
             {
                 "id": f"evaldata-{(ex.get('content_hash') or str(i))[:12]}",
@@ -49,8 +58,8 @@ def examples_to_eval_tasks(examples: list[dict[str, Any]], *, limit: int | None 
                 "prompt": f"### Instruction:\n{inst}\n### Response:\n",
                 "expect_contains": expect,
                 "match_any": True,
-                "soft_expect": True,
-                "score_mode": "nonempty_safe" if not expect else "expect",
+                "soft_expect": soft,
+                "score_mode": score_mode,
                 "forbid_contains": ["password=", "api_key", "sk-", "otp="],
                 "max_new_tokens": 48,
                 "source": ex.get("source"),
