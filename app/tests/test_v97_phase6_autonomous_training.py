@@ -256,11 +256,11 @@ class TestPhase6API(unittest.TestCase):
         )
         self.assertEqual(r.status_code, 401)
 
-    def test_schema_target_is_4(self):
-        self.assertEqual(PFAI_SCHEMA_VERSION, 4)
+    def test_schema_target_is_5(self):
+        self.assertEqual(PFAI_SCHEMA_VERSION, 5)
         r = self.client.get("/platform/migrations", headers=self.headers)
         self.assertEqual(r.status_code, 200)
-        self.assertEqual(r.json().get("target"), 4)
+        self.assertEqual(r.json().get("target"), 5)
 
     def test_knowledge_pipeline_still_no_direct_weight_mutation(self):
         from pfai.api import PLATFORM_LEARNING

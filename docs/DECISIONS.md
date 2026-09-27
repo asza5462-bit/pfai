@@ -273,3 +273,19 @@
   - Immutable dataset + model registries; backup-first schema **v4**; owner-gated `/platform/training/*`.
   - Honest runtime: `TRAINING_RUNTIME_UNAVAILABLE` when compute/training deps are missing — never fake success.
 - Consequences: Platform can continuously improve models under gates; system authority remains unchanged by training.
+
+
+## ADR-027 — Real training runtime integration + Skill Packs (PHASE 7)
+
+- Status: Accepted (2026-09-27)
+- Context: PHASE 6 delivered the autonomous training architecture; this environment lacked a real ML training stack. Operator approved connecting honest runtime detection, LoRA/QLoRA backends, skill packs, and a Learning Control Center without faking training success.
+- Decision:
+  - `TrainingRuntimeDetector` probes imports/hardware and returns AVAILABLE/PARTIALLY_AVAILABLE/UNAVAILABLE/INCOMPATIBLE/ERROR — never from config alone.
+  - Real backend remains `TransformersLoRATrainer` / `RealLoRATrainingBackend`; mock only when explicitly allowed and never labeled as real weight updates.
+  - Preflight: ModelCompatibilityChecker + TrainingResourceManager with blocked reasons.
+  - Job lifecycle adds PREPARING/CHECKPOINTING/EVALUATING + stale RUNNING reconciliation after crash.
+  - `ActiveModelRuntime` pointer switches on activate/rollback (not status-only).
+  - Canary/shadow controls via env (`MODEL_CANARY_*`).
+  - `SkillPackRegistry` versioned packs; skills cannot self-elevate permissions; still gated by AuthorizedExecutor.
+  - Owner Control Center APIs + dashboard; schema **v5**.
+- Consequences: When a real torch/transformers/peft/trl stack exists, training can execute for real; otherwise status remains honest UNAVAILABLE.

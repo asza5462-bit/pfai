@@ -172,6 +172,52 @@ def _downgrade_v4_autonomous_training(conn: Any) -> None:
     _ = conn
 
 
+def _upgrade_v5_skill_packs_control_center(conn: Any) -> None:
+    """PHASE 7: skill pack registry + active runtime pointer dirs."""
+    root = Path("data/longevity")
+    root.mkdir(parents=True, exist_ok=True)
+    (root / "training").mkdir(parents=True, exist_ok=True)
+    (root / ".phase7").write_text("skill-packs+runtime-detector+control-center\n", encoding="utf-8")
+    import sqlite3
+
+    db = sqlite3.connect(root / "skill_packs.sqlite3")
+    try:
+        db.executescript(
+            """
+            CREATE TABLE IF NOT EXISTS skill_packs (
+                pack_id TEXT NOT NULL,
+                version TEXT NOT NULL,
+                description TEXT,
+                skills TEXT,
+                permission TEXT,
+                status TEXT,
+                changelog TEXT,
+                meta TEXT,
+                created_at REAL,
+                PRIMARY KEY (pack_id, version)
+            );
+            CREATE TABLE IF NOT EXISTS skill_pack_active (
+                pack_id TEXT PRIMARY KEY,
+                version TEXT NOT NULL,
+                enabled INTEGER NOT NULL DEFAULT 1,
+                updated_at REAL,
+                previous_version TEXT
+            );
+            """
+        )
+        db.commit()
+    finally:
+        db.close()
+    _ = conn
+
+
+def _downgrade_v5_skill_packs_control_center(conn: Any) -> None:
+    marker = Path("data/longevity/.phase7")
+    if marker.exists():
+        marker.unlink()
+    _ = conn
+
+
 def verify_platform_schema(current: int) -> dict[str, Any]:
     """Integrity checks used by MigrationRunner after apply."""
     root = Path("data/longevity")
@@ -196,6 +242,11 @@ def verify_platform_schema(current: int) -> dict[str, Any]:
         if not checks["training_root"] or not checks["dataset_registry"] or not checks["model_registry"]:
             checks["ok"] = False
             checks["error"] = "autonomous training registries missing"
+    if current >= 5:
+        checks["skill_packs_db"] = (root / "skill_packs.sqlite3").exists()
+        if not checks["skill_packs_db"]:
+            checks["ok"] = False
+            checks["error"] = "skill_packs.sqlite3 missing"
     return checks
 
 
@@ -220,6 +271,13 @@ PLATFORM_MIGRATIONS: list[Migration] = [
         upgrade=_upgrade_v4_autonomous_training,
         downgrade=_downgrade_v4_autonomous_training,
         description="PHASE 6: autonomous training dirs + dataset/model registries",
+    ),
+    Migration(
+        version=5,
+        name="skill_packs_control_center",
+        upgrade=_upgrade_v5_skill_packs_control_center,
+        downgrade=_downgrade_v5_skill_packs_control_center,
+        description="PHASE 7: skill packs + control-center durability markers",
     ),
 ]
 

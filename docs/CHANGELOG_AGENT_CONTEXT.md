@@ -1,5 +1,22 @@
 # Agent Context Changelog
 
+## 2026-09-27 — Longevity PHASE 7: Real runtime integration + Skill Packs + Control Center
+
+### Added
+- TrainingRuntimeDetector, ModelCompatibilityChecker, TrainingResourceManager, ActiveModelRuntime, CanaryController
+- SkillPackRegistry + default packs; `/platform/skills/packs*`
+- Training controls: start/pause/cancel/autonomous/model activate; `/platform/runtime/status`
+- Schema **v5**; Learning Control Center dashboard enrichment
+- Tests `test_v98_phase7_runtime_skills.py`; ADR-027
+
+### Behavior
+- No fake real training; mock remains tests-only
+- Rollback switches ActiveModelRuntime pointer
+- PHASE 5 OTP + PHASE 6 orchestrator preserved
+
+### Verified
+- See PHASE 7 completion report
+
 ## 2026-09-27 — Longevity PHASE 6: Autonomous Training + Model Lifecycle
 
 ### Added

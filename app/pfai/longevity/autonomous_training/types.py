@@ -8,7 +8,10 @@ from typing import Any
 
 class JobState(str, Enum):
     QUEUED = "QUEUED"
+    PREPARING = "PREPARING"
     RUNNING = "RUNNING"
+    CHECKPOINTING = "CHECKPOINTING"
+    EVALUATING = "EVALUATING"
     PAUSED = "PAUSED"
     COMPLETED = "COMPLETED"
     FAILED = "FAILED"

@@ -78,3 +78,11 @@ Loop: experience → sanitize/validate → immutable dataset version → trigger
 `DurableSafeLearningPipeline` continues knowledge/memory learning and **does not** mutate model weights.
 
 Training is forbidden from modifying owner authentication, OTP, authorization, secrets, or security policy (see ADR-026).
+
+
+## PHASE 7 additions
+
+- `TrainingRuntimeDetector` — honest AVAILABLE/PARTIALLY_AVAILABLE/UNAVAILABLE probes
+- `ActiveModelRuntime` — activation/rollback switches the served model pointer
+- `SkillPackRegistry` — versioned skill packs gated by AuthorizedExecutor
+- Learning Control Center — owner UI/API for training/skills observability

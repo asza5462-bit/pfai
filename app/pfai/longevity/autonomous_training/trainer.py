@@ -126,7 +126,7 @@ class TransformersLoRATrainer(ModelTrainer):
             "ok": ok,
             "backend": self.backend_id,
             "is_mock": False,
-            "methods": caps.get("supported_training_methods") or [],
+            "methods": caps.get("supported_training_methods") or caps.get("supported_methods") or [],
             "capabilities": caps,
             "status": "READY" if ok else "TRAINING_RUNTIME_UNAVAILABLE",
         }
@@ -272,3 +272,8 @@ class TrainingBackendRegistry:
             self.register(TransformersLoRATrainer())
         if "mock" not in self._backends:
             self.register(MockModelTrainer())
+
+
+# Explicit PHASE 7 aliases — production real backend names
+RealLoRATrainingBackend = TransformersLoRATrainer
+RealQLoRATrainingBackend = TransformersLoRATrainer  # method selected via TrainingConfig.method

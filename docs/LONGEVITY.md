@@ -160,6 +160,7 @@ Guides upgrades of runtime, deps, DB, model APIs, OS, deploy env.
 | **4 (done)** | Unified Planner/Tools authorization, versioned skills/tools, Orchestrator plan mode, bounded auditable self-heal |
 | **5 (done)** | Email OTP owner auth + EmailProvider; real local/open-weight adapters; migration audit/verify; schema apply in safe envs |
 | **6 (done)** | Autonomous training orchestrator, dataset/model registries, eval gates, activation/rollback; schema 4 |
-| 7+ | Goal/education skill packs, planner/tool UX polish beyond Core |
+| **7 (done)** | Runtime detector, LoRA backend wiring, skill packs, Learning Control Center; schema 5 |
+| 8+ | Broader education skill content + production ML ops hardening |
 
 Do not skip phases. Do not replace FastAPI/Dashboard in foundation work.

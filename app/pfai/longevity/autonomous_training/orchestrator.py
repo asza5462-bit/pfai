@@ -1,4 +1,4 @@
-"""AutonomousTrainingOrchestrator — resumable train→eval→activate→rollback loop."""
+"""AutonomousTrainingOrchestrator — PHASE 6/7 resumable train→eval→activate→rollback."""
 from __future__ import annotations
 
 import json
@@ -9,15 +9,20 @@ import uuid
 from pathlib import Path
 from typing import Any
 
+from .active_runtime import ActiveModelRuntime
 from .audit import TrainingAuditLog
+from .canary import CanaryController
 from .checkpoints import CheckpointStore
 from .collector import ExperienceCollector, collect_from_learning_pipeline
+from .compatibility import ModelCompatibilityChecker
 from .dataset import DatasetBuilder, DatasetVersionRegistry
 from .evaluation_gate import EvaluationGate
 from .isolation import TrainingSafetyIsolation
 from .model_registry import ModelRegistry
+from .resources import TrainingResourceManager
 from .rollback import ModelRollbackManager
 from .runtime import detect_runtime_capabilities
+from .runtime_detector import TrainingRuntimeDetector
 from .trainer import TrainingBackendRegistry
 from .triggers import TrainingTriggerPolicy
 from .types import JobState, ModelStatus, TrainingConfig, TrainingResult
@@ -26,6 +31,8 @@ from .validator import TrainingExampleValidator
 
 class AutonomousTrainingOrchestrator:
     """Full continuous improvement loop with honest runtime reporting."""
+
+    STALE_RUNNING_SECONDS = 7200
 
     def __init__(
         self,
@@ -52,14 +59,28 @@ class AutonomousTrainingOrchestrator:
         self.backends = TrainingBackendRegistry()
         self.backends.bootstrap_defaults()
         self.gates = EvaluationGate(eval_runner=eval_runner)
-        self.rollback_mgr = ModelRollbackManager(self.models, audit_fn=self.audit.record)
+        self.active_runtime = ActiveModelRuntime(str(self.root / "active_runtime.json"))
+        self.rollback_mgr = ModelRollbackManager(
+            self.models, audit_fn=self.audit.record, active_runtime=self.active_runtime
+        )
         self.isolation = TrainingSafetyIsolation()
         self.triggers = TrainingTriggerPolicy()
+        self.detector = TrainingRuntimeDetector()
+        self.compat = ModelCompatibilityChecker(self.detector)
+        self.resources = TrainingResourceManager(self.detector)
+        self.canary = CanaryController()
         self._lock = threading.RLock()
         env_mock = (os.environ.get("TRAINING_ALLOW_MOCK") or "").lower() in ("1", "true", "yes")
         self.allow_mock_backend = env_mock if allow_mock_backend is None else bool(allow_mock_backend)
+        self.autonomous_enabled = (os.environ.get("AUTONOMOUS_TRAINING_ENABLED") or "true").lower() in (
+            "1",
+            "true",
+            "yes",
+        )
+        self.min_dataset_quality = float(os.environ.get("TRAINING_MIN_DATASET_QUALITY", "0.55"))
         self._ensure_default_sources()
         self._state = self._load_state()
+        self.reconcile_stale_jobs()
 
     def _ensure_default_sources(self) -> None:
         if "durable_learning" not in getattr(self.collector, "_sources", {}):
@@ -80,6 +101,7 @@ class AutonomousTrainingOrchestrator:
             "last_dataset_id": None,
             "last_model_id": None,
             "cycles": 0,
+            "paused": False,
             "updated_at": time.time(),
         }
 
@@ -104,16 +126,97 @@ class AutonomousTrainingOrchestrator:
             return None
         return json.loads(path.read_text(encoding="utf-8"))
 
+    def reconcile_stale_jobs(self) -> list[str]:
+        """Mark abandoned RUNNING/PREPARING/CHECKPOINTING jobs as FAILED after crash/timeout."""
+        fixed: list[str] = []
+        now = time.time()
+        for job in self.list_jobs(limit=100):
+            state = job.get("state")
+            if state not in (
+                JobState.RUNNING.value,
+                JobState.PREPARING.value,
+                JobState.CHECKPOINTING.value,
+                JobState.EVALUATING.value,
+            ):
+                continue
+            updated = float(job.get("updated_at") or job.get("created_at") or 0)
+            if now - updated > self.STALE_RUNNING_SECONDS:
+                job["state"] = JobState.FAILED.value
+                job["error"] = "reconciled_stale_running_after_restart_or_timeout"
+                job["updated_at"] = now
+                self._write_job(job)
+                fixed.append(job["job_id"])
+                self.audit.record("job_reconciled_stale", job_id=job["job_id"])
+        return fixed
+
     def runtime_status(self) -> dict[str, Any]:
         caps = detect_runtime_capabilities()
         return {
             "training_enabled": self.triggers.enabled,
+            "autonomous_training_enabled": self.autonomous_enabled,
             "allow_mock_backend": self.allow_mock_backend,
             "capabilities": caps,
+            "runtime_availability": caps.get("runtime_availability") or caps.get("status"),
             "status": caps.get("status"),
             "backends": self.backends.list_backends(),
             "active_model": self.models.active(),
+            "active_runtime": self.active_runtime.current(),
             "orchestrator": dict(self._state),
+        }
+
+    def control_center_status(self) -> dict[str, Any]:
+        """Owner Learning/Training Control Center payload (no secrets)."""
+        st = self.status()
+        jobs = self.list_jobs(limit=10)
+        current = next(
+            (
+                j
+                for j in jobs
+                if j.get("state")
+                in (
+                    JobState.QUEUED.value,
+                    JobState.PREPARING.value,
+                    JobState.RUNNING.value,
+                    JobState.CHECKPOINTING.value,
+                    JobState.EVALUATING.value,
+                    JobState.PAUSED.value,
+                )
+            ),
+            None,
+        )
+        last_ok = next((j for j in jobs if j.get("state") == JobState.COMPLETED.value), None)
+        last_fail = next(
+            (j for j in jobs if j.get("state") in (JobState.FAILED.value, JobState.REJECTED.value)),
+            None,
+        )
+        datasets = self.datasets.list_versions(limit=1)
+        return {
+            "active_model": st.get("active_model"),
+            "active_runtime": st.get("active_runtime"),
+            "runtime_status": st.get("status"),
+            "runtime_availability": st.get("runtime_availability"),
+            "training_runtime_status": st.get("status"),
+            "gpu_available": (st.get("capabilities") or {}).get("gpu_available"),
+            "cpu_count": (st.get("capabilities") or {}).get("cpu_count"),
+            "current_dataset": datasets[0] if datasets else None,
+            "last_training": last_ok,
+            "last_failed_training": last_fail,
+            "current_job": current,
+            "candidate_model": next(
+                (m for m in (st.get("models") or []) if m.get("status") in ("CANDIDATE", "VALIDATING", "VALIDATED")),
+                None,
+            ),
+            "canary": {
+                "enabled": self.canary.enabled,
+                "request_limit": self.canary.request_limit,
+                "failure_threshold": self.canary.failure_threshold,
+            },
+            "rollback": {
+                "last_known_good": (self.rollback_mgr.last_known_good() or {}).get("model_id"),
+            },
+            "autonomous_training_enabled": self.autonomous_enabled,
+            "paused": bool(self._state.get("paused")),
+            "authority_isolation": True,
         }
 
     def status(self) -> dict[str, Any]:
@@ -138,11 +241,55 @@ class AutonomousTrainingOrchestrator:
                 continue
         return out
 
+    def pause_training(self) -> dict[str, Any]:
+        self._state["paused"] = True
+        self._save_state()
+        for job in self.list_jobs(limit=20):
+            if job.get("state") in (JobState.QUEUED.value, JobState.RUNNING.value, JobState.PREPARING.value):
+                job["state"] = JobState.PAUSED.value
+                job["updated_at"] = time.time()
+                self._write_job(job)
+        self.audit.record("training_paused")
+        return {"ok": True, "paused": True}
+
+    def cancel_job(self, job_id: str) -> dict[str, Any]:
+        job = self._read_job(job_id)
+        if not job:
+            return {"ok": False, "error": "job_not_found"}
+        if job.get("state") in (JobState.COMPLETED.value, JobState.FAILED.value, JobState.REJECTED.value):
+            return {"ok": False, "error": "job_already_terminal", "job": job}
+        job["state"] = JobState.CANCELLED.value
+        job["updated_at"] = time.time()
+        self._write_job(job)
+        self.audit.record("job_cancelled", job_id=job_id)
+        return {"ok": True, "job": job}
+
+    def set_autonomous(self, enabled: bool) -> dict[str, Any]:
+        self.autonomous_enabled = bool(enabled)
+        self._state["autonomous_training_enabled"] = self.autonomous_enabled
+        self._save_state()
+        return {"ok": True, "autonomous_training_enabled": self.autonomous_enabled}
+
     def build_dataset_from_sources(self, *, sources: list[str] | None = None) -> dict[str, Any]:
         rows = self.collector.collect(sources=sources)
         built = self.builder.build(rows)
         if built["accepted"] < 1:
             return {"ok": False, "error": "INSUFFICIENT_DATA", "built": built}
+        # Quality threshold
+        qualities = [float(e.quality_score) for e in built["examples"]]
+        avg_q = sum(qualities) / len(qualities) if qualities else 0.0
+        quality_report = {
+            "total_input": len(rows),
+            "accepted": built["accepted"],
+            "rejected": built["rejected"],
+            "avg_quality": avg_q,
+            "min_required": self.min_dataset_quality,
+            "train": len(built["splits"]["train"]),
+            "validation": len(built["splits"]["validation"]),
+            "test": len(built["splits"]["test"]),
+        }
+        if avg_q < self.min_dataset_quality:
+            return {"ok": False, "error": "DATASET_QUALITY_BELOW_THRESHOLD", "quality": quality_report}
         parent = None
         versions = self.datasets.list_versions(limit=1)
         if versions:
@@ -150,12 +297,18 @@ class AutonomousTrainingOrchestrator:
         manifest = self.datasets.create_version(
             built,
             parent_dataset=parent,
-            meta={"sources": sources or list(self.collector._sources.keys())},
+            meta={"sources": sources or list(self.collector._sources.keys()), "quality": quality_report},
         )
         self.audit.record("dataset_created", dataset_id=manifest["dataset_id"], counts=manifest.get("validation_results"))
         self._state["last_dataset_id"] = manifest["dataset_id"]
         self._save_state()
-        return {"ok": True, "manifest": manifest, "accepted": built["accepted"], "rejected": built["rejected"]}
+        return {
+            "ok": True,
+            "manifest": manifest,
+            "accepted": built["accepted"],
+            "rejected": built["rejected"],
+            "quality": quality_report,
+        }
 
     def run_cycle(
         self,
@@ -170,19 +323,30 @@ class AutonomousTrainingOrchestrator:
         request: dict[str, Any] | None = None,
     ) -> dict[str, Any]:
         """Execute one autonomous learning cycle (resumable via job records)."""
+        self.reconcile_stale_jobs()
+        if self._state.get("paused") and not owner_requested:
+            return {"ok": False, "status": "PAUSED", "error": "training_paused"}
+
         guard = self.isolation.guard_training_request(request)
         if not guard["ok"]:
             self.audit.record("isolation_block", violations=guard["violations"])
             return {"ok": False, "error": "AUTHORITY_ISOLATION_VIOLATION", "violations": guard["violations"]}
 
+        if not self.autonomous_enabled and not owner_requested and not explicit_retrain:
+            return {"ok": False, "status": "AUTONOMOUS_DISABLED", "error": "autonomous_training_disabled"}
+
         cfg = config or TrainingConfig(
             max_runtime_seconds=self.triggers.max_runtime,
             allow_mock_backend=self.allow_mock_backend,
             base_model=os.environ.get("MODEL_NAME") or os.environ.get("PFAI_MODEL_NAME") or "local",
+            method=os.environ.get("TRAINING_METHOD") or "lora",
         )
         cfg.allow_mock_backend = bool(cfg.allow_mock_backend or self.allow_mock_backend)
+        if os.environ.get("MODEL_REVISION"):
+            cfg.extra["revision"] = os.environ.get("MODEL_REVISION")
+        if os.environ.get("MODEL_LICENSE"):
+            cfg.extra["license"] = os.environ.get("MODEL_LICENSE")
 
-        # Collect / reuse dataset
         if force_dataset:
             manifest = self.datasets.get(force_dataset)
             if not manifest:
@@ -192,8 +356,8 @@ class AutonomousTrainingOrchestrator:
         else:
             built = self.build_dataset_from_sources()
             if not built.get("ok"):
-                self.audit.record("insufficient_data", detail=built)
-                return {"ok": False, "status": "INSUFFICIENT_DATA", **built}
+                self.audit.record("insufficient_data", detail={k: built.get(k) for k in ("error", "quality")})
+                return {"ok": False, "status": built.get("error") or "INSUFFICIENT_DATA", **built}
             manifest = built["manifest"]
             dataset_id = manifest["dataset_id"]
             accepted = int(built.get("accepted") or 0)
@@ -214,6 +378,7 @@ class AutonomousTrainingOrchestrator:
             "state": JobState.QUEUED.value,
             "dataset_id": dataset_id,
             "created_at": time.time(),
+            "updated_at": time.time(),
             "config": cfg.to_dict(),
             "triggers": decision.get("triggers"),
             "checkpoints": [],
@@ -226,48 +391,88 @@ class AutonomousTrainingOrchestrator:
         self._write_job(job)
         self.audit.record("job_queued", job_id=job_id, dataset_id=dataset_id, triggers=decision.get("triggers"))
 
-        # Concurrent job budget
-        running = [j for j in self.list_jobs(limit=20) if j.get("state") == JobState.RUNNING.value]
-        if len(running) >= self.triggers.max_resource_budget:
-            job["state"] = JobState.REJECTED.value
-            job["error"] = "max concurrent training jobs exceeded"
-            self._write_job(job)
-            return {"ok": False, "status": JobState.REJECTED.value, "job": job}
+        train_rows = self.datasets.load_split(dataset_id, "train")
+        if len(train_rows) > cfg.max_dataset_size:
+            train_rows = train_rows[: cfg.max_dataset_size]
 
-        trainer, selection = self.backends.select(cfg)
-        if trainer is None:
-            job["state"] = JobState.TRAINING_RUNTIME_UNAVAILABLE.value
-            job["error"] = "TRAINING_RUNTIME_UNAVAILABLE"
-            job["selection"] = selection
+        running = [
+            j
+            for j in self.list_jobs(limit=20)
+            if j.get("state")
+            in (JobState.RUNNING.value, JobState.PREPARING.value, JobState.CHECKPOINTING.value)
+        ]
+        admit = self.resources.admit(
+            dataset_rows=len(train_rows), method=cfg.method, running_jobs=len(running)
+        )
+        job["resource_admission"] = admit
+        # Mock path may proceed when explicitly allowed even if real runtime unavailable
+        if not admit.get("ok") and not cfg.allow_mock_backend:
+            reasons = admit.get("reasons") or ["resources"]
+            if "runtime_unavailable" in reasons:
+                err = "TRAINING_RUNTIME_UNAVAILABLE"
+            else:
+                err = "TRAINING_BLOCKED_" + str(reasons[0]).upper()
+            job["state"] = JobState.REJECTED.value if "runtime_unavailable" not in reasons else JobState.TRAINING_RUNTIME_UNAVAILABLE.value
+            job["error"] = err
+            job["updated_at"] = time.time()
             self._write_job(job)
-            self.audit.record("runtime_unavailable", job_id=job_id, selection=selection)
+            return {"ok": False, "status": err, "job": job, "actual_training_executed": False}
+
+        job["state"] = JobState.PREPARING.value
+        job["updated_at"] = time.time()
+        self._write_job(job)
+
+        # Compatibility — real backend requires pass; mock may skip runtime availability
+        compat = self.compat.check(config=cfg, dataset_rows=train_rows)
+        job["compatibility"] = {
+            "ok": compat.get("ok"),
+            "reasons": compat.get("reasons"),
+            "primary_reason": compat.get("primary_reason"),
+            "runtime_availability": compat.get("runtime_availability"),
+        }
+        trainer, selection = self.backends.select(cfg)
+        if trainer is None or (
+            not cfg.allow_mock_backend and not compat.get("ok") and compat.get("primary_reason")
+        ):
+            reason = compat.get("primary_reason") or "TRAINING_BLOCKED_RUNTIME_UNAVAILABLE"
+            if trainer is None:
+                reason = "TRAINING_RUNTIME_UNAVAILABLE"
+            job["state"] = JobState.TRAINING_RUNTIME_UNAVAILABLE.value
+            job["error"] = reason
+            job["selection"] = selection
+            job["updated_at"] = time.time()
+            self._write_job(job)
+            self.audit.record("runtime_unavailable", job_id=job_id, reason=reason)
             self._state["phase"] = "runtime_unavailable"
             self._save_state()
             return {
                 "ok": False,
-                "status": "TRAINING_RUNTIME_UNAVAILABLE",
+                "status": reason,
                 "job": job,
                 "selection": selection,
                 "actual_training_executed": False,
             }
 
-        train_rows = self.datasets.load_split(dataset_id, "train")
-        if len(train_rows) > cfg.max_dataset_size:
-            train_rows = train_rows[: cfg.max_dataset_size]
-
         job["state"] = JobState.RUNNING.value
         job["backend"] = trainer.backend_id
         job["selection"] = selection
+        job["updated_at"] = time.time()
         self._write_job(job)
         self._state["phase"] = "training"
         self._state["last_job_id"] = job_id
+        self._state["paused"] = False
         self._save_state()
 
         out_dir = str(self.root / "artifacts" / job_id)
 
         def _on_cp(meta: dict[str, Any]) -> None:
+            job["state"] = JobState.CHECKPOINTING.value
+            job["updated_at"] = time.time()
             rec = self.checkpoints.record(job_id, meta)
+            if not rec.get("integrity_ok"):
+                job["checkpoint_warning"] = "integrity_failed"
             job["checkpoints"].append(rec)
+            job["state"] = JobState.RUNNING.value
             self._write_job(job)
 
         started = time.time()
@@ -282,6 +487,7 @@ class AutonomousTrainingOrchestrator:
         except Exception as exc:
             job["state"] = JobState.FAILED.value
             job["error"] = type(exc).__name__
+            job["updated_at"] = time.time()
             self._write_job(job)
             self.audit.record("training_failed", job_id=job_id, error=type(exc).__name__)
             return {"ok": False, "status": JobState.FAILED.value, "job": job, "actual_training_executed": False}
@@ -289,12 +495,14 @@ class AutonomousTrainingOrchestrator:
         if time.time() - started > cfg.max_runtime_seconds:
             job["state"] = JobState.FAILED.value
             job["error"] = "timeout"
+            job["updated_at"] = time.time()
             self._write_job(job)
             return {"ok": False, "status": "FAILED", "error": "timeout", "job": job}
 
         job["result"] = result.to_dict()
         job["is_mock"] = result.is_mock
         job["real_weight_update"] = result.real_weight_update
+        job["updated_at"] = time.time()
 
         if not result.ok:
             job["state"] = result.status
@@ -308,42 +516,61 @@ class AutonomousTrainingOrchestrator:
                 "actual_training_executed": bool(result.real_weight_update),
             }
 
-        # Register candidate model
+        # Final checkpoint integrity gate
+        final_ok = self.checkpoints.verify_integrity(result.checkpoint_path)
+        job["final_checkpoint_integrity"] = final_ok
+        if not final_ok.get("ok"):
+            job["state"] = JobState.FAILED.value
+            job["error"] = "corrupted_checkpoint"
+            self._write_job(job)
+            return {"ok": False, "status": "FAILED", "error": "corrupted_checkpoint", "job": job}
+
         model = self.models.register(
             base_model=cfg.base_model,
             dataset_version=dataset_id,
             training_config=cfg.to_dict(),
             checkpoint_ref=result.checkpoint_path,
             status=ModelStatus.VALIDATING,
-            meta={"job_id": job_id, "backend": result.backend, "is_mock": result.is_mock},
+            meta={
+                "job_id": job_id,
+                "backend": result.backend,
+                "is_mock": result.is_mock,
+                "license": (cfg.extra or {}).get("license") or "unverified",
+            },
         )
         job["model_id"] = model["model_id"]
+        job["state"] = JobState.EVALUATING.value
+        job["updated_at"] = time.time()
         self._write_job(job)
 
-        # Evaluate
         self._state["phase"] = "evaluating"
         self._save_state()
-        # Mock trainings can pass gates in tests but must be labeled; production auto-activate
-        # only when real_weight_update OR explicit allow_mock_backend with owner_requested.
         eval_report = self.gates.evaluate_candidate(
             candidate_id=model["model_id"],
             candidate_bonus=0.05 if result.ok else 0.0,
         )
         job["evaluation"] = eval_report
         shadow = self.gates.shadow_compare(eval_report, {"overall_candidate": eval_report.get("overall_active", 0.5)})
+        canary = self.canary.evaluate_shadow(shadow)
         job["shadow"] = shadow
+        job["canary"] = canary
         self._write_job(job)
         self.audit.record(
             "evaluation_complete",
             job_id=job_id,
             model_id=model["model_id"],
             decision=eval_report.get("decision"),
-            shadow=shadow.get("decision"),
+            canary=canary.get("decision"),
         )
 
-        if not eval_report.get("ok") or shadow.get("decision") == "STOP_ACTIVATION":
+        if (
+            not eval_report.get("ok")
+            or shadow.get("decision") == "STOP_ACTIVATION"
+            or canary.get("decision") == "STOP_ACTIVATION"
+        ):
             self.models.update_status(model["model_id"], ModelStatus.REJECTED, evaluation=eval_report)
             job["state"] = JobState.REJECTED.value
+            job["updated_at"] = time.time()
             self._write_job(job)
             self._state["phase"] = "rejected"
             self._state["cycles"] = int(self._state.get("cycles") or 0) + 1
@@ -358,14 +585,21 @@ class AutonomousTrainingOrchestrator:
 
         self.models.update_status(model["model_id"], ModelStatus.VALIDATED, evaluation=eval_report)
 
-        # Activation policy: real training always eligible; mock only when allow_mock_backend
         can_activate = activate_if_pass and (
             result.real_weight_update or (result.is_mock and cfg.allow_mock_backend)
         )
         activation = None
+        runtime_switch = None
         if can_activate:
             activation = self.models.activate(model["model_id"])
+            runtime_switch = self.active_runtime.switch_to(
+                model_id=model["model_id"],
+                checkpoint_ref=result.checkpoint_path,
+                dataset_version=dataset_id,
+                meta={"job_id": job_id, "is_mock": result.is_mock},
+            )
             job["activation"] = activation
+            job["runtime_switch"] = runtime_switch
             self.audit.record(
                 "model_activated",
                 job_id=job_id,
@@ -373,6 +607,7 @@ class AutonomousTrainingOrchestrator:
                 dataset_id=dataset_id,
                 is_mock=result.is_mock,
                 real_weight_update=result.real_weight_update,
+                runtime_loaded=bool(runtime_switch.get("loaded")),
             )
             job["state"] = JobState.COMPLETED.value
         else:
@@ -383,6 +618,7 @@ class AutonomousTrainingOrchestrator:
                 "is_mock": result.is_mock,
             }
 
+        job["updated_at"] = time.time()
         self._write_job(job)
         self.triggers.mark_scheduled()
         self._state["phase"] = "completed"
@@ -395,30 +631,64 @@ class AutonomousTrainingOrchestrator:
             "job": job,
             "evaluation": eval_report,
             "activation": activation,
+            "runtime_switch": runtime_switch,
             "actual_training_executed": bool(result.real_weight_update),
             "is_mock": result.is_mock,
+            "model_activated": bool(can_activate and activation),
         }
+
+    def activate_model(self, model_id: str) -> dict[str, Any]:
+        model = self.models.get(model_id)
+        if not model:
+            return {"ok": False, "error": "model_not_found"}
+        if model.get("status") not in (ModelStatus.VALIDATED.value, ModelStatus.CANDIDATE.value, ModelStatus.ACTIVE.value):
+            return {"ok": False, "error": "model_not_validated"}
+        cp = model.get("checkpoint_ref") or ""
+        integrity = self.checkpoints.verify_integrity(cp)
+        if not integrity.get("ok"):
+            return {"ok": False, "error": "checkpoint_integrity_failed", "integrity": integrity}
+        activation = self.models.activate(model_id)
+        runtime = self.active_runtime.switch_to(
+            model_id=model_id,
+            checkpoint_ref=cp,
+            dataset_version=str(model.get("dataset_version") or ""),
+        )
+        self.audit.record("model_activated_manual", model_id=model_id, runtime_loaded=runtime.get("loaded"))
+        return {"ok": runtime.get("status") == "ACTIVE", "activation": activation, "runtime": runtime}
 
     def resume_job(self, job_id: str) -> dict[str, Any]:
         job = self._read_job(job_id)
         if not job:
             return {"ok": False, "error": "job_not_found"}
         state = job.get("state")
-        if state in (JobState.COMPLETED.value, JobState.REJECTED.value, JobState.FAILED.value):
+        if state in (
+            JobState.COMPLETED.value,
+            JobState.REJECTED.value,
+            JobState.FAILED.value,
+            JobState.CANCELLED.value,
+        ):
             return {"ok": True, "resumed": False, "job": job}
-        # Re-queue incomplete jobs conservatively
+        self._state["paused"] = False
+        self._save_state()
         return self.run_cycle(
             owner_requested=True,
             force_dataset=job.get("dataset_id"),
-            config=TrainingConfig(**{k: v for k, v in (job.get("config") or {}).items() if k in TrainingConfig.__dataclass_fields__}),
+            config=TrainingConfig(
+                **{
+                    k: v
+                    for k, v in (job.get("config") or {}).items()
+                    if k in TrainingConfig.__dataclass_fields__
+                }
+            ),
         )
 
     def monitor_and_maybe_rollback(self, *, force_regression: bool = False) -> dict[str, Any]:
         active = self.models.active()
         if not active:
             return {"ok": True, "action": "none", "reason": "no_active_model"}
-        # Lightweight monitor using evaluation gate smoke
-        report = self.gates.evaluate_candidate(candidate_id=active["model_id"], candidate_bonus=-0.5 if force_regression else 0.0)
+        report = self.gates.evaluate_candidate(
+            candidate_id=active["model_id"], candidate_bonus=-0.5 if force_regression else 0.0
+        )
         if force_regression or not report.get("ok"):
             rb = self.rollback_mgr.rollback(reason="post_activation_regression")
             return {"ok": rb.get("ok"), "action": "rollback", "monitor": report, "rollback": rb}

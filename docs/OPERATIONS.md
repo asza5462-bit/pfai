@@ -104,6 +104,11 @@ Promotion to active **never** happens automatically. Use owner-authenticated API
 | `TRAINING_MAX_RUNTIME` | Optional | Max seconds per training job |
 | `TRAINING_MAX_RESOURCE_BUDGET` | Optional | Max concurrent training jobs |
 | `TRAINING_ALLOW_MOCK` | Optional | Tests/dev only — never pretends real weight updates |
+| `AUTONOMOUS_TRAINING_ENABLED` | Optional | Allow automatic training cycles (default true) |
+| `TRAINING_MIN_FREE_MEMORY` / `TRAINING_MIN_FREE_DISK` | Optional | Admission thresholds (GB) |
+| `TRAINING_MAX_CONCURRENT_JOBS` | Optional | Concurrent training cap |
+| `MODEL_CANARY_ENABLED` / `MODEL_CANARY_REQUEST_LIMIT` / `MODEL_CANARY_FAILURE_THRESHOLD` | Optional | Shadow/canary controls |
+| `MODEL_REVISION` / `MODEL_LICENSE` / `TRAINING_METHOD` | Optional | Model metadata + lora/qlora/full |
 | `PFAI_CONTINUOUS_TRAINING_ENABLED` | Optional | Override continuous loop |
 | `PFAI_CORS_ORIGINS` | Optional | Comma-separated origins |
 | `PFAI_HOST` | Optional | Default `0.0.0.0` in `run_web.py` |

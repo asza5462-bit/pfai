@@ -198,7 +198,7 @@ class TestPhase5MigrationHardening(unittest.TestCase):
                 )
                 register_platform_migrations(runner)
                 plan = runner.plan()
-                self.assertEqual([m.version for m in plan], [2, 3, 4])
+                self.assertEqual([m.version for m in plan], [2, 3, 4, 5])
 
                 dry = runner.run(dry_run=True)
                 self.assertTrue(dry.ok)
@@ -219,7 +219,7 @@ class TestPhase5MigrationHardening(unittest.TestCase):
 
                 applied = runner.run(dry_run=False)
                 self.assertTrue(applied.ok)
-                self.assertEqual(runner.current_version(), 4)
+                self.assertEqual(runner.current_version(), 5)
                 self.assertGreaterEqual(len(backups), 1)
                 verify = runner.verify_schema()
                 self.assertTrue(verify["ok"])
@@ -228,11 +228,11 @@ class TestPhase5MigrationHardening(unittest.TestCase):
                 again = runner.run(dry_run=False)
                 self.assertTrue(again.ok)
                 self.assertEqual(again.applied, [])
-                self.assertEqual(runner.current_version(), 4)
+                self.assertEqual(runner.current_version(), 5)
 
                 # Failed migration leaves version unchanged for that step
                 fail_runner = MigrationRunner(
-                    current=4,
+                    current=5,
                     state_path=str(root / "schema_fail.json"),
                     backup_fn=backup,
                     audit_path=str(root / "fail_audit.jsonl"),
@@ -242,16 +242,16 @@ class TestPhase5MigrationHardening(unittest.TestCase):
                     raise RuntimeError("boom")
 
                 fail_runner.register(
-                    Migration(version=5, name="boom", upgrade=boom, description="fail")
+                    Migration(version=6, name="boom", upgrade=boom, description="fail")
                 )
-                failed = fail_runner.run(target=5, dry_run=False)
+                failed = fail_runner.run(target=6, dry_run=False)
                 self.assertFalse(failed.ok)
-                self.assertEqual(fail_runner.current_version(), 4)
+                self.assertEqual(fail_runner.current_version(), 5)
 
                 # Rollback one step (marker-only downgrade)
                 rb = runner.rollback_one()
                 self.assertTrue(rb.ok)
-                self.assertEqual(runner.current_version(), 3)
+                self.assertEqual(runner.current_version(), 4)
             finally:
                 os.chdir(cwd)
 

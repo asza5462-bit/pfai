@@ -104,7 +104,7 @@ class TestLongevityContracts(unittest.TestCase):
         self.assertEqual(kv.provenance.actor, "owner")
 
     def test_schema_version_and_migration_dry_run(self):
-        self.assertEqual(PFAI_SCHEMA_VERSION, 4)
+        self.assertEqual(PFAI_SCHEMA_VERSION, 5)
         with tempfile.TemporaryDirectory() as d:
             state = Path(d) / "schema_version.json"
             runner = MigrationRunner(current=1, state_path=str(state))
@@ -165,7 +165,7 @@ class TestLongevityContracts(unittest.TestCase):
         self.assertIsInstance(layer, CompatibilityLayerProtocol)
         report = layer.check()
         self.assertTrue(report.python_ok)
-        self.assertEqual(layer.schema_version(), 4)
+        self.assertEqual(layer.schema_version(), 5)
         self.assertIn("echo", layer.supported_provider_kinds())
         self.assertIn("sqlite", layer.supported_storage_kinds())
 
