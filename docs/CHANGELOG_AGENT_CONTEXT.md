@@ -15,7 +15,9 @@
 - No fine-tune automation; no external deploy; no new auth
 
 ### Verified
-- (fill after pytest + smoke)
+- pytest: **305 passed**
+- Live `/health` 200 + Dashboard `/` 200 (AI Command Chat + Coding Academy present)
+- No API route wiring changes in PHASE 1
 
 ## 2026-09-27 — Coding Academy / Coding Intelligence
 

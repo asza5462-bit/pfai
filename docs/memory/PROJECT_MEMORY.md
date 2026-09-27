@@ -19,7 +19,8 @@ Last updated: 2026-09-27 (PHASE 1 Orchestrator interfaces)
 
 ## Verification
 
-- pytest: (update after PHASE 1 run)
+- pytest: 305 passed
+- Live smoke: `/health` + Dashboard `/` OK
 
 ## Operator secrets (platform only)
 
