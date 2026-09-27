@@ -439,7 +439,7 @@ class TransformersLoRATrainer(ModelTrainer):
         model.train()
 
         texts = [
-            f"### Instruction\n{str(r.get('instruction') or '').strip()}\n### Response\n{str(r.get('response') or '').strip()}"
+            f"### Instruction:\n{str(r.get('instruction') or '').strip()}\n### Response:\n{str(r.get('response') or '').strip()}"
             for r in dataset_rows
             if str(r.get("instruction") or "").strip() and str(r.get("response") or "").strip()
         ]
