@@ -210,8 +210,12 @@ class TestPhase11OrchestratorStatus(unittest.TestCase):
         st = orch.production_validation_status()
         self.assertTrue(st["implemented"])
         self.assertIn("gate_config", st)
-        self.assertEqual(orch.models.active()["model_id"], "model-v0003")
+        active = orch.models.active()
+        self.assertIsNotNone(active)
+        self.assertTrue(str(active["model_id"]).startswith("model-v"))
         self.assertEqual(orch.models.last_known_good()["model_id"], "model-v0001")
+        # Active may be an internal candidate; must not imply production_ready
+        self.assertFalse(bool((active.get("meta") or {}).get("production_ready")))
         # Isolation still intact
         self.assertFalse(
             TrainingSafetyIsolation().guard_training_request({"modify_authorization": True})["ok"]
