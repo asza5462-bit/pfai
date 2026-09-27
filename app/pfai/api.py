@@ -1190,6 +1190,19 @@ def phase17_platform_status(owner: str = Depends(require_owner)):
     st['PHASE_18_ALLOWED'] = False
     return {'ok': True, **st}
 
+@app.get('/platform/phase18/status')
+def phase18_platform_status(owner: str = Depends(require_owner)):
+    from .engineering import phase18_status
+    st = phase18_status()
+    st['elite'] = {
+        'skill_count': ELITE.skills.health().get('count'),
+        'phase18_boot': (ELITE._boot or {}).get('phase18'),
+        'phase17_boot': (ELITE._boot or {}).get('phase17'),
+        'security_tools': (ELITE._boot or {}).get('security_tools'),
+    }
+    st['PHASE_19_ALLOWED'] = False
+    return {'ok': True, **st}
+
 @app.get('/platform/observability')
 def platform_observability(owner: str = Depends(require_owner)):
     from .elite.platform_observability import PlatformObservability
@@ -1290,6 +1303,103 @@ def phase17_register_target(x: Phase17TargetBody, owner: str = Depends(require_o
         actor=owner,
     )
     OWNER.authorize('PHASE17_TARGET', f'{owner} register ok={result.get("ok")}')
+    return result
+
+class Phase18TargetBody(BaseModel):
+    name: str
+    target_type: str = 'local_project'
+    environment: str = 'staging'
+    scope: str = ''
+    authorization_scope: str = ''
+    allowed_actions: list[str] | None = None
+    allowed_domains: list[str] | None = None
+    allowed_hosts: list[str] | None = None
+    allowed_ports: list[int] | None = None
+    allowed_paths: list[str] | None = None
+    testing_methods: list[str] | None = None
+    approval_reference: str = ''
+    authorize_now: bool = False
+    expiration: float = 0
+
+class Phase18BuildBody(BaseModel):
+    requirement: str
+    approved: bool = False
+    run_tests: bool = True
+    apply_safe_fixes: bool = False
+
+class Phase18ChatBody(BaseModel):
+    message: str
+    conversation_id: str = ''
+    approved: bool = False
+    project_path: str = ''
+    target_id: str = ''
+    url: str = ''
+    auto_apply: bool = False
+    owner_approved_sensitive: bool = False
+    writers: dict[str, str] | None = None
+
+@app.post('/platform/phase18/targets')
+def phase18_register_target(x: Phase18TargetBody, owner: str = Depends(require_owner)):
+    from .engineering import TargetRegistry
+    reg = TargetRegistry()
+    result = reg.register(
+        name=x.name,
+        target_type=x.target_type,
+        owner=owner,
+        environment=x.environment,
+        scope=x.scope or x.authorization_scope,
+        authorization_scope=x.authorization_scope or x.scope,
+        allowed_actions=x.allowed_actions,
+        allowed_domains=x.allowed_domains,
+        allowed_hosts=x.allowed_hosts,
+        allowed_ports=x.allowed_ports,
+        allowed_paths=x.allowed_paths,
+        testing_methods=x.testing_methods,
+        approval_reference=x.approval_reference,
+        authorize_now=bool(x.authorize_now),
+        expiration=float(x.expiration or 0),
+        actor=owner,
+    )
+    OWNER.authorize('PHASE18_TARGET', f'{owner} register ok={result.get("ok")}')
+    return result
+
+@app.post('/platform/phase18/build')
+def phase18_build(x: Phase18BuildBody, owner: str = Depends(require_owner)):
+    from .engineering import ApplicationEngineering
+    eng = ApplicationEngineering(root='data/longevity/engineering/appeng')
+    result = eng.build(
+        x.requirement,
+        approved=bool(x.approved),
+        actor=owner,
+        run_tests=bool(x.run_tests),
+        apply_safe_fixes=bool(x.apply_safe_fixes),
+    )
+    OWNER.authorize('PHASE18_BUILD', f'{owner} complete={result.get("complete")}')
+    return result
+
+@app.post('/platform/phase18/chat')
+def phase18_chat(x: Phase18ChatBody, owner: str = Depends(require_owner)):
+    from .engineering import Phase18ChatFabric
+    ctx = {}
+    if x.project_path:
+        ctx['project_path'] = x.project_path
+    if x.target_id:
+        ctx['target_id'] = x.target_id
+    if x.url:
+        ctx['url'] = x.url
+    if x.auto_apply:
+        ctx['auto_apply'] = True
+    if x.owner_approved_sensitive:
+        ctx['owner_approved_sensitive'] = True
+    if x.writers:
+        ctx['writers'] = dict(x.writers)
+    result = Phase18ChatFabric().handle(
+        x.message,
+        approved=bool(x.approved),
+        actor=owner,
+        context=ctx,
+    )
+    OWNER.authorize('PHASE18_CHAT', f'{owner} intent={result.get("intent")} ok={result.get("ok")}')
     return result
 
 @app.post('/platform/phase17/sdlc')

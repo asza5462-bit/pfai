@@ -1,10 +1,12 @@
-"""PHASE 14–17 — Application Engineering & Authorized Cyber Defense Fabric."""
+"""PHASE 14–18 — Application Engineering & Authorized Cyber Defense Fabric."""
 
 from pfai.engineering.application_builder import ApplicationBuilder
+from pfai.engineering.application_engineering import ApplicationEngineering
 from pfai.engineering.target_authorization import TargetAuthorizationGate
 from pfai.engineering.authorized_testing import AuthorizedSecurityTester
 from pfai.engineering.secure_analyzer import SecureCodeAnalyzer
 from pfai.engineering.remediation import RemediationLoop
+from pfai.engineering.remediation_engine import RemediationEngine
 from pfai.engineering.phase14_skills import register_phase14_skills, phase14_status
 from pfai.engineering.phase14_gates import evaluate_phase14_gates, stamp_phase14_suite_evidence
 from pfai.engineering.phase15_skills import register_phase15_skills
@@ -16,6 +18,13 @@ from pfai.engineering.phase17_gates import (
     stamp_phase17_suite_evidence,
     phase17_status,
 )
+from pfai.engineering.phase18_skills import register_phase18_skills
+from pfai.engineering.phase18_gates import evaluate_phase18_gates, stamp_phase18_suite_evidence, phase18_status
+from pfai.engineering.phase18_chat import Phase18ChatFabric
+from pfai.engineering.phase18_security import Phase18SecurityAnalysis
+from pfai.engineering.authorized_web_ops import AuthorizedWebFabricOps
+from pfai.engineering.coding_agent_bridge import CodingAgentBridge
+from pfai.engineering.engineering_metrics import EngineeringMetrics
 from pfai.engineering.unified_coding_workflow import UnifiedCodingWorkflow
 from pfai.engineering.project_inspector import ProjectInspector
 from pfai.engineering.engineering_workflow import EngineeringWorkflow
@@ -28,10 +37,12 @@ from pfai.engineering.skill_metrics import SkillEvaluationLedger
 
 __all__ = [
     "ApplicationBuilder",
+    "ApplicationEngineering",
     "TargetAuthorizationGate",
     "AuthorizedSecurityTester",
     "SecureCodeAnalyzer",
     "RemediationLoop",
+    "RemediationEngine",
     "register_phase14_skills",
     "phase14_status",
     "evaluate_phase14_gates",
@@ -47,6 +58,15 @@ __all__ = [
     "phase17_status",
     "evaluate_phase17_security_quality_gate",
     "stamp_phase17_suite_evidence",
+    "register_phase18_skills",
+    "phase18_status",
+    "evaluate_phase18_gates",
+    "stamp_phase18_suite_evidence",
+    "Phase18ChatFabric",
+    "Phase18SecurityAnalysis",
+    "AuthorizedWebFabricOps",
+    "CodingAgentBridge",
+    "EngineeringMetrics",
     "UnifiedCodingWorkflow",
     "ProjectInspector",
     "EngineeringWorkflow",

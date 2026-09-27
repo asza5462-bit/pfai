@@ -117,8 +117,10 @@ class ScopeEnforcementLayer:
             return {"ok": False, "decision": "DENY", "error": "expired_authorization"}
 
         allowed_methods = [m.lower() for m in (target.get("testing_methods") or [])]
-        if method.lower() not in allowed_methods and operation.lower() not in allowed_methods:
-            self._audit("deny_method", method=method, allowed=allowed_methods, actor=actor)
+        allowed_actions = [m.lower() for m in (target.get("allowed_actions") or [])]
+        combined_allowed = set(allowed_methods) | set(allowed_actions)
+        if method.lower() not in combined_allowed and operation.lower() not in combined_allowed:
+            self._audit("deny_method", method=method, allowed=sorted(combined_allowed), actor=actor)
             return {"ok": False, "decision": "DENY", "error": "forbidden_testing_method"}
 
         # Scope validation for URL resources

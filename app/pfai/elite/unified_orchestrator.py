@@ -74,16 +74,19 @@ class EliteOrchestrator:
             "phase15": None,
             "phase16": True,
             "phase17": None,
+            "phase18": None,
         }
         if bootstrap_skills:
             from pfai.engineering.phase14_skills import register_phase14_skills
             from pfai.engineering.phase15_skills import register_phase15_skills
             from pfai.engineering.phase17_skills import register_phase17_skills
+            from pfai.engineering.phase18_skills import register_phase18_skills
 
             self._boot["skills"] = register_elite_skills(self.skills, activate=True)
             self._boot["phase14"] = register_phase14_skills(self.skills, activate=True)
             self._boot["phase15"] = register_phase15_skills(self.skills, activate=True)
             self._boot["phase17"] = register_phase17_skills(self.skills, activate=True)
+            self._boot["phase18"] = register_phase18_skills(self.skills, activate=True)
             self._boot["tools"] = self.tools.bootstrap_safe_tools()
             self._boot["security_tools"] = self.tools.bootstrap_security_tools()
         from pfai.elite.unified_intelligence_loop import UnifiedIntelligenceLoop
@@ -275,11 +278,12 @@ class EliteOrchestrator:
         }
         timeline.append({"event": "task_planner", "plan": plan})
 
-        # Phase 14/15 specialized engineering / authorized defense paths
+        # Phase 14/15/18 specialized engineering / authorized defense paths
         phase14_result = None
         phase15_result = None
+        phase18_result = None
         if any(
-            w in lowered
+            w in lowered or w in message
             for w in (
                 "build me a website",
                 "build a website",
@@ -289,34 +293,63 @@ class EliteOrchestrator:
                 "create an application",
                 "build a web application",
                 "build me an app",
+                "ابن",
+                "ابنِ",
+                "ابني",
+                "موقعا",
             )
         ):
-            from pfai.engineering.unified_coding_workflow import UnifiedCodingWorkflow
+            from pfai.engineering.phase18_chat import Phase18ChatFabric
 
-            ucw = UnifiedCodingWorkflow(
-                root=str(self.root / "coding_workflow"),
-                executor=self.executor,
-                experience_bridge=self.experience_bridge,
-                skill_metrics=self.skill_metrics,
+            phase18_result = Phase18ChatFabric(root=str(self.root / "appeng")).handle(
+                message, approved=approved, actor=actor, context=ctx
             )
-            phase15_result = ucw.handle(message, approved=approved, actor=actor, context=ctx)
-            phase14_result = phase15_result  # compatibility for existing consumers
+            phase15_result = phase18_result
+            phase14_result = phase18_result
             timeline.append(
                 {
-                    "event": "unified_coding_build",
-                    "ok": phase15_result.get("ok"),
-                    "complete": phase15_result.get("complete"),
+                    "event": "phase18_application_engineering",
+                    "ok": phase18_result.get("ok"),
+                    "complete": phase18_result.get("complete"),
+                    "intent": phase18_result.get("intent"),
                 }
             )
             self.skill_metrics.record(
-                skill_id="application_build",
-                success=bool(phase15_result.get("complete") or phase15_result.get("ok")),
-                validation_ok=bool(phase15_result.get("complete")),
+                skill_id="application_engineering_build",
+                success=bool(phase18_result.get("complete") or phase18_result.get("ok")),
+                validation_ok=bool(phase18_result.get("complete")),
                 security_findings=int(
-                    ((phase15_result.get("artifact") or {}).get("security") or {}).get("finding_count") or 0
+                    ((phase18_result.get("artifact") or {}).get("security") or {}).get("finding_count") or 0
                 ),
                 user_approved=approved or None,
                 duration_seconds=time.time() - started,
+            )
+        elif any(
+            w in lowered or w in message
+            for w in (
+                "افحص",
+                "أصلح",
+                "اصلح",
+                "طوّر",
+                "طور",
+                "check my site",
+                "inspect my website",
+            )
+        ):
+            from pfai.engineering.phase18_chat import Phase18ChatFabric
+
+            phase18_result = Phase18ChatFabric(root=str(self.root / "appeng")).handle(
+                message, approved=approved, actor=actor, context=ctx
+            )
+            phase15_result = phase18_result
+            phase14_result = phase18_result
+            timeline.append(
+                {
+                    "event": "phase18_chat_fabric",
+                    "ok": phase18_result.get("ok"),
+                    "denied": phase18_result.get("denied"),
+                    "intent": phase18_result.get("intent"),
+                }
             )
         elif any(
             w in lowered
@@ -641,11 +674,12 @@ class EliteOrchestrator:
             "sandbox_metadata": sandbox_meta,
             "timeline": timeline,
             "latency_seconds": time.time() - started,
-            "phase": 17,
+            "phase": 18 if phase18_result is not None else 17,
             "phase14": phase14_result,
             "phase15": phase15_result,
+            "phase18": phase18_result,
             "optional_future_training": True,
-            "PHASE_18_ALLOWED": False,
+            "PHASE_19_ALLOWED": False,
         }
         self._audit("elite_handle", execution_id=execution_id, mode=mode, status=status, actor=actor)
         return out
@@ -656,13 +690,15 @@ class EliteOrchestrator:
         from pfai.engineering.phase15_gates import phase15_status
         from pfai.engineering.phase16_gates import phase16_status
         from pfai.engineering.phase17_gates import phase17_status
+        from pfai.engineering.phase18_gates import phase18_status
 
         p14 = phase14_status()
         p15 = phase15_status()
         p16 = phase16_status()
         p17 = phase17_status()
+        p18 = phase18_status()
         return {
-            "phase": 17,
+            "phase": 18,
             "skills": self.skills.health(),
             "tools": {
                 "count": len(self.tools.catalog()),
@@ -681,11 +717,13 @@ class EliteOrchestrator:
             "phase15": p15,
             "phase16": p16,
             "phase17": p17,
+            "phase18": p18,
             "PHASE_14_ALLOWED": bool(p14.get("PHASE_14_ALLOWED")),
             "PHASE_15_ALLOWED": bool(p15.get("PHASE_15_ALLOWED")),
             "PHASE_16_ALLOWED": bool(p16.get("PHASE_16_ALLOWED")),
             "PHASE_17_ALLOWED": bool(p17.get("PHASE_17_ALLOWED")),
-            "PHASE_18_ALLOWED": False,
+            "PHASE_18_ALLOWED": bool(p18.get("PHASE_18_ALLOWED")),
+            "PHASE_19_ALLOWED": False,
             "skill_metrics": self.skill_metrics.summary(),
             "unified_intelligence_loop": True,
         }
