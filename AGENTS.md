@@ -63,3 +63,10 @@ python -m pytest tests/test_api_wiring.py tests/test_v81_continuous_enable_gate.
 - Curriculum: JSON under `configs/coding/` (extensible tracks)
 - Sandbox: reuse `SandboxedCodeEvaluator`
 - Chat phrases like «علمني Python» / «اختبر مستواي» delegate from Command Chat
+
+## Orchestrator platform (phased)
+
+- PHASE 1 (current): contracts in `pfai/interfaces/` + scaffold modules — **not** wired into `api.py`
+- Do not start PHASE 2 until operator reviews the PHASE 1 report
+- Constraints: additive only; no Anthropic force; no auto fine-tune; no external deploy; no new auth in early phases
+- See `docs/ARCHITECTURE.md` and ADR-008..011 in `docs/DECISIONS.md`

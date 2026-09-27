@@ -1,5 +1,22 @@
 # Agent Context Changelog
 
+## 2026-09-27 — PHASE 1: Orchestrator platform interfaces
+
+### Added
+- `pfai/interfaces/` — Protocols + dataclasses: OrchestratorRequest/Result, ModelRole, MemorySystem, Knowledge, Planner, Skill, ToolPermission, Eval, Self-check/heal, Goals
+- Scaffold modules (not wired to API): `orchestrator.py`, `model_router.py`, `memory_system.py`, `knowledge_layer.py`, `task_planner.py`, `self_check.py`, `self_heal.py`, `goal_system.py`
+- `pfai/skills/registry.py` — in-memory SkillRegistry with Owner Gate on sensitive permissions
+- ADRs 008–011 in `docs/DECISIONS.md`
+- Tests `tests/test_v90_platform_interfaces.py`
+
+### Behavior
+- **No user-facing change** — FastAPI routes and Dashboard unchanged
+- Anthropic not required; ModelRouter documents `anthropic_required=False`
+- No fine-tune automation; no external deploy; no new auth
+
+### Verified
+- (fill after pytest + smoke)
+
 ## 2026-09-27 — Coding Academy / Coding Intelligence
 
 ### Added

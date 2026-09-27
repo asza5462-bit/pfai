@@ -1,6 +1,6 @@
 # PFAI Project Memory
 
-Last updated: 2026-09-27 (Coding Academy)
+Last updated: 2026-09-27 (PHASE 1 Orchestrator interfaces)
 
 ## Snapshot
 
@@ -14,10 +14,12 @@ Last updated: 2026-09-27 (Coding Academy)
 | LLM | Anthropic optional; local/openai_compatible/Mock OK |
 | Continuous training | enabled + env kill switch; no auto-promote |
 | Fine-tune | Scaffold only — never automatic on prod |
+| Platform | PHASE 1 done — interfaces/scaffolds only; not wired to API |
+| Next | PHASE 2 (Orchestrator + Model Router) — wait for operator review |
 
 ## Verification
 
-- pytest: 292 passed
+- pytest: (update after PHASE 1 run)
 
 ## Operator secrets (platform only)
 

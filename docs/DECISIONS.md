@@ -62,3 +62,46 @@
 - Context: Original zip lacked AGENTS.md / docs / .cursor rules.
 - Decision: Maintain project memory under `docs/` and `AGENTS.md` after meaningful changes.
 - Consequences: Agents must update these files instead of relying on chat history.
+
+## ADR-008 — Additive Orchestrator platform (no rewrite)
+
+- Status: Accepted (2026-09-27)
+- Context: Operator approved a 10-phase plan to grow PFAI into an Orchestrator platform while keeping FastAPI + RTL Dashboard and all existing features.
+- Decision:
+  - Add coordination contracts under `pfai.interfaces` and scaffold modules (`orchestrator`, `model_router`, `memory_system`, `knowledge_layer`, `task_planner`, `skills`, `self_check`, `self_heal`, `goal_system`).
+  - Keep public HTTP contracts (`/health`, `/chat/*`, `/coding/*`, `/continuous/*`) and existing CommandAgent / CodingAgent paths.
+  - Implement via adapters that wrap existing modules; do not delete or replace user-facing functionality.
+  - Freeze phase order 1→10; do not skip ahead.
+- Consequences: PHASE 1 ships interfaces + package layout + ADRs only; later phases fill scaffolds without forcing a framework rewrite.
+
+## ADR-009 — ModelRouter roles; Local/Mock first; Anthropic optional
+
+- Status: Accepted (2026-09-27)
+- Context: Multiple providers already exist (Echo, openai_compatible, Anthropic, Mock). Platform must not hard-depend on Anthropic.
+- Decision:
+  - Introduce logical `ModelRole` values: `default`, `coding`, `reasoning`, `fast`, `vision`, `embedding`.
+  - `ModelRouter` maps roles → existing `ModelProvider` implementations.
+  - Prefer Local / openai_compatible / Mock / Echo when configured; Anthropic only when `ANTHROPIC_API_KEY` is present.
+  - Never require Anthropic for core flows or tests.
+- Consequences: Role config lands with PHASE 2 wiring; PHASE 1 defines the enum + router scaffold only.
+
+## ADR-010 — Unified ToolPermission ladder with Owner Gate
+
+- Status: Accepted (2026-09-27)
+- Context: ToolRouter already uses `risk` + `requires_approval`. Skills/Orchestrator need a shared ladder.
+- Decision:
+  - Standardize `ToolPermission`: `READ`, `LOW_RISK_WRITE`, `HIGH_RISK_WRITE`, `PRODUCTION`, `SECRETS`, `DATA_DELETE`.
+  - `HIGH_RISK_WRITE` and above require Owner Gate (existing approval flow).
+  - Map existing ToolRouter specs onto this enum in PHASE 4; do not add a new auth system in early phases.
+- Consequences: SkillRegistry scaffold already respects `requires_owner_gate()`; no new login/auth subsystem in PHASE 1.
+
+## ADR-011 — No auto production fine-tune; no external deploy in platform phases until asked
+
+- Status: Accepted (2026-09-27)
+- Context: Continuous learning and training scaffolds exist; operator forbids silent weight promotion and premature external deploys during platform build-out.
+- Decision:
+  - Continuous learning may curate/evaluate; promotion stays human-gated (`auto_promote=False`).
+  - Fine-tuning remains scaffold / offline pipeline only — never automatic on production.
+  - Platform phases do not perform Vercel/Render/Railway/AWS deploys unless explicitly requested later.
+  - No new authentication system in PHASE 1 (reuse Owner Gate header where needed).
+- Consequences: Self-heal / eval phases must propose + approve; deploy docs remain informational only.
