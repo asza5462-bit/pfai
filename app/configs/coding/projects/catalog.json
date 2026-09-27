@@ -1,0 +1,47 @@
+{
+  "version": 1,
+  "projects": [
+    {
+      "id": "calc-cli",
+      "title": "Calculator CLI",
+      "level": "beginner",
+      "tracks": ["python"],
+      "skills": ["syntax", "functions", "testing"],
+      "requirements": ["Implement add/sub/mul/div functions", "Handle divide-by-zero safely", "Provide tests"],
+      "milestones": ["Functions", "Error handling", "Tests"],
+      "tasks": [
+        {"id": "t1", "title": "Implement arithmetic ops", "tests": "assert add(2,3)==5\nassert sub(5,2)==3\nassert mul(3,4)==12\nassert div(8,2)==4"},
+        {"id": "t2", "title": "Safe division", "tests": "assert div(1,0) is None"}
+      ],
+      "starter": "def add(a,b):\n    pass\ndef sub(a,b):\n    pass\ndef mul(a,b):\n    pass\ndef div(a,b):\n    pass"
+    },
+    {
+      "id": "todo-api",
+      "title": "Todo REST API (design)",
+      "level": "intermediate",
+      "tracks": ["apis", "python"],
+      "skills": ["apis", "architecture", "testing"],
+      "requirements": ["Design endpoints for create/list/complete todos", "Define JSON schemas", "List test cases"],
+      "milestones": ["API design", "Validation rules", "Test plan"],
+      "tasks": [
+        {"id": "t1", "title": "List endpoints and methods", "tests": ""},
+        {"id": "t2", "title": "Write validation rules", "tests": ""}
+      ],
+      "starter": "# Design document in comments/markdown"
+    },
+    {
+      "id": "rag-mini",
+      "title": "Mini RAG Assistant",
+      "level": "advanced",
+      "tracks": ["ai-engineering", "python"],
+      "skills": ["rag", "llm", "architecture"],
+      "requirements": ["Describe retrieve→generate pipeline", "Safety: no secrets in prompts", "Evaluation checklist"],
+      "milestones": ["Architecture", "Safety", "Eval"],
+      "tasks": [
+        {"id": "t1", "title": "Pipeline diagram in text", "tests": ""},
+        {"id": "t2", "title": "Safety checklist", "tests": ""}
+      ],
+      "starter": "# RAG design notes"
+    }
+  ]
+}

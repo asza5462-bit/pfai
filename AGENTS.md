@@ -55,3 +55,11 @@ python -m pytest tests/test_api_wiring.py tests/test_v81_continuous_enable_gate.
 - Heart: existing runtime/services via Tool Router callbacks in `api.py`
 - Sensitive tools require Owner approval (`/chat/approve/{id}`)
 - Without `ANTHROPIC_API_KEY`, Mock provider drives planning for local tests
+
+## Coding Academy
+
+- UI: Dashboard `Coding Academy`
+- Brain: `coding_agent.py` (Learning / Engineering)
+- Curriculum: JSON under `configs/coding/` (extensible tracks)
+- Sandbox: reuse `SandboxedCodeEvaluator`
+- Chat phrases like «علمني Python» / «اختبر مستواي» delegate from Command Chat

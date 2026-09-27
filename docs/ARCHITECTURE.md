@@ -3,67 +3,42 @@
 ## High-level shape
 
 ```
-Browser (RTL Dashboard + AI Command Chat)
+Browser (RTL Dashboard + AI Command Chat + Coding Academy)
         │  HTTP + X-Owner-Secret
         ▼
-FastAPI app (`pfai.api:app`)
-  ├── static `/` + `/assets/chat.js`
-  ├── Command Chat `/chat/*`  → CommandAgent (Brain)
-  │         ↓
-  │    ToolRouter (whitelist + approval)
-  │         ↓
-  │    Heart callbacks → Runtime / Continuous / Recovery / Memory / Metrics
-  ├── public: /health, /system, /metrics, …
-  └── owner-gated legacy routes (/ask, /continuous/*, /code/*, …)
-        │
-        ▼
-Local data plane (`app/data/`)
-  SQLite memory/vectors, command_chat.sqlite3, command_audit.jsonl, registries
+FastAPI (`pfai.api:app`)
+  ├── /chat/*  → CommandAgent (ops brain)
+  │                 └─ coding intents → CodingAgent
+  ├── /coding/* → Coding Academy APIs
+  ├── ToolRouter (ops + coding tools, Owner Gate on sensitive)
+  └── Heart: runtime, continuous, sandbox, memory, curriculum JSON
 ```
 
-## Command Chat roles
+## Coding Intelligence stack
 
-| Layer | Module | Role |
+| Component | Module | Role |
 |---|---|---|
-| Brain | `command_agent.py` | Plan, call tools, compose reply, approval flow |
-| Router | `tool_router.py` | Whitelist tools; block sensitive until approved |
-| Memory | `command_memory.py` | Conversations + pending actions + MemoryStore bridge |
-| Audit | `command_audit.py` | Append-only executable command audit |
-| Mock | `model_mock.py` | Offline planner when Anthropic key absent |
-| Heart | existing core | Real health/system/continuous/memory/metrics services |
+| Coding Agent | `coding_agent.py` | Learning vs Engineering modes, intent routing |
+| Curriculum Engine | `coding_curriculum.py` | Extensible JSON tracks/lessons/projects/knowledge |
+| Tutor | `coding_tutor.py` | Paths, hints, exercises, adaptive next |
+| Skill Profile | `coding_skill_profile.py` | Assessment, skills, progress, repeated errors |
+| Academy Memory | `coding_academy_memory.py` | Durable coding_* facts via MemoryStore |
+| Reviewer | `coding_reviewer.py` | Static/security/maintainability review |
+| Debugger | `coding_debugger.py` | Progressive debugging trainer |
+| Quality Gate | `coding_quality.py` | Never claim untested code works |
+| Sandbox | `code_execution_evaluator.py` | Existing isolated Python subprocess |
+| Training scaffold | `coding_training_scaffold.py` | Dataset/eval collection; no auto fine-tune |
 
-## Process roles
+Curriculum data lives under `configs/coding/` (add tracks without rewriting the engine).
 
-| Process | Entry | Role |
-|---|---|---|
-| API / Web | `run_web.py` / `uvicorn pfai.api:app` | Dashboard + HTTP API + Command Chat |
-| Continuous learner | `run_continuous.py` | 24/7 learning cycles (no auto-promote) |
-| Production core | `run_production.py` | Scheduler/orchestrator loop (dry_run default) |
+## LLM providers
 
-## Frontend
+- Anthropic optional (`ANTHROPIC_API_KEY`)
+- OpenAI-compatible / local models via existing `openai_compatible` provider
+- Mock fallback for offline teaching/tool planning
 
-- `app/pfai/static/index.html` + `assets/chat.js`
-- Owner secret in `sessionStorage` only
-- Optional CORS via `PFAI_CORS_ORIGINS`
+## Safety
 
-## Model providers
-
-- `anthropic` — env `ANTHROPIC_API_KEY` only
-- `openai_compatible` / `echo`
-- Command Chat uses Mock when Anthropic key is unset
-
-## Safety boundaries
-
-1. Continuous `require_human_approval=True` / `auto_promote=False`
-2. Owner gate on deploy/promote/recovery-destructive actions
-3. Command Chat sensitive tools require `/chat/approve`
-4. Network deny-by-default
-5. Phase-1 chat learning = memory/feedback/corrections — not weight mutation
-
-## Module map (selected)
-
-- `api.py`, `runtime.py`, `app.py`
-- `command_agent.py`, `tool_router.py`, `command_memory.py`, `command_audit.py`
-- `continuous_learning_orchestrator.py`, `code_learning_pipeline.py`
-- `research_gate.py`, `policy.py`, `owner_control.py`
-- `logging_setup.py`, `continuous_gate.py`
+- Sandbox: no secrets, no host FS, no network, rlimits
+- Sensitive ops remain Owner-gated
+- Fine-tuning never automatic on production

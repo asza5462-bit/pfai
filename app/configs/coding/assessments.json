@@ -1,0 +1,16 @@
+{
+  "version": 1,
+  "assessments": [
+    {"id": "logic", "skill": "logical_thinking", "prompt": "If all A are B, and some B are C, which statement must be true?", "choices": ["All A are C", "Some A may be C", "No A are C", "All C are A"], "answer": 1, "level": "beginner"},
+    {"id": "syntax-py", "skill": "syntax", "prompt": "In Python, which creates a list?", "choices": ["{}", "()", "[]", "<>"], "answer": 2, "level": "beginner"},
+    {"id": "algo", "skill": "algorithms", "prompt": "Binary search requires data to be:", "choices": ["Random", "Sorted", "Hashed", "Circular"], "answer": 1, "level": "intermediate"},
+    {"id": "ds", "skill": "data_structures", "prompt": "Which structure is LIFO?", "choices": ["Queue", "Stack", "Set", "Graph"], "answer": 1, "level": "beginner"},
+    {"id": "debug", "skill": "debugging", "prompt": "Best first step when a test fails?", "choices": ["Rewrite all code", "Reproduce and read the failing assertion", "Delete tests", "Ignore flaky tests"], "answer": 1, "level": "beginner"},
+    {"id": "arch", "skill": "software_architecture", "prompt": "Separating API, domain, and data access is mainly about:", "choices": ["Obfuscation", "Separation of concerns", "Faster CPUs", "More globals"], "answer": 1, "level": "intermediate"},
+    {"id": "db", "skill": "databases", "prompt": "PRIMARY KEY uniquely identifies:", "choices": ["A column type", "A row", "An index only", "A view"], "answer": 1, "level": "beginner"},
+    {"id": "api", "skill": "apis", "prompt": "Idempotent HTTP method for fetch:", "choices": ["POST", "GET", "CONNECT", "PATCH"], "answer": 1, "level": "beginner"},
+    {"id": "git", "skill": "git", "prompt": "Staging area is also called:", "choices": ["Working tree", "Index", "Remote", "Tag"], "answer": 1, "level": "beginner"},
+    {"id": "test", "skill": "testing", "prompt": "A unit test should preferably be:", "choices": ["Slow and networked", "Fast and isolated", "Manual only", "Dependent on production DB"], "answer": 1, "level": "beginner"},
+    {"id": "sec", "skill": "security", "prompt": "API keys should be stored in:", "choices": ["Frontend JS", "Git commits", "Secret/env store", "Public docs"], "answer": 2, "level": "beginner"}
+  ]
+}

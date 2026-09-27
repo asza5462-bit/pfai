@@ -1,5 +1,23 @@
 # Agent Context Changelog
 
+## 2026-09-27 — Coding Academy / Coding Intelligence
+
+### Added
+- `coding_agent`, `coding_curriculum`, `coding_tutor`, `coding_skill_profile`, `coding_academy_memory`
+- `coding_reviewer`, `coding_debugger`, `coding_quality`, `coding_training_scaffold`
+- Extensible JSON curriculum/assessments/projects/knowledge under `configs/coding/`
+- API `/coding/*` + Dashboard **Coding Academy** + Chat coding intents
+- Tests `test_v89_coding_academy.py`
+
+### Behavior
+- Learning Mode teaches with progressive hints; Engineering Mode focuses on task delivery
+- Sandbox = existing isolated Python evaluator (no secrets/FS/network)
+- Adaptive path from skill profile; repeated errors recorded
+- No automatic model weight fine-tuning
+
+### Verified
+- 292 pytest passed
+
 ## 2026-09-27 — AI Command Chat (Brain ↔ Heart)
 
 ### Added

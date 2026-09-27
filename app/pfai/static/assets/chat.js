@@ -223,4 +223,76 @@
     loadChatTools();
     loadChatAudit();
   };
+
+  window.loadAcademy = async function loadAcademy() {
+    if (!SECRET) { toast('أدخل Owner Secret أولاً', true); return; }
+    try {
+      const [profile, tracks, projects] = await Promise.all([
+        api('/coding/profile'),
+        api('/coding/tracks'),
+        api('/coding/projects'),
+      ]);
+      $('acLevel').textContent = profile.display_level || '—';
+      $('acMode').textContent = profile.mode || '—';
+      $('acDone').textContent = (profile.completed_lessons || []).length;
+      const weak = Object.entries(profile.skills || {}).filter(([, v]) => Number(v) < 0.6).map(([k]) => k);
+      $('acWeak').textContent = weak.slice(0, 3).join(', ') || '—';
+      $('acProfile').textContent = JSON.stringify(profile, null, 2);
+      $('acTracks').innerHTML = (tracks.tracks || []).map(t =>
+        `<button class="btn" style="margin:4px" onclick="startTrack('${esc(t.id)}')">${esc(t.title)} (${esc(t.lesson_count)})</button>`
+      ).join('') || '<div class="empty">لا توجد مسارات</div>';
+      $('acProjects').innerHTML = (projects.projects || []).map(p =>
+        `<div class="status-card"><strong>${esc(p.title)}</strong><span>${esc(p.level)} · ${esc((p.skills || []).join(', '))}</span></div>`
+      ).join('') || '<div class="empty">لا توجد مشاريع</div>';
+    } catch (e) {
+      toast(e.message, true);
+    }
+  };
+
+  window.startTrack = async function startTrack(id) {
+    try {
+      const r = await api('/coding/path?track_id=' + encodeURIComponent(id) + '&goal=' + encodeURIComponent('Learn ' + id));
+      $('acProfile').textContent = JSON.stringify(r, null, 2);
+      toast('تم بناء مسار تعليمي');
+    } catch (e) { toast(e.message, true); }
+  };
+
+  window.startAssessment = async function startAssessment() {
+    try {
+      const r = await api('/coding/assessment');
+      $('acProfile').textContent = JSON.stringify(r, null, 2);
+      toast('assessment جاهز — استخدم /coding/assessment/submit أو Chat');
+    } catch (e) { toast(e.message, true); }
+  };
+
+  window.setCodingMode = async function setCodingMode(mode) {
+    try {
+      const r = await api('/coding/mode', { method: 'POST', body: { mode } });
+      toast('Mode = ' + r.mode);
+      loadAcademy();
+    } catch (e) { toast(e.message, true); }
+  };
+
+  window.runAcademySandbox = async function runAcademySandbox() {
+    try {
+      const r = await api('/coding/sandbox', { method: 'POST', body: { code: $('acCode').value, test_code: $('acTests').value } });
+      $('acSandbox').textContent = JSON.stringify(r, null, 2);
+      toast(r.passed ? 'Sandbox passed' : 'Sandbox failed', !r.passed);
+    } catch (e) { toast(e.message, true); }
+  };
+
+  window.reviewAcademyCode = async function reviewAcademyCode() {
+    try {
+      const r = await api('/coding/review', { method: 'POST', body: { code: $('acCode').value, language: 'python' } });
+      $('acSandbox').textContent = JSON.stringify(r, null, 2);
+      toast('Review ready');
+    } catch (e) { toast(e.message, true); }
+  };
+
+  window.searchAcademyKnowledge = async function searchAcademyKnowledge() {
+    try {
+      const r = await api('/coding/knowledge?q=' + encodeURIComponent($('acKnowQ').value || ''));
+      $('acKnow').textContent = JSON.stringify(r, null, 2);
+    } catch (e) { toast(e.message, true); }
+  };
 })();

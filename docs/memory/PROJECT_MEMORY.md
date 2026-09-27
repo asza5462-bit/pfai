@@ -1,33 +1,25 @@
 # PFAI Project Memory
 
-Last updated: 2026-09-27 (Command Chat Brain↔Heart)
+Last updated: 2026-09-27 (Coding Academy)
 
 ## Snapshot
 
 | Item | Value |
 |---|---|
 | Version | 8.0.0 |
-| Stack | FastAPI + RTL dashboard + AI Command Chat |
-| Command Chat | `/chat/*` via CommandAgent + ToolRouter |
-| Model | Anthropic env secret; Mock fallback without key |
-| Continuous training | `enabled: true` + `PFAI_CONTINUOUS_TRAINING_ENABLED` kill switch |
-| Auto-promote | Hard-disabled |
-| Chat learning (phase 1) | Memory / feedback / corrections — not weight training |
-
-## Safety invariants
-
-1. Promotion requires owner API + ledger.
-2. Command Chat sensitive tools require `/chat/approve`.
-3. Secrets never in git/source/frontend/logs.
-4. Network deny-by-default.
+| Command Chat | `/chat/*` |
+| Coding Academy | `/coding/*` + Dashboard section |
+| Curriculum | Extensible JSON `configs/coding/` |
+| Sandbox | Existing Python `SandboxedCodeEvaluator` |
+| LLM | Anthropic optional; local/openai_compatible/Mock OK |
+| Continuous training | enabled + env kill switch; no auto-promote |
+| Fine-tune | Scaffold only — never automatic on prod |
 
 ## Verification
 
-- pytest: 279 passed
-- Live Mock chat + legacy `/health` OK
+- pytest: 292 passed
 
 ## Operator secrets (platform only)
 
-- `ANTHROPIC_API_KEY`
-- `PFAI_OWNER_EMAIL`
-- `PFAI_OWNER_SECRET_HASH`
+- `ANTHROPIC_API_KEY` (optional for live Claude)
+- `PFAI_OWNER_EMAIL` / `PFAI_OWNER_SECRET_HASH`

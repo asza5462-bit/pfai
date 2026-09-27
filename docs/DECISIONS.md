@@ -32,6 +32,18 @@
 - Decision: Document placeholders only; runtime reads env vars.
 - Consequences: Deploy platforms must inject secrets; local `.env` is gitignored.
 
+## ADR-007 — Coding Academy modular stack on existing sandbox
+
+- Status: Accepted (2026-09-27)
+- Context: Need full coding teacher/trainer/reviewer without rewriting PFAI.
+- Decision:
+  - Add `coding_*` modules + JSON curriculum under `configs/coding/`.
+  - Reuse `SandboxedCodeEvaluator` for Python execution.
+  - Wire Learning/Engineering modes; chat delegates coding intents to CodingAgent.
+  - Anthropic optional; local/openai_compatible/Mock supported.
+  - Training scaffold collects examples; no automatic production fine-tune.
+- Consequences: Coding Academy dashboard + `/coding/*` APIs; existing code learning pipeline unchanged.
+
 ## ADR-006 — Command Chat Brain ↔ Heart via Tool Router
 
 - Status: Accepted (2026-09-27)

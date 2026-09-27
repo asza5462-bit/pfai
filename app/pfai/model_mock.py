@@ -57,6 +57,17 @@ class MockCommandProvider(ModelProvider):
             add("chat_audit_recent")
         if re.search(r"improv|تحسين|اقترح", text + ar):
             add("propose_improvement")
+        if re.search(r"علمني|teach|learn|مبتدئ|تمرين|python|javascript", text + ar):
+            add("coding_teach")
+            add("coding_tracks")
+        if re.search(r"اختبر مستواي|assess|assessment", text + ar):
+            add("coding_assess")
+        if re.search(r"راجع.*كود|code review|review code", text + ar):
+            add("coding_review")
+        if re.search(r"مشروع|project", text + ar):
+            add("coding_projects")
+        if re.search(r"sandbox|نفذ الكود|run code", text + ar):
+            add("run_sandbox")
         if re.search(r"search knowledge|ابحث.*معرف|راجع.*بيانات|بيانات", text + ar):
             add("knowledge_search")
             add("memory_search")

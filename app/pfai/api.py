@@ -22,8 +22,14 @@ from .continuous_gate import continuous_gate_status, is_continuous_enabled
 from .logging_setup import setup_logging
 from .command_audit import CommandAuditLog
 from .command_memory import CommandMemoryService
-from .tool_router import ToolRouter
+from .tool_router import ToolRouter, ToolSpec, DEFAULT_TOOLS
 from .command_agent import CommandAgent
+from .coding_curriculum import CurriculumEngine
+from .coding_skill_profile import SkillProfileStore
+from .coding_academy_memory import CodingAcademyMemory
+from .coding_agent import CodingAgent
+from .coding_training_scaffold import CodingTrainingScaffold
+from .code_execution_evaluator import SandboxedCodeEvaluator
 from . import __version__
 
 log = setup_logging('pfai.api')
@@ -65,6 +71,14 @@ STATIC=Path(__file__).parent/'static'
 # --- Command Chat brain (Agent) ↔ heart (core services) -----------------
 COMMAND_AUDIT = CommandAuditLog('data/security/command_audit.jsonl')
 COMMAND_MEMORY = CommandMemoryService(runtime.memory, 'data/command_chat.sqlite3')
+
+# --- Coding Academy / Coding Intelligence -----------------------------
+CODING_CURRICULUM = CurriculumEngine('configs/coding')
+CODING_PROFILES = SkillProfileStore('data/coding_academy/profiles.sqlite3', CODING_CURRICULUM)
+CODING_MEMORY = CodingAcademyMemory(COMMAND_MEMORY)
+CODING_AGENT = CodingAgent(model=runtime.model, curriculum=CODING_CURRICULUM, profiles=CODING_PROFILES, academy_memory=CODING_MEMORY)
+CODING_SANDBOX = SandboxedCodeEvaluator()
+CODING_TRAINING = CodingTrainingScaffold('data/coding_academy/training_scaffold')
 
 def _tool_propose_improvement(topic: str = ''):
     status = continuous_gate_status()
@@ -115,6 +129,31 @@ def _tool_continuous_resume():
         raise RuntimeError('continuous training disabled by config/env gate')
     return CONTINUOUS.resume()
 
+def _tool_run_sandbox(code: str = '', test_code: str = ''):
+    r = CODING_SANDBOX.evaluate(code or '', test_code or '')
+    return {
+        'passed': r.passed, 'static_passed': r.static_passed, 'executed': r.executed,
+        'timed_out': r.timed_out, 'stdout': r.stdout, 'stderr': r.stderr,
+        'score': r.score, 'reason': r.reason,
+    }
+
+def _tool_coding_teach(track_id: str = 'python', goal: str = '', owner: str = 'owner'):
+    return CODING_AGENT.tutor.start_path(owner, track_id or 'python', goal=goal or track_id)
+
+def _tool_coding_review(code: str = '', language: str = 'python'):
+    return CODING_AGENT.reviewer.review(code or '', language=language or 'python')
+
+CODING_TOOL_SPECS = list(DEFAULT_TOOLS) + [
+    ToolSpec('run_sandbox', 'Execute learner code in isolated Python sandbox', 'write', False, {'code': 'string', 'test_code': 'string?'}),
+    ToolSpec('coding_tracks', 'List extensible coding curriculum tracks', 'read', False, {}),
+    ToolSpec('coding_teach', 'Build personalized learning path for a track', 'read', False, {'track_id': 'string', 'goal': 'string?', 'owner': 'string?'}),
+    ToolSpec('coding_review', 'Static/security/maintainability code review', 'read', False, {'code': 'string', 'language': 'string?'}),
+    ToolSpec('coding_assess', 'Return skill assessment questions', 'read', False, {}),
+    ToolSpec('coding_progress', 'Learner coding progress snapshot', 'read', False, {'owner': 'string?'}),
+    ToolSpec('coding_projects', 'List project-based learning catalog', 'read', False, {'level': 'string?'}),
+    ToolSpec('coding_knowledge', 'Search coding knowledge base', 'read', False, {'q': 'string', 'limit': 'int?'}),
+]
+
 TOOL_ROUTER = ToolRouter({
     'health_check': lambda: runtime.health(extra={'continuous': continuous_gate_status()}),
     'system_status': lambda: {
@@ -128,7 +167,8 @@ TOOL_ROUTER = ToolRouter({
     'metrics_snapshot': lambda: runtime.metrics.snapshot(),
     'modules_list': lambda: {'modules': [
         'reasoning','memory','vector_memory','rag','command_chat','command_agent','tool_router',
-        'command_memory','continuous_learning_orchestrator','code_learning_pipeline'
+        'command_memory','continuous_learning_orchestrator','code_learning_pipeline',
+        'coding_agent','coding_tutor','coding_curriculum','coding_academy'
     ]},
     'continuous_status': lambda: {**CONTINUOUS.status(), 'gate': continuous_gate_status(), 'auto_promote': False},
     'deployments_list': lambda: {'items': runtime.deploy.history()},
@@ -151,9 +191,19 @@ TOOL_ROUTER = ToolRouter({
     'forget_memory': _tool_forget_memory,
     'correct_memory': _tool_correct_memory,
     'save_owner_correction': _tool_save_owner_correction,
-})
+    'run_sandbox': _tool_run_sandbox,
+    'coding_tracks': lambda: {'tracks': CODING_CURRICULUM.list_tracks()},
+    'coding_teach': _tool_coding_teach,
+    'coding_review': _tool_coding_review,
+    'coding_assess': lambda: CODING_PROFILES.start_assessment(),
+    'coding_progress': lambda owner='owner': CODING_PROFILES.progress(owner),
+    'coding_projects': lambda level='': {'projects': CODING_CURRICULUM.projects(level or None)},
+    'coding_knowledge': lambda q='', limit=8: {'results': CODING_CURRICULUM.knowledge_search(q, int(limit or 8))},
+}, specs=CODING_TOOL_SPECS)
 COMMAND_AGENT = CommandAgent(TOOL_ROUTER, COMMAND_MEMORY, COMMAND_AUDIT, model=runtime.model)
+COMMAND_AGENT.coding_agent = CODING_AGENT
 log.info('command chat brain ready provider_probe=%s', COMMAND_AGENT.provider_name())
+log.info('coding academy ready provider_probe=%s tracks=%s', CODING_AGENT.provider_name(), len(CODING_CURRICULUM.list_tracks()))
 
 @app.middleware('http')
 async def request_log_middleware(request: Request, call_next):
@@ -537,6 +587,145 @@ def chat_memory_correct(memory_id: int, x: ChatMemoryCorrect, owner: str = Depen
         raise HTTPException(404, 'memory not found')
     OWNER.authorize('CHAT_MEMORY_CORRECT', f'{owner} corrected memory {memory_id}')
     return {'ok': True, 'memory_id': memory_id}
+
+
+# --- Coding Academy API -----------------------------------------------
+class CodingChat(BaseModel):
+    message: str
+    mode: str | None = None
+    code: str = ''
+    language: str = 'python'
+
+class AssessmentSubmit(BaseModel):
+    answers: dict[str, int]
+
+class ExerciseSubmit(BaseModel):
+    track_id: str
+    lesson_id: str
+    code: str
+
+class HintRequest(BaseModel):
+    track_id: str
+    lesson_id: str
+
+class SolutionRequest(BaseModel):
+    track_id: str
+    lesson_id: str
+    confirm: bool = False
+
+class SandboxRequest(BaseModel):
+    code: str
+    test_code: str = ''
+
+class ReviewRequest(BaseModel):
+    code: str
+    language: str = 'python'
+    context: str = ''
+
+class DebugStart(BaseModel):
+    code: str
+    test_code: str = ''
+    description: str = ''
+
+class DebugRespond(BaseModel):
+    session_id: str
+    hypothesis: str = ''
+
+class ModeSet(BaseModel):
+    mode: str
+
+@app.get('/coding/tracks')
+def coding_tracks(owner: str = Depends(require_owner)):
+    return {'tracks': CODING_CURRICULUM.list_tracks()}
+
+@app.get('/coding/profile')
+def coding_profile(owner: str = Depends(require_owner)):
+    return CODING_PROFILES.get_profile(owner)
+
+@app.post('/coding/mode')
+def coding_mode(x: ModeSet, owner: str = Depends(require_owner)):
+    return CODING_PROFILES.set_mode(owner, x.mode)
+
+@app.get('/coding/assessment')
+def coding_assessment(owner: str = Depends(require_owner)):
+    return CODING_PROFILES.start_assessment()
+
+@app.post('/coding/assessment/submit')
+def coding_assessment_submit(x: AssessmentSubmit, owner: str = Depends(require_owner)):
+    result = CODING_PROFILES.grade_assessment(owner, x.answers)
+    CODING_MEMORY.sync_from_profile(owner, result.get('profile') or {})
+    OWNER.authorize('CODING_ASSESSMENT', f'{owner} completed skill assessment')
+    return result
+
+@app.post('/coding/path')
+def coding_path(track_id: str = 'python', goal: str = '', owner: str = Depends(require_owner)):
+    path = CODING_AGENT.tutor.start_path(owner, track_id, goal=goal)
+    return path
+
+@app.get('/coding/lesson/{track_id}/{lesson_id}')
+def coding_lesson(track_id: str, lesson_id: str, owner: str = Depends(require_owner), reveal_solution: bool = False):
+    return CODING_AGENT.tutor.lesson(track_id, lesson_id, reveal_solution=reveal_solution)
+
+@app.post('/coding/hint')
+def coding_hint(x: HintRequest, owner: str = Depends(require_owner)):
+    return CODING_AGENT.tutor.hint(owner, x.track_id, x.lesson_id)
+
+@app.post('/coding/exercise/submit')
+def coding_exercise_submit(x: ExerciseSubmit, owner: str = Depends(require_owner)):
+    return CODING_AGENT.tutor.submit_exercise(owner, x.track_id, x.lesson_id, x.code)
+
+@app.post('/coding/solution')
+def coding_solution(x: SolutionRequest, owner: str = Depends(require_owner)):
+    result = CODING_AGENT.tutor.solution(owner, x.track_id, x.lesson_id, confirmed=bool(x.confirm))
+    if result.get('needs_confirmation'):
+        return result
+    OWNER.authorize('CODING_SOLUTION_REVEAL', f'{owner} revealed solution {x.track_id}/{x.lesson_id}')
+    return result
+
+@app.post('/coding/sandbox')
+def coding_sandbox(x: SandboxRequest, owner: str = Depends(require_owner)):
+    return _tool_run_sandbox(x.code, x.test_code)
+
+@app.post('/coding/review')
+def coding_review(x: ReviewRequest, owner: str = Depends(require_owner)):
+    return CODING_AGENT.reviewer.review(x.code, language=x.language, context=x.context)
+
+@app.post('/coding/debug/start')
+def coding_debug_start(x: DebugStart, owner: str = Depends(require_owner)):
+    return CODING_AGENT.debugger.start(owner, x.code, x.test_code, x.description)
+
+@app.post('/coding/debug/respond')
+def coding_debug_respond(x: DebugRespond, owner: str = Depends(require_owner)):
+    return CODING_AGENT.debugger.respond(x.session_id, x.hypothesis)
+
+@app.get('/coding/projects')
+def coding_projects(owner: str = Depends(require_owner), level: str | None = None):
+    return {'projects': CODING_CURRICULUM.projects(level)}
+
+@app.get('/coding/projects/{project_id}')
+def coding_project(project_id: str, owner: str = Depends(require_owner)):
+    p = CODING_CURRICULUM.get_project(project_id)
+    if not p:
+        raise HTTPException(404, 'project not found')
+    return p
+
+@app.get('/coding/knowledge')
+def coding_knowledge(q: str = '', owner: str = Depends(require_owner), limit: int = 8):
+    return {'results': CODING_CURRICULUM.knowledge_search(q, limit)}
+
+@app.get('/coding/progress')
+def coding_progress(owner: str = Depends(require_owner)):
+    return CODING_PROFILES.progress(owner)
+
+@app.get('/coding/training/status')
+def coding_training_status(owner: str = Depends(require_owner)):
+    return CODING_TRAINING.status()
+
+@app.post('/coding/chat')
+def coding_chat(x: CodingChat, owner: str = Depends(require_owner)):
+    result = CODING_AGENT.handle(x.message, owner=owner, mode=x.mode, code=x.code, language=x.language)
+    OWNER.authorize('CODING_CHAT', f'{owner} coding intent={result.get("intent")}')
+    return result
 
 @app.get('/assets/{asset_path:path}')
 def dashboard_assets(asset_path: str):

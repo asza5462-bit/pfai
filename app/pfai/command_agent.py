@@ -67,6 +67,32 @@ class CommandAgent:
         cid = self.memory.ensure_conversation(conversation_id)
         self.memory.add_message(cid, "user", message, status="completed")
 
+        # Delegate coding-education intents to Coding Academy brain when wired.
+        coding_agent = getattr(self, "coding_agent", None)
+        if coding_agent is not None and _looks_like_coding_intent(message):
+            try:
+                coding = coding_agent.handle(message, owner=owner)
+                reply = coding.get("reply") or json.dumps(coding, ensure_ascii=False)[:1200]
+                status = "completed" if coding.get("ok", True) else "failed"
+                tl = coding.get("timeline") or [{"status": "teaching", "detail": "coding academy"}]
+                self.memory.add_message(cid, "assistant", reply, status=status, meta={"coding": coding, "timeline": tl})
+                self.audit.record(
+                    actor=owner, command=message, tool="coding_agent", status=status,
+                    result={"intent": coding.get("intent")}, required_approval=False, conversation_id=cid,
+                )
+                return {
+                    "ok": coding.get("ok", True),
+                    "conversation_id": cid,
+                    "reply": reply,
+                    "timeline": tl,
+                    "coding": coding,
+                    "provider": coding.get("provider") or self.provider_name(),
+                    "status": status,
+                    "language": lang,
+                }
+            except Exception as exc:
+                log.warning("coding delegate failed: %s", exc)
+
         def mark(status: str, detail: str | None = None, **extra):
             step = {"status": status, "detail": detail, **extra}
             timeline.append(step)
@@ -289,6 +315,16 @@ def _detect_lang(text: str) -> str:
     if re.search(r"[\u0600-\u06FF]", text or ""):
         return "ar"
     return "en"
+
+
+def _looks_like_coding_intent(message: str) -> bool:
+    return bool(re.search(
+        r"علمني|teach me|learn |مبتدئ|full stack|اختبر مستواي|assess|تمرين|exercise|راجع هذا الكود|code review|"
+        r"تلميح|hint|اشرح لي هذا الخطأ|debug|مشروع أتدرب|project|javascript|python|architecture|"
+        r"لماذا هذا الكود|learning mode|engineering mode|sandbox|اختبرني",
+        message or "",
+        re.I,
+    ))
 
 
 def _is_correction_offer(message: str, dialog: list[dict]) -> bool:
