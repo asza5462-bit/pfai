@@ -135,7 +135,17 @@ class TestLongevityContracts(unittest.TestCase):
         echo = reg.create("echo")
         self.assertIsInstance(echo, EchoProvider)
         anthropic = reg.get("anthropic")
-        self.assertIsNone(anthropic)  # optional; not required for Core
+        # Optional adapter may be registered, but must never be required for Core.
+        if anthropic is not None:
+            self.assertTrue(anthropic.requires_api_key)
+            self.assertFalse(anthropic.offline_capable)
+        import os
+        from unittest import mock
+
+        with mock.patch.dict(os.environ, {}, clear=False):
+            os.environ.pop("ANTHROPIC_API_KEY", None)
+            readiness = reg.create_from_config({"provider": "anthropic", "api_key_env": "ANTHROPIC_API_KEY"})
+        self.assertIsInstance(readiness, EchoProvider)
 
     def test_export_bundle_roundtrip_dry_run(self):
         exp = ExportBundleScaffold()

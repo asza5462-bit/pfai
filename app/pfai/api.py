@@ -30,6 +30,19 @@ from .coding_academy_memory import CodingAcademyMemory
 from .coding_agent import CodingAgent
 from .coding_training_scaffold import CodingTrainingScaffold
 from .code_execution_evaluator import SandboxedCodeEvaluator
+from .longevity.provider_registry import ProviderRegistry
+from .model_router import ModelRouter
+from .orchestrator import Orchestrator
+from .memory_system import LongTermMemory, MemorySystem
+from .knowledge_layer import KnowledgeLayer
+from .longevity.durable_learning import DurableSafeLearningPipeline, KnowledgeVersionStore, LearningAuditLog
+from .platform_evaluation import PlatformEvaluation
+from .self_check import SelfCheck, SelfHeal
+from .longevity.compat_layer import CompatibilityLayer
+from .interfaces.types import OrchestratorRequest
+from .interfaces.skills import Skill
+from .interfaces.tools import ToolPermission
+from .skills.registry import SkillRegistry
 from . import __version__
 
 log = setup_logging('pfai.api')
@@ -168,7 +181,8 @@ TOOL_ROUTER = ToolRouter({
     'modules_list': lambda: {'modules': [
         'reasoning','memory','vector_memory','rag','command_chat','command_agent','tool_router',
         'command_memory','continuous_learning_orchestrator','code_learning_pipeline',
-        'coding_agent','coding_tutor','coding_curriculum','coding_academy'
+        'coding_agent','coding_tutor','coding_curriculum','coding_academy',
+        'orchestrator','provider_registry','model_router','safe_learning','long_term_memory'
     ]},
     'continuous_status': lambda: {**CONTINUOUS.status(), 'gate': continuous_gate_status(), 'auto_promote': False},
     'deployments_list': lambda: {'items': runtime.deploy.history()},
@@ -204,6 +218,69 @@ COMMAND_AGENT = CommandAgent(TOOL_ROUTER, COMMAND_MEMORY, COMMAND_AUDIT, model=r
 COMMAND_AGENT.coding_agent = CODING_AGENT
 log.info('command chat brain ready provider_probe=%s', COMMAND_AGENT.provider_name())
 log.info('coding academy ready provider_probe=%s tracks=%s', CODING_AGENT.provider_name(), len(CODING_CURRICULUM.list_tracks()))
+
+# --- PHASE 2: ProviderRegistry + ModelRouter + Orchestrator (additive) ---
+_MODEL_CFG = Config.load('configs/default.json').get('model', {})
+PROVIDER_REGISTRY = ProviderRegistry()
+PROVIDER_REGISTRY.bootstrap_defaults()
+MODEL_ROUTER = ModelRouter.from_config(_MODEL_CFG, registry=PROVIDER_REGISTRY)
+# Bind the live runtime model as DEFAULT without requiring Anthropic for Core.
+MODEL_ROUTER.bind('default', runtime.model)
+
+PLATFORM_LTM = LongTermMemory(COMMAND_MEMORY)
+PLATFORM_MEMORY = MemorySystem(ltm=PLATFORM_LTM)
+PLATFORM_KNOWLEDGE = KnowledgeLayer(
+    search_fn=lambda q, limit: runtime.store.search(q, int(limit or 5)),
+)
+PLATFORM_KNOWLEDGE_VERSIONS = KnowledgeVersionStore('data/longevity/knowledge_versions.sqlite3')
+PLATFORM_LEARNING_AUDIT = LearningAuditLog('data/longevity/learning_audit.jsonl')
+PLATFORM_LEARNING = DurableSafeLearningPipeline(
+    'data/longevity/learning.sqlite3',
+    knowledge_store=PLATFORM_KNOWLEDGE_VERSIONS,
+    audit=PLATFORM_LEARNING_AUDIT,
+    memory_remember=lambda kind, content, source='', confidence=0.8: COMMAND_MEMORY.remember(
+        kind, content, source=source or 'safe_learning', confidence=confidence
+    ),
+)
+PLATFORM_EVAL = PlatformEvaluation()
+PLATFORM_COMPAT = CompatibilityLayer()
+PLATFORM_SELF_CHECK = SelfCheck({
+    'runtime_health': lambda: {'ok': True, **{k: runtime.health().get(k) for k in ('status', 'version')}},
+    'compat': lambda: {'ok': PLATFORM_COMPAT.check().python_ok, 'schema': PLATFORM_COMPAT.schema_version()},
+    'learning_no_weights': lambda: {'ok': not PLATFORM_LEARNING.allows_weight_mutation()},
+    'providers_offline_defaults': lambda: {
+        'ok': any(p.offline_capable for p in PROVIDER_REGISTRY.list_providers()),
+        'providers': [p.provider_id for p in PROVIDER_REGISTRY.list_providers()],
+    },
+})
+PLATFORM_SELF_HEAL = SelfHeal(PLATFORM_SELF_CHECK)
+PLATFORM_SKILLS = SkillRegistry()
+
+ORCHESTRATOR = Orchestrator(
+    model_router=MODEL_ROUTER,
+    command_agent=COMMAND_AGENT,
+    coding_agent=CODING_AGENT,
+    skills=PLATFORM_SKILLS,
+    ltm=PLATFORM_LTM,
+    knowledge_search=lambda q, limit=5: [h.__dict__ for h in PLATFORM_KNOWLEDGE.search(q, limit=limit)],
+    learning=PLATFORM_LEARNING,
+    evaluation=PLATFORM_EVAL,
+    self_check=PLATFORM_SELF_CHECK,
+    self_heal=PLATFORM_SELF_HEAL,
+)
+PLATFORM_SKILLS.register(
+    Skill(name='platform_status', description='Orchestrator/platform status', permission=ToolPermission.READ, version='1'),
+    lambda ctx=None, **_k: ORCHESTRATOR.status(),
+)
+PLATFORM_SKILLS.register(
+    Skill(name='learning_readiness', description='Fine-tune readiness (no training)', permission=ToolPermission.READ, version='1'),
+    lambda ctx=None, **_k: PLATFORM_LEARNING.training_readiness(),
+)
+log.info(
+    'orchestrator ready providers=%s roles=%s anthropic_required=false',
+    [p.provider_id for p in PROVIDER_REGISTRY.list_providers()],
+    MODEL_ROUTER.available_roles(),
+)
 
 @app.middleware('http')
 async def request_log_middleware(request: Request, call_next):
@@ -270,6 +347,12 @@ def health():
         'owner_configured': bool(OWNER.owner_email()) and bool(os.environ.get('PFAI_OWNER_SECRET_HASH')),
         'continuous': continuous_gate_status(),
         'network_enabled': RESEARCH_GATE.policy.network,
+        'platform': {
+            'orchestrator': True,
+            'anthropic_required': False,
+            'providers': [p.provider_id for p in PROVIDER_REGISTRY.list_providers()],
+            'schema_version': PLATFORM_COMPAT.schema_version(),
+        },
     })
 
 @app.get('/system')
@@ -504,6 +587,90 @@ def recovery_drill(x: RecoveryDrillRequest, owner:str=Depends(require_owner)):
         raise HTTPException(409, str(e))
     OWNER.authorize('RECOVERY_DRILL', f'{owner} ran a recovery drill on {x.snapshot.strip()}')
     return {'record': rec.__dict__ if hasattr(rec, '__dict__') else {'snapshot':rec.snapshot,'started_at':rec.started_at,'finished_at':rec.finished_at,'duration_ms':rec.duration_ms,'verified':rec.verified,'restored':rec.restored,'integrity_ok':rec.integrity_ok,'state_rows':rec.state_rows,'error':rec.error}}
+
+
+# --- Platform Orchestrator API (PHASE 2, additive; chat routes unchanged) ---
+class OrchestrateBody(BaseModel):
+    goal: str
+    mode: str = 'general'
+    session_id: str = ''
+    locale: str = 'ar'
+    context: dict = {}
+
+class LearningBody(BaseModel):
+    content: str
+    source: str = 'feedback'
+    action: str = 'ingest'
+    candidate_id: str | None = None
+    approved: bool = False
+    meta: dict = {}
+
+@app.get('/platform/status')
+def platform_status(owner: str = Depends(require_owner)):
+    return ORCHESTRATOR.status()
+
+@app.post('/orchestrate')
+def orchestrate(x: OrchestrateBody, owner: str = Depends(require_owner)):
+    if not x.goal.strip():
+        raise HTTPException(400, 'goal is required')
+    ctx = dict(x.context or {})
+    ctx.setdefault('owner', owner)
+    req = OrchestratorRequest(
+        goal=x.goal.strip(),
+        mode=x.mode or 'general',
+        session_id=x.session_id or '',
+        user_id=owner,
+        locale=x.locale or 'ar',
+        context=ctx,
+    )
+    result = ORCHESTRATOR.handle(req)
+    OWNER.authorize('ORCHESTRATE', f'{owner} orchestrate mode={req.mode} ok={result.ok}')
+    return {
+        'ok': result.ok,
+        'reply': result.reply,
+        'timeline': [{'status': t.status, 'detail': t.detail, **(t.meta or {})} for t in result.timeline],
+        'needs_approval': result.needs_approval,
+        'approval_id': result.approval_id,
+        'meta': result.meta,
+        'error': result.error,
+    }
+
+@app.post('/platform/learning')
+def platform_learning(x: LearningBody, owner: str = Depends(require_owner)):
+    """Controlled learning path — never mutates weights."""
+    ctx = {
+        'action': x.action,
+        'source': x.source,
+        'candidate_id': x.candidate_id,
+        'approved': x.approved,
+        'meta': x.meta,
+        'owner': owner,
+    }
+    req = OrchestratorRequest(goal=x.content or x.candidate_id or 'learning', mode='learning', user_id=owner, context=ctx)
+    result = ORCHESTRATOR.handle(req)
+    OWNER.authorize('PLATFORM_LEARNING', f'{owner} learning action={x.action}')
+    return {'ok': result.ok, 'reply': result.reply, 'meta': result.meta, 'needs_approval': result.needs_approval, 'error': result.error}
+
+@app.get('/platform/learning/audit')
+def platform_learning_audit(owner: str = Depends(require_owner), limit: int = 50):
+    return {'items': PLATFORM_LEARNING_AUDIT.recent(limit)}
+
+@app.get('/platform/providers')
+def platform_providers(owner: str = Depends(require_owner)):
+    return {
+        'providers': [
+            {
+                'provider_id': p.provider_id,
+                'kind': p.kind,
+                'offline_capable': p.offline_capable,
+                'requires_api_key': p.requires_api_key,
+                'api_key_env': p.api_key_env,
+            }
+            for p in PROVIDER_REGISTRY.list_providers()
+        ],
+        'router': MODEL_ROUTER.describe(),
+        'anthropic_required': False,
+    }
 
 
 # --- Command Chat API (Brain ↔ Heart) ---------------------------------

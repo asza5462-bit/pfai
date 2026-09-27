@@ -1,18 +1,21 @@
-"""In-memory ProviderRegistry scaffold — register Echo/Mock/local first."""
+"""ProviderRegistry — replaceable model provider catalog (PHASE 2).
+
+Core registers Echo/Mock first. openai_compatible (local) and Anthropic are
+optional adapters — never required to construct or run the registry.
+"""
 from __future__ import annotations
 
+import os
 from typing import Any, Callable
 
 from pfai.interfaces.model import ProviderSpec
-from pfai.model import ModelProvider
-
+from pfai.model import EchoProvider, ModelProvider
+from pfai.model_mock import MockCommandProvider
 
 Factory = Callable[..., ModelProvider]
 
 
 class ProviderRegistry:
-    """Provider catalog. Not wired into app.py yet — Core stays vendor-agnostic."""
-
     def __init__(self) -> None:
         self._specs: dict[str, ProviderSpec] = {}
         self._factories: dict[str, Factory] = {}
@@ -36,10 +39,7 @@ class ProviderRegistry:
         return factory(**kwargs)
 
     def bootstrap_defaults(self) -> None:
-        """Register offline-capable defaults (no commercial vendor required)."""
-        from pfai.model import EchoProvider
-        from pfai.model_mock import MockCommandProvider
-
+        """Register offline-capable + optional network providers."""
         if "echo" not in self._specs:
             self.register(
                 ProviderSpec(
@@ -62,3 +62,92 @@ class ProviderRegistry:
                 ),
                 lambda **_: MockCommandProvider(),
             )
+        if "openai_compatible" not in self._specs:
+            self.register(
+                ProviderSpec(
+                    provider_id="openai_compatible",
+                    kind="openai_compatible",
+                    description="Local/OpenAI-compatible HTTP endpoint (Ollama/vLLM/etc.)",
+                    offline_capable=True,
+                    requires_api_key=False,
+                ),
+                _make_openai_compatible,
+            )
+        if "anthropic" not in self._specs:
+            self.register(
+                ProviderSpec(
+                    provider_id="anthropic",
+                    kind="anthropic",
+                    description="Optional Anthropic Messages API adapter",
+                    offline_capable=False,
+                    requires_api_key=True,
+                    api_key_env="ANTHROPIC_API_KEY",
+                ),
+                _make_anthropic,
+            )
+
+    def create_from_config(self, model_cfg: dict[str, Any] | None = None) -> ModelProvider:
+        """Build a provider from config without requiring a commercial vendor.
+
+        If the configured provider needs a missing API key, fall back to Echo.
+        """
+        cfg = dict(model_cfg or {})
+        provider_id = str(cfg.get("provider") or "echo").strip() or "echo"
+        if provider_id not in self._factories:
+            self.bootstrap_defaults()
+        if provider_id not in self._factories:
+            return EchoProvider()
+
+        spec = self._specs.get(provider_id)
+        if spec and spec.requires_api_key:
+            env_name = spec.api_key_env or cfg.get("api_key_env") or ""
+            if env_name and not os.environ.get(env_name):
+                # Core must run offline — do not fail construction.
+                return self.create("echo")
+
+        try:
+            return self.create(provider_id, **_factory_kwargs(provider_id, cfg))
+        except Exception:
+            return self.create("echo")
+
+
+def _factory_kwargs(provider_id: str, cfg: dict[str, Any]) -> dict[str, Any]:
+    if provider_id == "openai_compatible":
+        import os as _os
+
+        key_env = cfg.get("api_key_env")
+        api_key = _os.environ.get(key_env, "") if key_env else ""
+        return {
+            "base_url": cfg.get("base_url", "http://127.0.0.1:11434/v1"),
+            "model": cfg.get("model", "local"),
+            "api_key": api_key,
+        }
+    if provider_id == "anthropic":
+        return {
+            "model": cfg.get("model", "claude-opus-5"),
+            "base_url": cfg.get("base_url", "https://api.anthropic.com/v1"),
+            "max_tokens": int(cfg.get("max_tokens", 2048)),
+            "api_key_env": cfg.get("api_key_env", "ANTHROPIC_API_KEY"),
+        }
+    return {}
+
+
+def _make_openai_compatible(**kwargs: Any) -> ModelProvider:
+    from pfai.model_http import OpenAICompatibleProvider
+
+    return OpenAICompatibleProvider(
+        kwargs.get("base_url", "http://127.0.0.1:11434/v1"),
+        kwargs.get("model", "local"),
+        kwargs.get("api_key", ""),
+    )
+
+
+def _make_anthropic(**kwargs: Any) -> ModelProvider:
+    from pfai.model_anthropic import AnthropicProvider
+
+    return AnthropicProvider(
+        model=kwargs.get("model", "claude-opus-5"),
+        base_url=kwargs.get("base_url", "https://api.anthropic.com/v1"),
+        max_tokens=int(kwargs.get("max_tokens", 2048)),
+        api_key_env=kwargs.get("api_key_env", "ANTHROPIC_API_KEY"),
+    )

@@ -1,36 +1,10 @@
-"""Self-heal scaffold — bounded, reversible, owner-gated (implementation later)."""
+"""Self-heal re-export — implementation lives in self_check.py (PHASE 2)."""
 from __future__ import annotations
 
-from pfai.interfaces.self_check import (
-    HealProposal,
-    HealResult,
-    SelfCheckReport,
-    SelfHealProtocol,
-)
+from pfai.self_check import HealProposal, HealResult, SelfHeal
 
-__all__ = ["SelfHealProtocol", "SelfHeal", "HealProposal", "HealResult"]
+__all__ = ["SelfHeal", "HealProposal", "HealResult", "SelfHealProtocol"]
 
 PHASE = 8
 
-
-class SelfHeal:
-    """Placeholder — BackupManager / rollback adapters land in a later phase."""
-
-    def propose_fix(self, report: SelfCheckReport) -> HealProposal:
-        raise NotImplementedError("SelfHeal proposal lands in a later phase")
-
-    def apply_fix(self, proposal_id: str, *, approved: bool = False) -> HealResult:
-        if not approved:
-            return HealResult(
-                ok=False,
-                proposal_id=proposal_id,
-                message="owner approval required",
-                meta={"needs_approval": True},
-            )
-        raise NotImplementedError("SelfHeal apply lands in a later phase")
-
-    def test_fix(self, proposal_id: str) -> HealResult:
-        raise NotImplementedError("SelfHeal test lands in a later phase")
-
-    def rollback_fix(self, proposal_id: str) -> HealResult:
-        raise NotImplementedError("SelfHeal rollback lands in a later phase")
+from pfai.interfaces.self_check import SelfHealProtocol  # noqa: E402

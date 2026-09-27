@@ -72,7 +72,7 @@ class TestScaffoldImports(unittest.TestCase):
         import pfai.task_planner as task_planner
 
         self.assertEqual(memory_system.PHASE, 3)
-        self.assertEqual(knowledge_layer.PHASE, 3)
+        self.assertEqual(knowledge_layer.PHASE, 2)
         self.assertEqual(task_planner.PHASE, 4)
         self.assertEqual(self_check.PHASE, 7)
         self.assertEqual(self_heal.PHASE, 8)
@@ -91,9 +91,11 @@ class TestScaffoldImports(unittest.TestCase):
         self.assertFalse(desc["anthropic_required"])
         self.assertIn("default", desc["roles"])
 
-    def test_model_router_empty_raises(self):
-        with self.assertRaises(NotImplementedError):
-            ModelRouter().resolve(ModelRole.CODING)
+    def test_model_router_falls_back_to_default(self):
+        router = ModelRouter({ModelRole.DEFAULT.value: EchoProvider()})
+        provider = router.resolve(ModelRole.CODING)
+        self.assertTrue(provider.generate("hi").startswith("[PFAI-ECHO]"))
+        self.assertFalse(router.describe()["anthropic_required"])
 
 
 class TestSkillRegistryScaffold(unittest.TestCase):
