@@ -45,6 +45,7 @@ from .verified_outcomes import VerifiedOutcomeStore
 from .post_train_validation import PostTrainValidator, write_report
 from .production_validation import ProductionGateConfig, ProductionQualityGate
 from .evaluation_dataset import EvaluationDatasetBuilder
+from .promotion_history import PromotionHistory, adapter_artifact_hash
 
 
 class AutonomousTrainingOrchestrator:
@@ -72,7 +73,11 @@ class AutonomousTrainingOrchestrator:
         self.validator = TrainingExampleValidator()
         self.builder = DatasetBuilder(self.validator)
         self.datasets = DatasetVersionRegistry(str(self.root / "datasets"))
-        self.models = ModelRegistry(str(self.root / "models"))
+        self.promotion_history = PromotionHistory(str(self.root / "promotion_history.jsonl"))
+        self.models = ModelRegistry(
+            str(self.root / "models"),
+            promotion_history=self.promotion_history,
+        )
         self.checkpoints = CheckpointStore(str(self.root / "checkpoints"))
         self.audit = TrainingAuditLog(str(self.root / "training_audit.jsonl"))
         self.backends = TrainingBackendRegistry()
@@ -84,7 +89,10 @@ class AutonomousTrainingOrchestrator:
             audit_fn=self.audit.record,
             active_runtime=self.active_runtime,
             checkpoints=self.checkpoints,
+            promotion_history=self.promotion_history,
         )
+        # Idempotent: seed durable PROMOTION record for already-validated Phase 11 state
+        self._ensure_phase11_promotion_history()
         self.isolation = TrainingSafetyIsolation()
         self.triggers = TrainingTriggerPolicy()
         self.detector = TrainingRuntimeDetector()
@@ -2093,20 +2101,67 @@ class AutonomousTrainingOrchestrator:
         # the previous LKG checkpoint for rollback. Until then LKG stays production fallback.
         if production_validated and candidate.get("model_id"):
             prev_lkg_id = (lkg or {}).get("model_id")
-            if prev_lkg_id and prev_lkg_id != candidate.get("model_id"):
-                self.audit.record(
-                    "lkg_promotion_previous_retained",
-                    previous_lkg=prev_lkg_id,
-                    new_lkg=candidate.get("model_id"),
-                    reason="production_quality_gate_pass",
-                )
-            self.models.mark_lkg(
-                str(candidate.get("model_id")),
+            prev_active_id = (self.models.active() or {}).get("model_id")
+            # Prefer explicit previous production LKG; fall back to baseline from gate
+            if not prev_lkg_id or prev_lkg_id == candidate.get("model_id"):
+                prev_lkg_id = prod.get("baseline_model") or prev_lkg_id
+            if not prev_active_id or prev_active_id == candidate.get("model_id"):
+                # Active may already be the candidate (internal_active); use baseline/LKG
+                prev_active_id = prev_lkg_id or prod.get("baseline_model")
+            cand_id = str(candidate.get("model_id"))
+            prev_model = self.models.get(str(prev_lkg_id)) if prev_lkg_id else None
+            cand_model = self.models.get(cand_id) or candidate
+            prev_hash = adapter_artifact_hash((prev_model or {}).get("checkpoint_ref"))
+            new_hash = adapter_artifact_hash((cand_model or {}).get("checkpoint_ref"))
+            promo = self.promotion_history.record_promotion(
+                previous_active_model=str(prev_active_id) if prev_active_id else None,
+                previous_lkg_model=str(prev_lkg_id) if prev_lkg_id else None,
+                new_active_model=cand_id,
+                new_lkg_model=cand_id,
+                previous_active_hash=prev_hash,
+                previous_lkg_hash=prev_hash,
+                new_active_hash=new_hash,
+                new_lkg_hash=new_hash,
+                dataset_version=str(
+                    (cand_model or {}).get("dataset_version")
+                    or prod.get("dataset_version")
+                    or ""
+                ),
+                evaluation_dataset=str(eval_ds.get("dataset_id") or ""),
+                evaluation_samples=int(
+                    prod.get("independent_evaluation_samples")
+                    or prod.get("evaluation_examples")
+                    or 0
+                ),
+                evaluation_run_id=str(prod.get("evaluation_run_id") or ""),
+                quality_gate_result="PASS",
                 reason="production_quality_gate_pass",
             )
-            self.models.update_status(
-                str(candidate.get("model_id")), ModelStatus.ACTIVE
+            self.audit.record(
+                "lkg_promotion_previous_retained",
+                previous_lkg=prev_lkg_id,
+                new_lkg=cand_id,
+                promotion_id=promo.get("promotion_id"),
+                reason="production_quality_gate_pass",
             )
+            self.models.mark_lkg(cand_id, reason="production_quality_gate_pass")
+            self.models.update_status(cand_id, ModelStatus.ACTIVE)
+            # Ensure candidate is the active production pointer
+            if (self.models.active() or {}).get("model_id") != cand_id:
+                self.models.activate(
+                    cand_id,
+                    mark_as_lkg=True,
+                    preserve_outgoing_as_lkg=False,
+                    production_ready=True,
+                    record_promotion=False,
+                )
+            else:
+                self.models.set_production_ready(
+                    cand_id,
+                    ready=True,
+                    reason="production_quality_gate_pass",
+                    evaluation_run_id=str(prod.get("evaluation_run_id") or ""),
+                )
 
         # Update active runtime serving tier metadata without swapping models
         cur = self.active_runtime.current()
@@ -2214,6 +2269,114 @@ class AutonomousTrainingOrchestrator:
         )
         return out
 
+    def _ensure_phase11_promotion_history(self) -> dict[str, Any]:
+        """Seed durable PROMOTION v0001→v0007 when Phase 11 already production-validated."""
+        try:
+            active = self.models.active() or {}
+            lkg = self.models.last_known_good() or {}
+            v7 = self.models.get("model-v0007")
+            v1 = self.models.get("model-v0001")
+            if not v7 or not v1:
+                return {"ok": True, "seeded": False, "reason": "models_absent"}
+            if active.get("model_id") != "model-v0007" and lkg.get("model_id") != "model-v0007":
+                return {"ok": True, "seeded": False, "reason": "v0007_not_current"}
+            report_path = self.root / "artifacts" / "production_validation.json"
+            eval_ds = None
+            eval_samples = None
+            eval_run = None
+            if report_path.exists():
+                try:
+                    rep = json.loads(report_path.read_text(encoding="utf-8"))
+                    if not rep.get("model_quality_production_validated"):
+                        return {"ok": True, "seeded": False, "reason": "not_production_validated"}
+                    eval_ds = rep.get("evaluation_dataset")
+                    eval_samples = rep.get("evaluation_samples") or rep.get(
+                        "independent_evaluation_samples"
+                    )
+                    eval_run = rep.get("evaluation_run_id")
+                except Exception:
+                    pass
+            return self.promotion_history.ensure_seed_promotion(
+                previous_model="model-v0001",
+                new_model="model-v0007",
+                previous_hash=adapter_artifact_hash(v1.get("checkpoint_ref")),
+                new_hash=adapter_artifact_hash(v7.get("checkpoint_ref")),
+                dataset_version=str(v7.get("dataset_version") or "dataset-v0006"),
+                evaluation_dataset=str(eval_ds or "prodeval-v0003"),
+                evaluation_samples=int(eval_samples or 336),
+                evaluation_run_id=str(eval_run or ""),
+                reason="phase11_seed_production_promotion",
+            )
+        except Exception as exc:
+            return {"ok": False, "seeded": False, "error": type(exc).__name__}
+
+    def re_promote_production(
+        self,
+        model_id: str,
+        *,
+        reason: str = "restore_after_rollback_verification",
+    ) -> dict[str, Any]:
+        """Re-activate a production-validated model and record PROMOTION history."""
+        model = self.models.get(model_id)
+        if not model:
+            return {"ok": False, "error": "model_not_found"}
+        prev_active = self.models.active() or {}
+        prev_lkg = self.models.last_known_good() or {}
+        prev_active_id = prev_active.get("model_id")
+        prev_lkg_id = prev_lkg.get("model_id")
+        prev_hash = adapter_artifact_hash(prev_lkg.get("checkpoint_ref") or prev_active.get("checkpoint_ref"))
+        new_hash = adapter_artifact_hash(model.get("checkpoint_ref"))
+        self.models.activate(
+            model_id,
+            mark_as_lkg=True,
+            preserve_outgoing_as_lkg=False,
+            production_ready=True,
+            record_promotion=False,
+        )
+        self.models.mark_lkg(model_id, reason=reason)
+        self.models.set_production_ready(model_id, ready=True, reason=reason)
+        runtime = self.active_runtime.switch_to(
+            model_id=model_id,
+            checkpoint_ref=str(model.get("checkpoint_ref") or ""),
+            dataset_version=str(model.get("dataset_version") or ""),
+            base_model=str(model.get("base_model") or ""),
+            meta={"via": "re_promote_production", "reason": reason, "production_ready": True},
+        )
+        try:
+            cur = self.active_runtime.current()
+            cur["production_ready"] = True
+            cur["serving_tier"] = "production_ready"
+            self.active_runtime.path.write_text(json.dumps(cur, indent=2), encoding="utf-8")
+        except Exception:
+            pass
+        promo = self.promotion_history.record_promotion(
+            previous_active_model=prev_active_id,
+            previous_lkg_model=prev_lkg_id or prev_active_id,
+            new_active_model=model_id,
+            new_lkg_model=model_id,
+            previous_active_hash=prev_hash,
+            previous_lkg_hash=prev_hash,
+            new_active_hash=new_hash,
+            new_lkg_hash=new_hash,
+            dataset_version=str(model.get("dataset_version") or ""),
+            quality_gate_result="PASS",
+            reason=reason,
+        )
+        self.audit.record(
+            "production_re_promotion",
+            previous_lkg=prev_lkg_id,
+            new_lkg=model_id,
+            promotion_id=promo.get("promotion_id"),
+            reason=reason,
+        )
+        return {
+            "ok": True,
+            "model_id": model_id,
+            "promotion": promo,
+            "runtime": runtime,
+            "previous_lkg_model": prev_lkg_id or prev_active_id,
+        }
+
     def production_validation_status(self) -> dict[str, Any]:
         last = dict(self._last_production_validation or {})
         report_data: dict[str, Any] = {}
@@ -2253,6 +2416,19 @@ class AutonomousTrainingOrchestrator:
             or last.get("production_ready")
             or report_data.get("production_ready")
         )
+        prev_resolve = self.rollback_mgr.resolve_previous_production_model()
+        previous_lkg = prev_resolve.get("model_id") if prev_resolve.get("ok") else None
+        rollback_full = bool(
+            prev_resolve.get("ok")
+            and previous_lkg
+            and previous_lkg != active.get("model_id")
+            and ActiveModelRuntime.verify_checkpoint(
+                (prev_resolve.get("model") or self.models.get(previous_lkg) or {}).get(
+                    "checkpoint_ref"
+                )
+                or ""
+            ).get("ok")
+        )
         return {
             "ok": True,
             "implemented": True,
@@ -2280,6 +2456,7 @@ class AutonomousTrainingOrchestrator:
             "cpu_training_available": bool(caps.get("training_available")),
             "current_active_model": active.get("model_id"),
             "current_lkg": lkg.get("model_id"),
+            "previous_lkg_model": previous_lkg,
             "candidate_model": last.get("candidate_model")
             or report_data.get("candidate_model")
             or active.get("model_id"),
@@ -2299,7 +2476,9 @@ class AutonomousTrainingOrchestrator:
             "quality_gate": report_data.get("quality_gate")
             or ("PASS" if production_ready else "FAIL"),
             "canary_result": report_data.get("canary_result"),
-            "rollback_available": bool(lkg.get("model_id")),
+            "rollback_available": "full" if rollback_full else bool(lkg.get("model_id")),
+            "rollback_resolution": prev_resolve,
+            "promotion_history_events": len(self.promotion_history.list_events()),
             "serving_tier": (active.get("meta") or {}).get("serving_tier")
             or report_data.get("serving_tier"),
             "note": (

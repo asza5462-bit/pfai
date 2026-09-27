@@ -9,14 +9,21 @@ from pathlib import Path
 from typing import Any
 
 from .types import ModelStatus
+from .promotion_history import adapter_artifact_hash
 
 
 class ModelRegistry:
-    def __init__(self, root: str = "data/longevity/training/models") -> None:
+    def __init__(
+        self,
+        root: str = "data/longevity/training/models",
+        *,
+        promotion_history: Any | None = None,
+    ) -> None:
         self.root = Path(root)
         self.root.mkdir(parents=True, exist_ok=True)
         self.db_path = self.root / "model_registry.sqlite3"
         self._lock = threading.RLock()
+        self.promotion_history = promotion_history
         self._init_db()
 
     def _conn(self) -> sqlite3.Connection:
@@ -350,9 +357,12 @@ class ModelRegistry:
         mark_as_lkg: bool = False,
         preserve_outgoing_as_lkg: bool = True,
         production_ready: bool = False,
+        record_promotion: bool = True,
     ) -> dict[str, Any]:
         current = self.active(slot)
         previous_id = current.get("model_id") if current else None
+        previous_lkg = self.last_known_good(slot)
+        previous_lkg_id = previous_lkg.get("model_id") if previous_lkg else None
         # Before switching: optionally preserve current ACTIVE as LKG (never delete checkpoints).
         # Rollback paths set preserve_outgoing_as_lkg=False so a failed candidate is not promoted to LKG.
         # Do not replace an existing LKG with an internal_active (non production_ready) predecessor.
@@ -362,6 +372,7 @@ class ModelRegistry:
             prev_ready = bool((prev.get("meta") or {}).get("production_ready"))
             if prev_ready or not existing_lkg:
                 self.mark_lkg(previous_id, slot=slot, reason="preserved_before_activation")
+                previous_lkg_id = previous_id
             # else: keep existing LKG (typically production last-known-good)
         with self._lock:
             db = self._conn()
@@ -410,4 +421,41 @@ class ModelRegistry:
                 slot=slot,
                 reason="first_successful_activation" if previous_id is None else "explicit_lkg",
             )
+        # Durable activation history for rollback resolution (never deletes artifacts)
+        if (
+            record_promotion
+            and self.promotion_history is not None
+            and previous_id
+            and previous_id != model_id
+        ):
+            new_model = self.get(model_id) or {}
+            prev_ref = (self.get(previous_lkg_id) or self.get(previous_id) or {}).get(
+                "checkpoint_ref"
+            )
+            new_ref = new_model.get("checkpoint_ref")
+            lkg_now = self.last_known_good(slot) or {}
+            try:
+                self.promotion_history.record_promotion(
+                    previous_active_model=previous_id,
+                    previous_lkg_model=previous_lkg_id or previous_id,
+                    new_active_model=model_id,
+                    new_lkg_model=lkg_now.get("model_id") or model_id,
+                    previous_active_hash=adapter_artifact_hash(
+                        (self.get(previous_id) or {}).get("checkpoint_ref")
+                    ),
+                    previous_lkg_hash=adapter_artifact_hash(prev_ref),
+                    new_active_hash=adapter_artifact_hash(new_ref),
+                    new_lkg_hash=adapter_artifact_hash(
+                        (self.get(lkg_now.get("model_id")) or new_model).get("checkpoint_ref")
+                    ),
+                    dataset_version=str(new_model.get("dataset_version") or ""),
+                    quality_gate_result="PASS" if production_ready else "INTERNAL_ACTIVE",
+                    reason=(
+                        "production_activation"
+                        if production_ready
+                        else "internal_activation"
+                    ),
+                )
+            except Exception:
+                pass
         return self.active(slot) or {"model_id": model_id}

@@ -249,8 +249,9 @@ class TestTrainingGatesIsolationRollback(unittest.TestCase):
                 meta={"is_mock": True},
             )
             Path(d, "ckpt-lkg").mkdir(parents=True, exist_ok=True)
-            orch.models.update_status(lkg["model_id"], ModelStatus.ACTIVE)
-            orch.models.mark_lkg(lkg["model_id"], reason="verify")
+            (Path(d) / "ckpt-lkg" / "adapter_model.safetensors").write_bytes(b"lkg")
+            (Path(d) / "ckpt-lkg" / "adapter_config.json").write_text("{}", encoding="utf-8")
+            orch.models.activate(lkg["model_id"], mark_as_lkg=True, production_ready=True)
             # Candidate rejected must not delete LKG
             cand = orch.models.register(
                 base_model="local",
@@ -259,6 +260,9 @@ class TestTrainingGatesIsolationRollback(unittest.TestCase):
                 checkpoint_ref=str(Path(d) / "ckpt-bad"),
                 status=ModelStatus.CANDIDATE,
             )
+            Path(d, "ckpt-bad").mkdir(parents=True, exist_ok=True)
+            (Path(d) / "ckpt-bad" / "adapter_model.safetensors").write_bytes(b"bad")
+            (Path(d) / "ckpt-bad" / "adapter_config.json").write_text("{}", encoding="utf-8")
             orch.models.update_status(cand["model_id"], ModelStatus.REJECTED)
             self.assertEqual(orch.models.last_known_good()["model_id"], lkg["model_id"])
             # Force regression rollback path
