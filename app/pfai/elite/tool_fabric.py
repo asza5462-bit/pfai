@@ -9,7 +9,7 @@ from pathlib import Path
 from typing import Any, Callable
 
 from pfai.authorized_execution import AuthorizedExecutor, PermissionGate
-from pfai.elite.types import RiskLevel, ToolDefinition, now_ts
+from pfai.elite.types import RiskLevel, ToolDefinition, ToolStatusClass, now_ts
 from pfai.interfaces.tools import ToolPermission
 from pfai.tool_router import ToolRouter
 
@@ -132,6 +132,7 @@ class ToolFabric:
                             "description": item.get("description"),
                             "permissions_required": item.get("permission"),
                             "source": "legacy_tool_router",
+                            "tool_status_class": ToolStatusClass.LEGACY_TOOL.value,
                             "enabled": True,
                         }
                     )
@@ -241,6 +242,58 @@ class ToolFabric:
         missing = [k for k in required if k not in result]
         return {"ok": not missing, "missing": missing, "checked": True}
 
+    def status_registry(self) -> dict[str, Any]:
+        """Explicit REAL/TEST/MOCK/LEGACY classification for every catalogued tool."""
+        counts = {
+            ToolStatusClass.REAL_PRODUCTION_TOOL.value: 0,
+            ToolStatusClass.TEST_TOOL.value: 0,
+            ToolStatusClass.MOCK_TOOL.value: 0,
+            ToolStatusClass.LEGACY_TOOL.value: 0,
+        }
+        tools = []
+        for t in self.catalog():
+            status = str(t.get("tool_status_class") or "")
+            if not status:
+                if t.get("source") == "legacy_tool_router":
+                    status = ToolStatusClass.LEGACY_TOOL.value
+                elif "mock" in str(t.get("tool_id") or "").lower():
+                    status = ToolStatusClass.MOCK_TOOL.value
+                else:
+                    status = ToolStatusClass.REAL_PRODUCTION_TOOL.value
+            counts[status] = counts.get(status, 0) + 1
+            tools.append(
+                {
+                    "tool_id": t.get("tool_id") or t.get("name"),
+                    "version": t.get("version") or t.get("active_version"),
+                    "description": t.get("description"),
+                    "input_schema": t.get("input_schema") or {},
+                    "output_schema": t.get("output_schema") or {},
+                    "risk_level": t.get("risk_level"),
+                    "required_permissions": (
+                        t.get("required_permissions")
+                        if t.get("required_permissions") is not None
+                        else ([t.get("permissions_required")] if t.get("permissions_required") else [])
+                    ),
+                    "owner_approval_required": bool(t.get("owner_approval_required")),
+                    "network_access": bool(t.get("network_access")),
+                    "filesystem_access": bool(t.get("filesystem_access")),
+                    "secret_access": bool(t.get("secret_access")),
+                    "timeout": t.get("timeout"),
+                    "resource_limits": t.get("resource_limits") or {},
+                    "audit_policy": t.get("audit_policy") or "always",
+                    "tool_status_class": status,
+                }
+            )
+        return {
+            "ok": True,
+            "counts": counts,
+            "REAL_TOOL_COUNT": counts.get(ToolStatusClass.REAL_PRODUCTION_TOOL.value, 0),
+            "MOCK_TOOL_COUNT": counts.get(ToolStatusClass.MOCK_TOOL.value, 0)
+            + counts.get(ToolStatusClass.TEST_TOOL.value, 0),
+            "LEGACY_TOOL_COUNT": counts.get(ToolStatusClass.LEGACY_TOOL.value, 0),
+            "tools": tools,
+        }
+
     def bootstrap_safe_tools(self) -> dict[str, Any]:
         """Register a few safe built-in tools (no secrets, no auth mutation)."""
         defs = []
@@ -258,10 +311,28 @@ class ToolFabric:
 
             return skill_numerical_reasoning(expression=expression)
 
-        for tool_id, desc, handler, schema in [
-            ("echo_text", "Echo text safely", echo_tool, {"required": ["text"], "properties": {"text": {"type": "string"}}}),
-            ("sha256_text", "Hash text", hash_tool, {"required": ["text"], "properties": {"text": {"type": "string"}}}),
-            ("safe_calc", "Safe arithmetic", calc_tool, {"required": ["expression"], "properties": {"expression": {"type": "string"}}}),
+        for tool_id, desc, handler, schema, status_class in [
+            (
+                "echo_text",
+                "Echo text safely",
+                echo_tool,
+                {"required": ["text"], "properties": {"text": {"type": "string"}}},
+                ToolStatusClass.REAL_PRODUCTION_TOOL.value,
+            ),
+            (
+                "sha256_text",
+                "Hash text",
+                hash_tool,
+                {"required": ["text"], "properties": {"text": {"type": "string"}}},
+                ToolStatusClass.REAL_PRODUCTION_TOOL.value,
+            ),
+            (
+                "safe_calc",
+                "Safe arithmetic",
+                calc_tool,
+                {"required": ["expression"], "properties": {"expression": {"type": "string"}}},
+                ToolStatusClass.REAL_PRODUCTION_TOOL.value,
+            ),
         ]:
             d = ToolDefinition(
                 tool_id=tool_id,
@@ -271,10 +342,19 @@ class ToolFabric:
                 output_schema={"required": ["ok"]},
                 capabilities=[tool_id, "safe"],
                 permissions_required=ToolPermission.READ.value,
+                required_permissions=[ToolPermission.READ.value],
                 risk_level=RiskLevel.LOW.value,
+                owner_approval_required=False,
+                network_access=False,
+                filesystem_access=False,
+                secret_access=False,
+                timeout=10.0,
+                resource_limits={"max_output_bytes": 64_000},
+                audit_policy="always",
+                tool_status_class=status_class,
                 enabled=True,
                 health="healthy",
-                provenance={"phase": 12},
+                provenance={"phase": 13},
             )
             r = self.register(d, handler, activate=True)
             defs.append(r)

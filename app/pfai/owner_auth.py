@@ -16,7 +16,12 @@ import time
 from pathlib import Path
 from typing import Any
 
-from .email_provider import EmailMessageSpec, EmailProvider, email_provider_from_env
+from .email_provider import (
+    EmailMessageSpec,
+    EmailProvider,
+    email_config_report,
+    email_provider_from_env,
+)
 from .owner_control import OwnerControl
 
 COOKIE_NAME = "pfai_owner_session"
@@ -85,8 +90,10 @@ class OwnerAuthService:
                 "ttl_seconds": OTP_TTL_SECONDS,
                 "length": OTP_LENGTH,
                 "resend_cooldown_seconds": OTP_RESEND_COOLDOWN,
+                "max_attempts": OTP_MAX_ATTEMPTS,
                 "email_provider": type(self.email_provider).__name__,
             },
+            "email_config": email_config_report(self.email_provider),
             "note": "Passcodes and OTPs are never returned. Prefer a new production passcode before any deploy.",
         }
 

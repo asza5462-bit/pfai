@@ -716,6 +716,133 @@ def skill_structured_communication(**args: Any) -> dict[str, Any]:
     return {"ok": True, "message": {"summary": msg[:160], "details": msg, "call_to_action": args.get("cta") or ""}}
 
 
+# ---- Category I: Web / Information (Phase 13) ----
+
+def skill_web_search(**args: Any) -> dict[str, Any]:
+    """Search via WebInformationFabric — never fabricates results."""
+    from pfai.elite.web_fabric import WEB_PROVIDER_UNAVAILABLE, WebInformationFabric
+
+    query = _text(args, "query", "topic", "question", "task")
+    fabric = args.get("_web_fabric")
+    if fabric is None:
+        fabric = WebInformationFabric()
+    result = fabric.research(query, limit=int(args.get("limit") or 5), fetch_top=0)
+    if not result.ok:
+        return {
+            "ok": False,
+            "error": result.error or WEB_PROVIDER_UNAVAILABLE,
+            "status": WEB_PROVIDER_UNAVAILABLE,
+            "query": query,
+            "citations": [],
+            "claims": [
+                {
+                    "statement": "Web search provider is not configured.",
+                    "claim_kind": "UNCERTAIN RESULT",
+                    "confidence": 0.0,
+                }
+            ],
+        }
+    return {"ok": True, **result.to_dict()}
+
+
+def skill_web_fetch(**args: Any) -> dict[str, Any]:
+    from pfai.elite.web_fabric import WEB_PROVIDER_UNAVAILABLE, WebInformationFabric
+
+    url = _text(args, "url", "source", "link")
+    fabric = args.get("_web_fabric") or WebInformationFabric()
+    fetched = fabric.fetch_provider.fetch(url)
+    if not fetched.get("ok"):
+        return {
+            "ok": False,
+            "error": fetched.get("error") or WEB_PROVIDER_UNAVAILABLE,
+            "status": WEB_PROVIDER_UNAVAILABLE,
+            "url": url,
+        }
+    parsed = fabric.parser.parse(fetched)
+    claims = fabric.parser.extract_claims(parsed.get("text") or "", source_url=url)
+    return {
+        "ok": True,
+        "url": url,
+        "title": parsed.get("title"),
+        "text_preview": (parsed.get("text") or "")[:1000],
+        "claims": claims,
+        "content_hash": parsed.get("content_hash"),
+        "provenance": {"provider": fetched.get("provider"), "retrieved_at": fetched.get("retrieved_at")},
+    }
+
+
+def skill_source_verification(**args: Any) -> dict[str, Any]:
+    from pfai.elite.web_fabric import CitationRecord, SourceVerifier
+
+    cites_in = args.get("citations") or args.get("sources") or []
+    records = []
+    for i, c in enumerate(cites_in):
+        if isinstance(c, dict):
+            records.append(
+                CitationRecord(
+                    citation_id=str(c.get("citation_id") or f"c{i}"),
+                    url=str(c.get("url") or ""),
+                    title=str(c.get("title") or ""),
+                    snippet=str(c.get("snippet") or ""),
+                    content_hash=str(c.get("content_hash") or ""),
+                    retrieved_at=float(c.get("retrieved_at") or 0),
+                )
+            )
+    verified = SourceVerifier().verify(records)
+    return {
+        "ok": True,
+        "citations": [c.to_dict() for c in verified["citations"]],
+        "duplicates_removed": verified["duplicates_removed"],
+        "freshness_checked": True,
+    }
+
+
+def skill_freshness_check(**args: Any) -> dict[str, Any]:
+    from pfai.elite.web_fabric import CitationRecord, SourceVerifier
+
+    cites = args.get("citations") or []
+    records = [
+        CitationRecord(
+            citation_id=str(c.get("citation_id") or i),
+            url=str(c.get("url") or ""),
+            content_hash=str(c.get("content_hash") or ""),
+            retrieved_at=float(c.get("retrieved_at") or 0),
+        )
+        for i, c in enumerate(cites)
+        if isinstance(c, dict)
+    ]
+    verified = SourceVerifier().verify(records)
+    return {
+        "ok": True,
+        "citations": [c.to_dict() for c in verified["citations"]],
+        "freshness": [c.freshness for c in verified["citations"]],
+    }
+
+
+def skill_literature_research(**args: Any) -> dict[str, Any]:
+    topic = _text(args, "topic", "query", "question")
+    plan = {
+        "topic": topic,
+        "steps": [
+            "Define research question",
+            "Search primary sources",
+            "Extract evidence with claim kinds",
+            "Compare / synthesize",
+            "Cite provenance",
+        ],
+    }
+    web_kwargs = {"query": topic, "limit": 5}
+    if "_web_fabric" in args:
+        web_kwargs["_web_fabric"] = args["_web_fabric"]
+    web = skill_web_search(**web_kwargs)
+    return {
+        "ok": True,
+        "plan": plan,
+        "web": web,
+        "note": "Original PFAI literature-style workflow; not a proprietary clone.",
+    }
+
+
 SKILL_SPECS: list[tuple[SkillDefinition, Callable[..., Any]]] = []
 
 
@@ -730,6 +857,7 @@ def _spec(
     risk: str = "low",
     deps: list[str] | None = None,
     tools: list[str] | None = None,
+    model_caps: list[str] | None = None,
 ) -> None:
     SKILL_SPECS.append(
         (
@@ -744,14 +872,21 @@ def _spec(
                 produced_outputs=["result"],
                 dependencies=deps or [],
                 compatible_tools=tools or [],
+                required_tools=tools or [],
+                required_model_capabilities=model_caps or [],
                 permissions_required=permission,
+                permissions=[permission],
                 risk_level=risk,
+                input_schema={"type": "object"},
+                output_schema={"type": "object"},
+                quality_metrics={"smoke": "ok"},
+                training_metadata={"eligible": True},
                 enabled=True,
                 status="draft",
                 health="healthy",
                 evaluation_state="smoke_ok",
                 tags=[category, skill_id],
-                provenance={"phase": 12, "origin": "pfai_elite_library"},
+                provenance={"phase": 13, "origin": "pfai_elite_library"},
             ),
             handler,
         )
@@ -867,6 +1002,15 @@ def _bootstrap_specs() -> None:
         ("structured_communication", "Structure a message", skill_structured_communication),
     ]:
         _spec(sid, "creative_general", desc, fn, capabilities=["writing", sid])
+    # I — Web / Information (Phase 13)
+    for sid, desc, fn, caps in [
+        ("web_search", "Provider-agnostic web search (unavailable if unconfigured)", skill_web_search, ["web", "search", "research"]),
+        ("web_fetch", "Fetch and parse a URL with provenance", skill_web_fetch, ["web", "fetch"]),
+        ("source_verification", "Deduplicate and verify source citations", skill_source_verification, ["web", "verification"]),
+        ("freshness_check", "Assess citation freshness metadata", skill_freshness_check, ["web", "freshness"]),
+        ("literature_research", "Literature-style research workflow", skill_literature_research, ["web", "research", "literature"]),
+    ]:
+        _spec(sid, "web_information", desc, fn, capabilities=caps)
 
 
 def register_elite_skills(registry: SkillRegistry2, *, activate: bool = True) -> dict[str, Any]:

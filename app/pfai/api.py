@@ -368,6 +368,8 @@ PLATFORM_SELF_CHECK = SelfCheck({
     'email_otp_ready': lambda: {
         'ok': 'email_otp' in OWNER_AUTH.public_status().get('auth_methods', []),
         'provider': type(OWNER_AUTH.email_provider).__name__,
+        **{k: v for k, v in __import__('pfai.email_provider', fromlist=['email_config_report']).email_config_report(OWNER_AUTH.email_provider).items()
+           if k in ('EMAIL_PROVIDER', 'EMAIL_PRODUCTION_READY', 'EMAIL_REQUIRE_PRODUCTION')},
     },
     'local_model_adapter': lambda: _local_model_adapter_check(),
 })
@@ -498,7 +500,7 @@ ELITE = EliteOrchestrator(
     experience_bridge=getattr(AUTONOMOUS_TRAINING, 'experience', None),
     bootstrap_skills=True,
 )
-log.info('phase12 elite fabric ready skills=%s tools=%s', ELITE.skills.health().get('count'), len(ELITE.tools.catalog()))
+log.info('phase13 elite fabric ready skills=%s tools=%s', ELITE.skills.health().get('count'), len(ELITE.tools.catalog()))
 PLATFORM_SKILLS.register(
     Skill(name='platform_status', description='Orchestrator/platform status', permission=ToolPermission.READ, version='1'),
     lambda ctx=None, **_k: ORCHESTRATOR.status(),
@@ -1114,6 +1116,24 @@ def elite_unified_chat(x: EliteChatBody, owner: str = Depends(require_owner)):
 @app.get('/platform/elite/status')
 def elite_status(owner: str = Depends(require_owner)):
     return ELITE.status()
+
+@app.get('/platform/email/status')
+def email_status(owner: str = Depends(require_owner)):
+    from .email_provider import email_config_report
+    return {'ok': True, **email_config_report(OWNER_AUTH.email_provider)}
+
+@app.get('/platform/web/status')
+def web_status(owner: str = Depends(require_owner)):
+    return {'ok': True, **ELITE.web.status()}
+
+@app.get('/platform/model-router/status')
+def model_router_status(owner: str = Depends(require_owner)):
+    return {'ok': True, **MODEL_ROUTER.describe()}
+
+@app.get('/platform/sandbox/status')
+def sandbox_status(owner: str = Depends(require_owner)):
+    from .elite.sandbox import Sandbox
+    return {'ok': True, **Sandbox(timeout=1.0).metadata()}
 
 @app.get('/platform/elite/skills')
 def elite_skills(owner: str = Depends(require_owner), category: str | None = None):

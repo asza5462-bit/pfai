@@ -11,6 +11,7 @@ from pfai.elite.types import SkillCandidate
 _INTENT_HINTS: dict[str, list[str]] = {
     "code": ["code", "function", "bug", "test", "refactor", "api", "debug", "implement"],
     "research": ["research", "source", "evidence", "cite", "fact", "paper", "compare sources"],
+    "web": ["web search", "search the web", "fetch url", "http://", "https://", "browse", "online"],
     "data": ["dataset", "statistics", "mean", "plot", "experiment", "numeric"],
     "document": ["document", "summarize", "extract", "pdf", "rewrite", "outline"],
     "reason": ["why", "reason", "plan", "decide", "hypothesis", "analyze"],
@@ -46,6 +47,7 @@ class SkillDiscoveryEngine:
         category_map = {
             "code": "software_engineering",
             "research": "research",
+            "web": "web_information",
             "data": "data_science",
             "document": "document_intelligence",
             "reason": "reasoning",

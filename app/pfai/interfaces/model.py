@@ -23,6 +23,25 @@ class ModelRole(str, Enum):
     EMBEDDING = "embedding"
 
 
+# Capability classes used by ModelRouter (Phase 13). Only claim what is implemented.
+MODEL_CAPABILITIES = (
+    "reasoning",
+    "coding",
+    "debugging",
+    "research",
+    "long_context",
+    "structured_output",
+    "tool_use",
+    "vision",
+    "embeddings",
+    "local",
+    "remote",
+    "fast",
+    "echo",
+    "mock",
+)
+
+
 @dataclass
 class ProviderSpec:
     """Registration metadata for a model provider implementation."""
@@ -34,7 +53,33 @@ class ProviderSpec:
     requires_api_key: bool = False
     api_key_env: str = ""
     default_model: str = ""
+    capabilities: tuple[str, ...] = ()
+    context_length: int = 0
     meta: dict[str, Any] = field(default_factory=dict)
+
+
+@dataclass
+class UnavailableResult:
+    """Structured result when a provider/role cannot be used (never pretend success)."""
+
+    ok: bool = False
+    available: bool = False
+    error: str = "provider_unavailable"
+    provider_id: str = ""
+    role: str = ""
+    capabilities_requested: tuple[str, ...] = ()
+    audit: dict[str, Any] = field(default_factory=dict)
+
+    def to_dict(self) -> dict[str, Any]:
+        return {
+            "ok": self.ok,
+            "available": self.available,
+            "error": self.error,
+            "provider_id": self.provider_id,
+            "role": self.role,
+            "capabilities_requested": list(self.capabilities_requested),
+            "audit": dict(self.audit),
+        }
 
 
 @dataclass

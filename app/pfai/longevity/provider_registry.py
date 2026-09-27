@@ -48,6 +48,7 @@ class ProviderRegistry:
                     description="Deterministic offline Echo provider",
                     offline_capable=True,
                     requires_api_key=False,
+                    capabilities=("echo", "local", "fast"),
                 ),
                 lambda **_: EchoProvider(),
             )
@@ -59,6 +60,7 @@ class ProviderRegistry:
                     description="Mock command/planning provider for offline tests",
                     offline_capable=True,
                     requires_api_key=False,
+                    capabilities=("mock", "local", "coding", "structured_output", "fast"),
                 ),
                 lambda **_: MockCommandProvider(),
             )
@@ -70,6 +72,7 @@ class ProviderRegistry:
                     description="Local/OpenAI-compatible HTTP endpoint (Ollama/vLLM/etc.)",
                     offline_capable=True,
                     requires_api_key=False,
+                    capabilities=("local", "remote", "reasoning", "coding", "structured_output", "tool_use"),
                 ),
                 _make_openai_compatible,
             )
@@ -81,6 +84,7 @@ class ProviderRegistry:
                     description="Local OpenAI-compatible runtime adapter (Ollama/vLLM/llama.cpp)",
                     offline_capable=True,
                     requires_api_key=False,
+                    capabilities=("local", "reasoning", "coding", "debugging", "research", "structured_output", "tool_use"),
                 ),
                 lambda **kw: _make_local("local", **kw),
             )
@@ -92,6 +96,7 @@ class ProviderRegistry:
                     description="Open-weight model adapter via OpenAI-compatible HTTP endpoint",
                     offline_capable=True,
                     requires_api_key=False,
+                    capabilities=("local", "reasoning", "coding", "debugging", "research", "structured_output"),
                 ),
                 lambda **kw: _make_local("open_weight", **kw),
             )
@@ -103,6 +108,7 @@ class ProviderRegistry:
                     description="In-process local HF/transformers open-weight loader (MODEL_PATH)",
                     offline_capable=True,
                     requires_api_key=False,
+                    capabilities=("local", "reasoning", "coding", "structured_output"),
                 ),
                 _make_transformers_local,
             )
@@ -115,6 +121,17 @@ class ProviderRegistry:
                     offline_capable=False,
                     requires_api_key=True,
                     api_key_env="ANTHROPIC_API_KEY",
+                    capabilities=(
+                        "remote",
+                        "reasoning",
+                        "coding",
+                        "debugging",
+                        "research",
+                        "long_context",
+                        "structured_output",
+                        "tool_use",
+                        "vision",
+                    ),
                 ),
                 _make_anthropic,
             )
