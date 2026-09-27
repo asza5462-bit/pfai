@@ -1,6 +1,6 @@
 # PFAI Project Memory
 
-Last updated: 2026-09-27 (Longevity Architecture Foundation PHASE 1)
+Last updated: 2026-09-27 (Longevity PHASE 2 Orchestrator)
 
 ## Snapshot
 
@@ -8,22 +8,15 @@ Last updated: 2026-09-27 (Longevity Architecture Foundation PHASE 1)
 |---|---|
 | Version | 8.0.0 |
 | Mission | Long-Lived Adaptive AI Platform (20–30y) |
-| Command Chat | `/chat/*` |
-| Coding Academy | `/coding/*` + Dashboard section |
-| Longevity docs | `docs/LONGEVITY.md` + ADR-012..020 |
+| Command Chat | `/chat/*` (unchanged primary UX) |
+| Orchestrator | `/orchestrate` + `/platform/*` (additive) |
+| Providers | echo, mock, openai_compatible, anthropic(optional) |
+| Anthropic required | **false** |
+| Learning | Durable gated pipeline; no weight mutation |
 | Schema version | `PFAI_SCHEMA_VERSION = 1` |
-| LLM | Anthropic optional; Echo/Mock/local first-class |
-| Continuous training | enabled + env kill switch; no auto-promote |
-| Fine-tune | Never automatic on prod; safe learning → knowledge |
-| Platform scaffolds | `pfai.interfaces` + `pfai.longevity` (not wired) |
-| Next | Longevity PHASE 2 — ProviderRegistry/ModelRouter wiring (await approval) |
+| Next | PHASE 3 — deepen LTM/Knowledge adapters + migration apply paths |
 
 ## Verification
 
-- pytest: 319 passed
-- Live smoke: `/health` + Dashboard `/` OK
-
-## Operator secrets (platform only)
-
-- `ANTHROPIC_API_KEY` (optional for live Claude)
-- `PFAI_OWNER_EMAIL` / `PFAI_OWNER_SECRET_HASH`
+- pytest: 329 passed
+- Live/TestClient smoke: `/health` + Dashboard `/` OK

@@ -194,3 +194,15 @@
   - CompatibilityLayer tracks schema/provider/storage/python floors and guides upgrades of runtime, deps, DBs, model APIs, OS, and deploy environments.
   - Do not assume any current technology survives 20 years.
 - Consequences: Diagnostics can be automatic; dangerous mutation cannot.
+
+## ADR-021 — PHASE 2 Orchestrator + ProviderRegistry wiring
+
+- Status: Accepted (2026-09-27)
+- Context: Longevity PHASE 1 defined ports; operator approved PHASE 2 to implement Orchestrator and provider routing without vendor lock-in.
+- Decision:
+  - `ProviderRegistry` registers echo/mock/openai_compatible/anthropic; Anthropic remains optional and is never required for Core.
+  - `ModelRouter.from_config` binds roles; missing API keys fall back to Echo.
+  - `Orchestrator` coordinates CommandAgent, CodingAgent, Skills, LTM, Knowledge, Evaluation, Self-check/heal, Safe Learning.
+  - Existing `/chat/*` and Dashboard stay the primary UX; additive `/orchestrate` + `/platform/*` expose the new layer.
+  - Durable learning persists candidates + versioned knowledge + audit; `allows_weight_mutation()==False`; fine-tune only prepared via readiness metadata.
+- Consequences: Platform is swappable at the provider boundary; learning is reversible and owner-gated for validation/store.

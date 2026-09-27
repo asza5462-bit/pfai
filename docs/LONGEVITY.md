@@ -154,8 +154,9 @@ Guides upgrades of runtime, deps, DB, model APIs, OS, deploy env.
 
 | Phase | Focus |
 |---|---|
-| **1 (this)** | Contracts, docs, ADRs, non-wired scaffolds, tests |
-| 2 | Wire ProviderRegistry + ModelRouter adapters (keep Echo default path) |
-| 3+ | LTM adapters, knowledge versioning, safe learning store, export, migrations, eval compare, bounded heal |
+| **1** | Contracts, docs, ADRs, non-wired scaffolds, tests |
+| **2 (done)** | ProviderRegistry + ModelRouter + Orchestrator wiring; durable gated learning; additive `/orchestrate` |
+| **3** | Deep LTM/Knowledge adapters, richer eval baselines, migration apply (non-dry-run) with backups |
+| 4+ | Planner/Tool permission unification, skill/tool versioning UX, bounded heal actions beyond re-check |
 
 Do not skip phases. Do not replace FastAPI/Dashboard in foundation work.

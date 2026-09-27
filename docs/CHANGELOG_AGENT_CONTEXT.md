@@ -1,5 +1,25 @@
 # Agent Context Changelog
 
+## 2026-09-27 — Longevity PHASE 2: Orchestrator + ProviderRegistry
+
+### Added
+- Real `ProviderRegistry` (echo/mock/openai_compatible/anthropic optional) + `ModelRouter.from_config`
+- Real `Orchestrator` coordinating Command/Coding/Skills/LTM/Knowledge/Eval/Self-check/heal/Learning
+- `DurableSafeLearningPipeline` + `KnowledgeVersionStore` + learning audit (SQLite/JSONL)
+- `LongTermMemory` / `MemorySystem` adapters; `KnowledgeLayer` search adapter; `PlatformEvaluation`; bounded `SelfCheck`/`SelfHeal`
+- Additive API: `/orchestrate`, `/platform/status`, `/platform/learning`, `/platform/learning/audit`, `/platform/providers`
+- `/health.platform` metadata (non-breaking)
+- Tests `test_v92_phase2_orchestrator.py`; ADR-021
+
+### Behavior
+- Existing `/chat/*`, `/coding/*`, Dashboard unchanged as primary UX
+- Learning never mutates weights; validate/store require approval path
+- Core runs without Anthropic key (fallback Echo)
+
+### Verified
+- pytest: **329 passed**
+- Smoke: `/health` + Dashboard `/` 200
+
 ## 2026-09-27 — Longevity PHASE 1: 20–30 year Architecture Foundation
 
 ### Added

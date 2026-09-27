@@ -77,5 +77,5 @@ python -m pytest tests/test_api_wiring.py tests/test_v81_continuous_enable_gate.
 - Core must remain model/provider/storage agnostic via ports
 - Memory is structured & portable (not tied to one LLM)
 - Production learning ≠ automatic weight mutation
-- ADRs 012–020 capture longevity decisions
-- `pfai.longevity` scaffolds are not wired into runtime yet
+- ADRs 012–021 capture longevity decisions
+- PHASE 2: `Orchestrator` + `ProviderRegistry`/`ModelRouter` wired; `/chat/*` preserved; `/orchestrate` additive
