@@ -118,7 +118,7 @@ class TestPhase3MigrationExport(unittest.TestCase):
         state = self.root / "schema.json"
         runner = MigrationRunner(current=1, state_path=str(state), backup_fn=backup)
         register_platform_migrations(runner)
-        self.assertEqual(PFAI_SCHEMA_VERSION, 3)
+        self.assertEqual(PFAI_SCHEMA_VERSION, 4)
         report = runner.run(dry_run=False)
         self.assertTrue(report.ok, report.error)
         self.assertEqual(runner.current_version(), 3)

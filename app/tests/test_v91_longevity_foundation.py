@@ -104,7 +104,7 @@ class TestLongevityContracts(unittest.TestCase):
         self.assertEqual(kv.provenance.actor, "owner")
 
     def test_schema_version_and_migration_dry_run(self):
-        self.assertEqual(PFAI_SCHEMA_VERSION, 3)
+        self.assertEqual(PFAI_SCHEMA_VERSION, 4)
         with tempfile.TemporaryDirectory() as d:
             state = Path(d) / "schema_version.json"
             runner = MigrationRunner(current=1, state_path=str(state))

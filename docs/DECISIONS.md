@@ -260,3 +260,16 @@
   - MigrationRunner: intent/result audit, verify hook, backup-first, idempotent re-run, optional reversible downgrade (marker-safe). Schema target remains **3**.
   - Continuous learning stays memory/knowledge/eval only; `allows_weight_mutation()==False`; no deploy; no secrets in source.
 - Consequences: Owner can authenticate via email OTP; local engines are pluggable without rewriting Orchestrator/Chat/Coding; schema upgrades are auditable and safe to re-run.
+
+
+## ADR-026 — Autonomous model training isolated from system authority
+
+- Status: Accepted (2026-09-27)
+- Context: PHASE 5 deferred weight training. Operator approved PHASE 6 for real autonomous learning/training while preserving owner auth and zero-trust authorization.
+- Decision:
+  - Introduce `AutonomousTrainingOrchestrator` as the sole weight-training path: collect→sanitize→validate→dataset version→trigger→train→checkpoint→evaluate→shadow→activate→monitor→rollback.
+  - `DurableSafeLearningPipeline.allows_weight_mutation()` remains False (knowledge/memory only). Training never writes auth, OTP, permissions, secrets, or migration safety.
+  - Provider-independent `ModelTrainer` registry (`transformers_lora` real backend when stack present; `mock` tests-only and never labeled as real weight update).
+  - Immutable dataset + model registries; backup-first schema **v4**; owner-gated `/platform/training/*`.
+  - Honest runtime: `TRAINING_RUNTIME_UNAVAILABLE` when compute/training deps are missing — never fake success.
+- Consequences: Platform can continuously improve models under gates; system authority remains unchanged by training.

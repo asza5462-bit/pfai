@@ -67,3 +67,14 @@ Curriculum data lives under `configs/coding/` (add tracks without rewriting the 
 - Sensitive ops remain Owner-gated
 - Fine-tuning never automatic on production
 - Self-heal is bounded and rollback-first
+
+
+## Autonomous Training (PHASE 6)
+
+Weight training is handled only by `pfai.longevity.autonomous_training.AutonomousTrainingOrchestrator`.
+
+Loop: experience → sanitize/validate → immutable dataset version → trigger → backend train → checkpoints → multi-suite evaluation → shadow compare → activate → monitor → rollback.
+
+`DurableSafeLearningPipeline` continues knowledge/memory learning and **does not** mutate model weights.
+
+Training is forbidden from modifying owner authentication, OTP, authorization, secrets, or security policy (see ADR-026).

@@ -37,6 +37,8 @@ from .orchestrator import Orchestrator
 from .memory_system import LongTermMemory, MemorySystem
 from .knowledge_layer import KnowledgeLayer
 from .longevity.durable_learning import DurableSafeLearningPipeline, KnowledgeVersionStore, LearningAuditLog
+from .longevity.autonomous_training import AutonomousTrainingOrchestrator, TrainingConfig
+from .longevity.autonomous_training.runtime import detect_runtime_capabilities
 from .longevity.migration_runner import MigrationRunner
 from .longevity.migrations import register_platform_migrations, verify_platform_schema
 from .longevity.export_bundle import ExportBundleScaffold
@@ -266,6 +268,24 @@ PLATFORM_LEARNING = DurableSafeLearningPipeline(
 )
 PLATFORM_EVAL = PlatformEvaluation(baselines_path='data/longevity/eval_baselines.json')
 
+def _platform_eval_runner(suite: str) -> dict:
+    report = PLATFORM_EVAL.run_suite(suite)
+    total = max(1, int(report.passed) + int(report.failed))
+    return {
+        'ok': report.ok,
+        'score': float(report.passed) / float(total),
+        'passed': report.passed,
+        'failed': report.failed,
+        'suite': report.suite,
+    }
+
+AUTONOMOUS_TRAINING = AutonomousTrainingOrchestrator(
+    root='data/longevity/training',
+    learning_pipeline=PLATFORM_LEARNING,
+    eval_runner=_platform_eval_runner,
+    allow_mock_backend=False,
+)
+
 # Migration runner: backup longevity learning DB before apply
 _LONGEVITY_BACKUP_SRC = Path('data/longevity/learning.sqlite3')
 _LONGEVITY_BACKUP_SRC.parent.mkdir(parents=True, exist_ok=True)
@@ -321,12 +341,22 @@ PLATFORM_SELF_CHECK = SelfCheck({
     'runtime_health': lambda: {'ok': True, **{k: runtime.health().get(k) for k in ('status', 'version')}},
     'compat': lambda: {'ok': PLATFORM_COMPAT.check().python_ok, 'schema': PLATFORM_COMPAT.schema_version()},
     'learning_no_weights': lambda: {'ok': not PLATFORM_LEARNING.allows_weight_mutation()},
+    'training_authority_isolated': lambda: {
+        'ok': True,
+        'weight_training_via': 'AutonomousTrainingOrchestrator',
+        'knowledge_pipeline_mutates_weights': False,
+    },
     'providers_offline_defaults': lambda: {
         'ok': any(p.offline_capable for p in PROVIDER_REGISTRY.list_providers()),
         'providers': [p.provider_id for p in PROVIDER_REGISTRY.list_providers()],
     },
     'ltm_ready': lambda: {'ok': True, 'phase': 3},
     'planner_ready': lambda: {'ok': True, 'phase': 4},
+    'autonomous_training_ready': lambda: {
+        'ok': True,
+        'phase': 6,
+        'runtime': detect_runtime_capabilities(probe_inference=False).get('status'),
+    },
     'email_otp_ready': lambda: {
         'ok': 'email_otp' in OWNER_AUTH.public_status().get('auth_methods', []),
         'provider': type(OWNER_AUTH.email_provider).__name__,
@@ -1487,6 +1517,167 @@ def platform_heal_audit(limit: int = 50, owner: str = Depends(require_owner)):
 def platform_authz_audit(limit: int = 50, owner: str = Depends(require_owner)):
     _ = owner
     return {'items': PLATFORM_AUTHZ_AUDIT.recent(limit)}
+
+
+# --- PHASE 6: Autonomous Training (owner-gated, authority-isolated) ---
+class TrainingCycleBody(BaseModel):
+    owner_requested: bool = True
+    explicit_retrain: bool = False
+    regression_recovery: bool = False
+    performance_opportunity: bool = False
+    activate_if_pass: bool = True
+    allow_mock_backend: bool = False  # tests/ops only; never pretends to be real
+    dataset_id: str | None = None
+    base_model: str | None = None
+    method: str = 'lora'
+    # Any client role/admin/secret fields are ignored by isolation guard.
+
+
+class TrainingRollbackBody(BaseModel):
+    reason: str = 'owner_requested'
+    force_regression: bool = False
+
+
+@app.get('/platform/training/status')
+def platform_training_status(owner: str = Depends(require_owner)):
+    _ = owner
+    st = AUTONOMOUS_TRAINING.status()
+    # Never expose secrets
+    return {
+        'ok': True,
+        'training_enabled': st.get('training_enabled'),
+        'runtime_status': (st.get('capabilities') or {}).get('status'),
+        'training_available': (st.get('capabilities') or {}).get('training_available'),
+        'inference_available': (st.get('capabilities') or {}).get('inference_available'),
+        'gpu_available': (st.get('capabilities') or {}).get('gpu_available'),
+        'active_model': st.get('active_model'),
+        'orchestrator': st.get('orchestrator'),
+        'datasets': st.get('datasets'),
+        'models': st.get('models'),
+        'recent_jobs': [
+            {
+                'job_id': j.get('job_id'),
+                'state': j.get('state'),
+                'dataset_id': j.get('dataset_id'),
+                'model_id': j.get('model_id'),
+                'is_mock': j.get('is_mock'),
+                'real_weight_update': j.get('real_weight_update'),
+                'backend': j.get('backend'),
+            }
+            for j in (st.get('recent_jobs') or [])
+        ],
+        'authority_isolation': True,
+        'weight_training_path': 'AutonomousTrainingOrchestrator',
+        'note': st.get('note'),
+    }
+
+
+@app.get('/platform/training/jobs')
+def platform_training_jobs(owner: str = Depends(require_owner), limit: int = 50):
+    _ = owner
+    return {'jobs': AUTONOMOUS_TRAINING.list_jobs(limit=limit)}
+
+
+@app.get('/platform/training/datasets')
+def platform_training_datasets(owner: str = Depends(require_owner), limit: int = 50):
+    _ = owner
+    return {'datasets': AUTONOMOUS_TRAINING.datasets.list_versions(limit=limit)}
+
+
+@app.get('/platform/training/models')
+def platform_training_models(owner: str = Depends(require_owner), limit: int = 50):
+    _ = owner
+    return {
+        'models': AUTONOMOUS_TRAINING.models.list_models(limit=limit),
+        'active': AUTONOMOUS_TRAINING.models.active(),
+    }
+
+
+@app.get('/platform/training/evaluations')
+def platform_training_evaluations(owner: str = Depends(require_owner), limit: int = 20):
+    _ = owner
+    jobs = AUTONOMOUS_TRAINING.list_jobs(limit=limit)
+    return {
+        'evaluations': [
+            {
+                'job_id': j.get('job_id'),
+                'model_id': j.get('model_id'),
+                'evaluation': j.get('evaluation'),
+                'shadow': j.get('shadow'),
+            }
+            for j in jobs
+            if j.get('evaluation')
+        ]
+    }
+
+
+@app.get('/platform/training/checkpoints')
+def platform_training_checkpoints(owner: str = Depends(require_owner), limit: int = 50):
+    _ = owner
+    return {'checkpoints': AUTONOMOUS_TRAINING.checkpoints.list_recent(limit=limit)}
+
+
+@app.post('/platform/training/cycle')
+def platform_training_cycle(x: TrainingCycleBody, owner: str = Depends(require_owner)):
+    """Owner-triggered autonomous training cycle. Never mutates auth/authorization."""
+    cfg = TrainingConfig(
+        method=x.method or 'lora',
+        base_model=x.base_model or __import__('os').environ.get('MODEL_NAME') or 'local',
+        allow_mock_backend=bool(x.allow_mock_backend),
+        max_runtime_seconds=AUTONOMOUS_TRAINING.triggers.max_runtime,
+    )
+    result = AUTONOMOUS_TRAINING.run_cycle(
+        owner_requested=bool(x.owner_requested),
+        explicit_retrain=bool(x.explicit_retrain),
+        regression_recovery=bool(x.regression_recovery),
+        performance_opportunity=bool(x.performance_opportunity),
+        activate_if_pass=bool(x.activate_if_pass),
+        force_dataset=x.dataset_id,
+        config=cfg,
+        request={'owner': owner},  # isolation strips role/admin; actor identity for audit only
+    )
+    OWNER.authorize(
+        'PLATFORM_TRAINING_CYCLE',
+        f"{owner} training cycle status={result.get('status')} real={result.get('actual_training_executed')}",
+    )
+    # Honest reporting
+    return {
+        'ok': bool(result.get('ok')),
+        'status': result.get('status'),
+        'actual_training_executed': bool(result.get('actual_training_executed')),
+        'is_mock': bool(result.get('is_mock')),
+        'job_id': (result.get('job') or {}).get('job_id'),
+        'dataset_id': (result.get('job') or {}).get('dataset_id') or result.get('dataset_id'),
+        'model_id': (result.get('job') or {}).get('model_id'),
+        'evaluation_decision': ((result.get('evaluation') or {}).get('decision')),
+        'error': result.get('error'),
+        'runtime_note': None
+        if result.get('status') != 'TRAINING_RUNTIME_UNAVAILABLE'
+        else 'TRAINING_RUNTIME_UNAVAILABLE',
+    }
+
+
+@app.post('/platform/training/rollback')
+def platform_training_rollback(x: TrainingRollbackBody, owner: str = Depends(require_owner)):
+    if x.force_regression:
+        result = AUTONOMOUS_TRAINING.monitor_and_maybe_rollback(force_regression=True)
+    else:
+        result = AUTONOMOUS_TRAINING.rollback_mgr.rollback(reason=x.reason or 'owner_requested')
+    OWNER.authorize('PLATFORM_TRAINING_ROLLBACK', f'{owner} rollback ok={result.get("ok")}')
+    if not result.get('ok'):
+        raise HTTPException(409, result.get('error') or 'rollback failed')
+    return result
+
+
+@app.get('/platform/training/rollback')
+def platform_training_rollback_status(owner: str = Depends(require_owner)):
+    _ = owner
+    active = AUTONOMOUS_TRAINING.models.active()
+    lkg = AUTONOMOUS_TRAINING.rollback_mgr.last_known_good()
+    return {
+        'active': active,
+        'last_known_good': {'model_id': lkg.get('model_id')} if lkg else None,
+    }
 
 
 # --- Command Chat API (Brain ↔ Heart) ---------------------------------

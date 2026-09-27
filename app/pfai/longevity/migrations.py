@@ -100,6 +100,78 @@ def _downgrade_v3_skill_tool_versions(conn: Any) -> None:
     _ = conn
 
 
+def _upgrade_v4_autonomous_training(conn: Any) -> None:
+    """PHASE 6: autonomous training directories + registry placeholders (idempotent)."""
+    root = Path("data/longevity")
+    root.mkdir(parents=True, exist_ok=True)
+    train_root = root / "training"
+    for sub in ("datasets", "models", "checkpoints", "artifacts", "jobs"):
+        (train_root / sub).mkdir(parents=True, exist_ok=True)
+    (root / ".phase6").write_text("autonomous-training+model-registry\n", encoding="utf-8")
+    import sqlite3
+
+    # Ensure registry DBs exist even before first orchestrator init.
+    ds = sqlite3.connect(train_root / "datasets" / "dataset_registry.sqlite3")
+    try:
+        ds.execute(
+            """CREATE TABLE IF NOT EXISTS dataset_versions (
+                dataset_id TEXT PRIMARY KEY,
+                parent_dataset TEXT,
+                status TEXT,
+                checksum TEXT,
+                train_count INTEGER,
+                validation_count INTEGER,
+                test_count INTEGER,
+                sanitizer_version TEXT,
+                filtering_rules TEXT,
+                validation_results TEXT,
+                source_records TEXT,
+                created_at REAL,
+                meta TEXT
+            )"""
+        )
+        ds.commit()
+    finally:
+        ds.close()
+    ms = sqlite3.connect(train_root / "models" / "model_registry.sqlite3")
+    try:
+        ms.executescript(
+            """
+            CREATE TABLE IF NOT EXISTS model_versions (
+                model_id TEXT PRIMARY KEY,
+                base_model TEXT,
+                base_model_hash TEXT,
+                dataset_version TEXT,
+                training_config TEXT,
+                training_code_version TEXT,
+                checkpoint_ref TEXT,
+                tokenizer_version TEXT,
+                evaluation TEXT,
+                status TEXT,
+                created_at REAL,
+                meta TEXT
+            );
+            CREATE TABLE IF NOT EXISTS model_active (
+                slot TEXT PRIMARY KEY,
+                model_id TEXT NOT NULL,
+                activated_at REAL,
+                previous_model_id TEXT
+            );
+            """
+        )
+        ms.commit()
+    finally:
+        ms.close()
+    _ = conn
+
+
+def _downgrade_v4_autonomous_training(conn: Any) -> None:
+    marker = Path("data/longevity/.phase6")
+    if marker.exists():
+        marker.unlink()
+    _ = conn
+
+
 def verify_platform_schema(current: int) -> dict[str, Any]:
     """Integrity checks used by MigrationRunner after apply."""
     root = Path("data/longevity")
@@ -116,6 +188,14 @@ def verify_platform_schema(current: int) -> dict[str, Any]:
         if not db.exists():
             checks["ok"] = False
             checks["error"] = "skill_versions.sqlite3 missing"
+    if current >= 4:
+        train = root / "training"
+        checks["training_root"] = train.exists()
+        checks["dataset_registry"] = (train / "datasets" / "dataset_registry.sqlite3").exists()
+        checks["model_registry"] = (train / "models" / "model_registry.sqlite3").exists()
+        if not checks["training_root"] or not checks["dataset_registry"] or not checks["model_registry"]:
+            checks["ok"] = False
+            checks["error"] = "autonomous training registries missing"
     return checks
 
 
@@ -133,6 +213,13 @@ PLATFORM_MIGRATIONS: list[Migration] = [
         upgrade=_upgrade_v3_skill_tool_versions,
         downgrade=_downgrade_v3_skill_tool_versions,
         description="PHASE 4: skill version tables + planner/heal durability markers",
+    ),
+    Migration(
+        version=4,
+        name="autonomous_training_foundation",
+        upgrade=_upgrade_v4_autonomous_training,
+        downgrade=_downgrade_v4_autonomous_training,
+        description="PHASE 6: autonomous training dirs + dataset/model registries",
     ),
 ]
 

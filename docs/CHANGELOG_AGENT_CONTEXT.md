@@ -1,5 +1,24 @@
 # Agent Context Changelog
 
+## 2026-09-27 — Longevity PHASE 6: Autonomous Training + Model Lifecycle
+
+### Added
+- `longevity/autonomous_training/` — collector, sanitizer, validator, dataset versions, trainers, model registry, checkpoints, evaluation gates, rollback, orchestrator, isolation, audit
+- Owner routes `/platform/training/status|jobs|datasets|models|evaluations|checkpoints|cycle|rollback`
+- Dashboard **تدريب النماذج** view
+- Schema **v4** `autonomous_training_foundation` (backup-first)
+- Tests `test_v97_phase6_autonomous_training.py`; ADR-026
+
+### Behavior
+- Knowledge pipeline still does not mutate weights directly
+- Weight training only via AutonomousTrainingOrchestrator under eval gates
+- Mock trainer is tests-only (`is_mock=true`, `real_weight_update=false`)
+- Missing training runtime → `TRAINING_RUNTIME_UNAVAILABLE` (no fake success)
+- PHASE 5 Email OTP + authz preserved
+
+### Verified
+- See PHASE 6 completion report
+
 ## 2026-09-27 — Longevity PHASE 5: Email OTP / Local providers / Migration audit
 
 ### Added

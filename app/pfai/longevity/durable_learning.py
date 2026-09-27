@@ -283,18 +283,21 @@ class DurableSafeLearningPipeline:
             self.db.commit()
 
     def allows_weight_mutation(self) -> bool:
+        # Knowledge/memory pipeline never mutates weights directly.
+        # Weight training is exclusively via AutonomousTrainingOrchestrator (PHASE 6).
         return False
 
     def training_readiness(self) -> dict[str, Any]:
-        """Prepare architecture for future fine-tuning without running training."""
+        """Report readiness: this pipeline exports data; orchestrator trains weights."""
         return {
             "weight_training_allowed_now": False,
             "allows_weight_mutation": False,
+            "weight_training_via": "AutonomousTrainingOrchestrator",
             "dataset_export_ready": True,
-            "dataset_export_hint": "Use /platform/export (memory+knowledge) as offline fine-tune corpus input",
+            "dataset_export_hint": "Validated candidates feed ExperienceCollector → dataset versions → training jobs",
             "preferred_future_providers": ["local", "open_weight", "openai_compatible", "echo"],
             "anthropic_required": False,
-            "note": "Collect validated knowledge only; offline fine-tune is a future optional pipeline.",
+            "note": "PHASE 6: controlled autonomous training is separate from this knowledge pipeline.",
             "stored_candidates": self.count_by_status(LearningStatus.STORED.value),
             "validated_candidates": self.count_by_status(LearningStatus.VALIDATED.value),
         }
