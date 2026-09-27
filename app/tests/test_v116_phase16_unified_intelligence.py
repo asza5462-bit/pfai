@@ -173,8 +173,8 @@ class TestObservability(unittest.TestCase):
             elite,
             email_status={"EMAIL_DELIVERY_STATUS": "TEST_ONLY", "smtp_password": "secret123"},
         ).snapshot()
-        self.assertEqual(snap["phase"], 17)
-        self.assertFalse(snap["PHASE_18_ALLOWED"])
+        self.assertEqual(snap["phase"], 18)
+        self.assertFalse(snap["PHASE_19_ALLOWED"])
         blob = str(snap)
         self.assertNotIn("secret123", blob)
         self.assertEqual(snap["email_provider"].get("smtp_password"), "[REDACTED]")
