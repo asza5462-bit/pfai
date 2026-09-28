@@ -64,7 +64,11 @@ def comprehend(
     if re.search(r"يتفوق|أقوى|اقوا|أفضل|افضل|legendary|أسطور|خارق", text, re.I):
         goals.append("elite_quality_bar")
         emotion = "ambitious"
-        latent = "surpass frontier chat quality via memory+understanding+precision"
+        latent = (
+            "التفوق عبر ذاكرة أسطورية + فهم عميق + دقة بلا اختلاق"
+            if ar else
+            "surpass frontier chat quality via memory+understanding+precision"
+        )
     if re.search(r"بدون\s*قيود|بدون\s*ا?خطاء|بلا\s*تأخير", text, re.I):
         constraints.append("minimize_friction")
         constraints.append("honest_about_hard_bounds")
