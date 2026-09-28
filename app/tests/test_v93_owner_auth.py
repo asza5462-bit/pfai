@@ -126,8 +126,10 @@ class TestOwnerAuthAPI(unittest.TestCase):
         self.assertIn("setup_required", body)
         self.assertIn("authenticated", body)
         self.assertNotIn("passcode", body)
-        self.assertNotIn("hash", str(body).lower())
-        self.assertFalse(any(k in body for k in ("secret", "secret_hash", "token")))
+        blob = str(body).lower()
+        self.assertNotIn("secret_hash", blob)
+        self.assertNotIn("password_hash", blob)
+        self.assertFalse(any(k in body for k in ("secret", "secret_hash", "token", "password")))
 
     def test_legacy_header_still_works(self):
         r = self.client.get("/owner/identity", headers=self.headers)

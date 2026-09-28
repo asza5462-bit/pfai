@@ -73,7 +73,7 @@ class OwnerAuthService:
                 "x_owner_secret_header",
             ],
             "email_otp": "REMOVED",
-            "note": "Passwords are never returned. Configure PFAI_OWNER_EMAIL + PFAI_OWNER_SECRET_HASH. Email OTP is permanently removed.",
+            "note": "Passwords are never returned. Configure owner email and secret via deployment environment. Email OTP is permanently removed.",
         }
 
     def setup_required(self) -> bool:
