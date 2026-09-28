@@ -266,23 +266,32 @@ def _tool_web_status():
     return {'ok': True, **web_config_report()}
 
 def _run_with_timeout(fn, *, timeout_s: float = 20.0, label: str = 'web_tool'):
-    """Bound chat-facing network tools so one slow provider cannot stall the brain."""
+    """Bound chat-facing network tools so one slow provider cannot stall the brain.
+
+    Important: shutdown(wait=False) so a timed-out provider does not keep the
+    request thread blocked for the remainder of the network call.
+    """
     from concurrent.futures import ThreadPoolExecutor, TimeoutError as FuturesTimeout
     limit = max(0.05, float(timeout_s))
-    with ThreadPoolExecutor(max_workers=1) as pool:
-        fut = pool.submit(fn)
+    pool = ThreadPoolExecutor(max_workers=1)
+    fut = pool.submit(fn)
+    try:
+        return fut.result(timeout=limit)
+    except FuturesTimeout:
+        return {
+            'ok': False,
+            'error': f'{label}_timeout',
+            'timeout_seconds': limit,
+            'fabricated_results': False,
+            'results': [],
+            'citations': [],
+            'note': 'Timed out for chat responsiveness — retry or narrow the query',
+        }
+    finally:
         try:
-            return fut.result(timeout=limit)
-        except FuturesTimeout:
-            return {
-                'ok': False,
-                'error': f'{label}_timeout',
-                'timeout_seconds': limit,
-                'fabricated_results': False,
-                'results': [],
-                'citations': [],
-                'note': 'Timed out for chat responsiveness — retry or narrow the query',
-            }
+            pool.shutdown(wait=False, cancel_futures=True)
+        except TypeError:
+            pool.shutdown(wait=False)
 
 def _tool_web_search(query: str = '', q: str = '', limit: int = 5, approved: bool = True, actor: str = 'chat'):
     from .elite.web_fabric import web_config_report, WebResearchSession
@@ -302,7 +311,7 @@ def _tool_web_search(query: str = '', q: str = '', limit: int = 5, approved: boo
     session = WebResearchSession()
     return _run_with_timeout(
         lambda: session.research(query, limit=min(5, int(limit or 5)), approved=bool(approved), actor=str(actor or 'chat')),
-        timeout_s=float(os.environ.get('PFAI_WEB_TIMEOUT', '20') or 20),
+        timeout_s=float(os.environ.get('PFAI_CHAT_WEB_TIMEOUT', os.environ.get('PFAI_WEB_TIMEOUT', '12')) or 12),
         label='web_search',
     )
 
@@ -328,7 +337,7 @@ def _tool_web_fetch(url: str = '', max_bytes: int = 120000, approved: bool = Tru
         return {'ok': False, 'error': check.get('error'), 'ssrf_blocked': True, 'fabricated_results': False}
     return _run_with_timeout(
         lambda: WebInformationFabric().fetch_provider.fetch(url, max_bytes=int(max_bytes or 120000)),
-        timeout_s=float(os.environ.get('PFAI_WEB_TIMEOUT', '20') or 20),
+        timeout_s=float(os.environ.get('PFAI_CHAT_WEB_TIMEOUT', os.environ.get('PFAI_WEB_TIMEOUT', '12')) or 12),
         label='web_fetch',
     )
 
@@ -346,7 +355,7 @@ def _tool_web_research(query: str = '', q: str = '', question: str = '', limit: 
             approved=bool(approved),
             actor=str(actor or 'chat'),
         ),
-        timeout_s=float(os.environ.get('PFAI_WEB_TIMEOUT', '25') or 25),
+        timeout_s=float(os.environ.get('PFAI_CHAT_WEB_TIMEOUT', os.environ.get('PFAI_WEB_TIMEOUT', '12')) or 12),
         label='web_research',
     )
 

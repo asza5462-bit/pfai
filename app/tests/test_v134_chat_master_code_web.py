@@ -111,8 +111,8 @@ class TestChatMasterAPI(unittest.TestCase):
 
     def test_version_82(self):
         from pfai import __version__
-        self.assertEqual(__version__, "8.2.1")
-        self.assertEqual(self.client.get("/health").json().get("version"), "8.2.1")
+        self.assertEqual(__version__, "8.2.2")
+        self.assertEqual(self.client.get("/health").json().get("version"), "8.2.2")
 
     def test_tools_catalog_master(self):
         r = self.client.get("/chat/tools")

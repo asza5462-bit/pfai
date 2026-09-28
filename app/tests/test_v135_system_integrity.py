@@ -20,7 +20,7 @@ class TestWebPlannerLatencyGuard(unittest.TestCase):
 
 
 class TestWebTimeoutHelper(unittest.TestCase):
-    def test_timeout_returns_honest_failure(self):
+    def test_timeout_returns_honest_failure_without_hang(self):
         os.environ.setdefault("PFAI_PUBLIC_ACCESS_MODE", "0")
         from pfai.api import _run_with_timeout
         import time
@@ -29,10 +29,14 @@ class TestWebTimeoutHelper(unittest.TestCase):
             time.sleep(3)
             return {"ok": True}
 
-        out = _run_with_timeout(slow, timeout_s=0.2, label="unit")
+        t0 = time.time()
+        out = _run_with_timeout(slow, timeout_s=0.25, label="unit")
+        elapsed = time.time() - t0
         self.assertFalse(out.get("ok"))
         self.assertEqual(out.get("error"), "unit_timeout")
         self.assertFalse(out.get("fabricated_results"))
+        # Must not wait for the orphaned worker (was ~timeout+sleep before)
+        self.assertLess(elapsed, 1.5)
 
 
 class TestIntegrityAPI(unittest.TestCase):
@@ -64,7 +68,7 @@ class TestIntegrityAPI(unittest.TestCase):
     def test_cohesive_core(self):
         h = self.client.get("/health").json()
         self.assertEqual(h.get("status"), "ok")
-        self.assertEqual(h.get("version"), "8.2.1")
+        self.assertEqual(h.get("version"), "8.2.2")
         tools = self.client.get("/chat/tools").json()
         self.assertTrue(tools.get("open_chat_tools"))
         self.assertEqual(tools.get("locked_count"), 0)

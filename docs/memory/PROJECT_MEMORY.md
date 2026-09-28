@@ -1,6 +1,6 @@
 # PFAI Project Memory
 
-Last updated: 2026-09-28 (PFAI 8.2.1 — integrity harden · web latency bound)
+Last updated: 2026-09-28 (PFAI 8.2.2 — integrity harden · web latency bound)
 
 ## Snapshot
 
