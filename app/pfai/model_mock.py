@@ -60,7 +60,23 @@ class MockCommandProvider(ModelProvider):
             add("deployments_list")
         if re.search(r"recover|استرداد", text + ar):
             add("recovery_verify")
-        if re.search(r"research|بحث", text + ar):
+        # Live web / internet — prefer web fabric tools over ledger research_verify
+        if re.search(
+            r"ابحث\s*في\s*(الويب|الانترنت|الإنترنت)|search\s*(the\s*)?web|web\s*search|"
+            r"web\s*research|بحث\s*ويب|من\s*الإنترنت|from\s*the\s*internet|look\s*up\s*online|"
+            r"fetch\s*url|افتح\s*الرابط|https?://",
+            text + ar,
+            re.I,
+        ):
+            add("web_status")
+            if re.search(r"fetch|url|رابط|https?://", text + ar, re.I):
+                add("web_fetch")
+            else:
+                add("web_research")
+                add("web_search")
+        elif re.search(r"web\s*status|حالة\s*الويب|internet\s*status", text + ar, re.I):
+            add("web_status")
+        elif re.search(r"research_verify|ledger\s*research", text + ar, re.I):
             add("research_verify")
         if re.search(r"regression|انحدار", text + ar):
             add("regression_pending")
@@ -68,6 +84,15 @@ class MockCommandProvider(ModelProvider):
             add("chat_audit_recent")
         if re.search(r"improv|تحسين|اقترح", text + ar):
             add("propose_improvement")
+        if re.search(
+            r"تحكم\s*كامل|master\s*control|حالة\s*التطبيق|app\s*control|لوحة\s*التحكم\s*الكاملة",
+            text + ar,
+            re.I,
+        ):
+            add("app_control_status")
+            add("system_status")
+            add("continuous_status")
+            add("web_status")
         if re.search(r"علمني|teach|learn|مبتدئ|تمرين|python|javascript|مسار\s*تعليمي|أكاديمية", text + ar):
             add("coding_teach")
             add("coding_tracks")
@@ -79,6 +104,10 @@ class MockCommandProvider(ModelProvider):
             add("coding_projects")
         if re.search(r"sandbox|نفذ الكود|run code", text + ar):
             add("run_sandbox")
+        if re.search(r"تلميح|hint", text + ar, re.I):
+            add("coding_hint")
+        if re.search(r"أرسل الحل|submit (my )?(code|solution)|تحقق من حلي|submit_exercise", text + ar, re.I):
+            add("coding_exercise_submit")
         if re.search(r"الدرس\s*التالي|next\s*lesson|تمرين\s*التالي", text + ar):
             add("coding_next_lesson")
             add("coding_progress")
@@ -116,6 +145,7 @@ class MockCommandProvider(ModelProvider):
             add("save_owner_correction")
 
         if not picks:
+            add("app_control_status")
             add("system_status")
             add("learner_snapshot")
 
@@ -124,6 +154,11 @@ class MockCommandProvider(ModelProvider):
             args: dict = {}
             if name in {"knowledge_search", "memory_search"}:
                 args = {"q": message, "limit": 8}
+            if name in {"web_search", "web_research"}:
+                args = {"query": message, "limit": 5}
+            if name == "web_fetch":
+                m = re.search(r"https?://\S+", message or "")
+                args = {"url": m.group(0) if m else ""}
             if name == "propose_improvement":
                 args = {"topic": message}
             if name == "remember_knowledge":
@@ -136,6 +171,15 @@ class MockCommandProvider(ModelProvider):
                 args = {"track_id": "python", "goal": message}
             if name == "coding_next_lesson":
                 args = {"track_id": "python"}
+            if name == "coding_hint":
+                args = {"track_id": "python"}
+            if name == "coding_exercise_submit":
+                code_m = re.search(r"```(?:python)?\n([\s\S]*?)```", message or "")
+                args = {
+                    "track_id": "python",
+                    "lesson_id": "py-intro",
+                    "code": (code_m.group(1) if code_m else message),
+                }
             if name == "learner_snapshot":
                 args = {}
             tools.append({"tool": name, "args": args})
@@ -170,10 +214,34 @@ class MockCommandProvider(ModelProvider):
             elif name == "training_eligibility" and isinstance(res, dict):
                 elig = res.get("eligible")
                 insights.append(
-                    f"training eligible={elig} (chat cannot start training)"
+                    f"training eligible={elig} (use training_cycle_start; no silent promote)"
                     if en else
-                    f"أهلية التدريب={elig} (الشات لا يبدأ التدريب)"
+                    f"أهلية التدريب={elig} (استخدم training_cycle_start — بدون تفعيل صامت)"
                 )
+            elif name in {"web_search", "web_research"} and isinstance(res, dict):
+                n = len(res.get("results") or res.get("citations") or [])
+                st = res.get("WEB_FABRIC_STATUS") or ("ok" if res.get("ok") else res.get("error"))
+                insights.append(
+                    f"web {name}: status={st} hits={n} fabricated={res.get('fabricated_results')}"
+                    if en else
+                    f"الويب {name}: حالة={st} نتائج={n} ملفّق={res.get('fabricated_results')}"
+                )
+            elif name == "web_fetch" and isinstance(res, dict):
+                insights.append(("web fetch: " if en else "جلب ويب: ") + _brief(res, 220))
+            elif name == "web_status" and isinstance(res, dict):
+                insights.append(f"WEB_FABRIC_STATUS={res.get('WEB_FABRIC_STATUS')}")
+            elif name == "coding_exercise_submit" and isinstance(res, dict):
+                insights.append(
+                    f"exercise {'PASSED' if res.get('passed') else 'FAILED'} · {res.get('teaching') or res.get('message') or ''}"
+                )
+            elif name == "coding_hint" and isinstance(res, dict):
+                insights.append(f"hint L{res.get('level')}: {(res.get('hint') or res.get('message') or '')[:160]}")
+            elif name == "app_control_status" and isinstance(res, dict):
+                insights.append(("master control: " if en else "التحكم الكامل: ") + _brief({
+                    "version": res.get("version"),
+                    "continuous": res.get("continuous"),
+                    "web": res.get("web"),
+                }, 260))
             elif name == "training_control_status" and isinstance(res, dict):
                 insights.append(("training control: " if en else "مركز التدريب: ") + _brief({
                     "paused": res.get("paused"),

@@ -462,16 +462,16 @@
     const box = $('chatLog');
     if (box) box.innerHTML = '';
     appendBubble('assistant',
-      'مرحباً — أنا عقل PFAI المتقدم المفتوح.\n'
-      + '• تنفيذ مباشر للأدوات (بدون أقفال في وضع الوصول العام)\n'
-      + '• تعليم مستمر عبر الأكاديمية + جسر خبرة حقيقي من نجاح الأدوات\n'
-      + '• أهلية التدريب للقراءة فقط — ترقية الأوزان لا تبدأ من الشات\n'
-      + '• ردود تحليلية من نتائج حية (صحة · مقاييس · معرفة · تعلّم)\n\n'
-      + 'Hello — Open Advanced PFAI brain.\n'
-      + '• Direct tool execution (unlocked in public access)\n'
-      + '• Continuous learning via academy + real tool-success experience bridge\n'
-      + '• Training eligibility is read-only — weight promotion never starts from chat\n'
-      + '• Analytical replies grounded in live tool results',
+      'مرحباً — أنا عقل PFAI 8.2 (التحكم الكامل من الشات).\n'
+      + '• أوامر التشغيل · الأكاديمية · التعلم المستمر · التدريب · الويب الحي\n'
+      + '• تعليم أكواد أقوى: تلميحات تشخيصية + تسليم تمارين من الشات\n'
+      + '• بحث ويب/جلب روابط عبر أدوات سياسة آمنة (بدون نتائج ملفّقة)\n'
+      + '• ترقية الأوزان لا تتم بصمت — دورة التدريب صريحة عند الطلب\n\n'
+      + 'Hello — PFAI 8.2 Master Chat Control.\n'
+      + '• Ops · Academy · Continuous learning · Training · Live web\n'
+      + '• Stronger coding: diagnostic hints + exercise submit from chat\n'
+      + '• Web search/fetch via policy-gated tools (no fabricated results)\n'
+      + '• No silent weight promotion — training cycles are explicit',
       { status: 'completed', provider: 'ready' }
     );
     refreshLearningRail();

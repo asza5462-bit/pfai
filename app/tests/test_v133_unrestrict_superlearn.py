@@ -79,12 +79,12 @@ class TestUnrestrictAPI(unittest.TestCase):
         os.environ.pop("PFAI_OWNER_USERNAME", None)
         os.environ.pop("PFAI_OWNER_PASSWORD_HASH", None)
 
-    def test_version_is_81(self):
+    def test_version_is_at_least_81(self):
         from pfai import __version__
-        self.assertEqual(__version__, "8.1.0")
+        self.assertGreaterEqual(tuple(int(x) for x in __version__.split(".")[:2]), (8, 1))
         r = self.client.get("/health")
         self.assertEqual(r.status_code, 200)
-        self.assertEqual(r.json().get("version"), "8.1.0")
+        self.assertEqual(r.json().get("version"), __version__)
 
     def test_chat_tools_include_cycle_and_tick(self):
         r = self.client.get("/chat/tools")

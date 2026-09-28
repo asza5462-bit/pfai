@@ -389,19 +389,31 @@ def _looks_like_training_status_intent(message: str) -> bool:
     return bool(re.search(
         r"أهلية\s*التدريب|training\s*eligibility|حالة\s*التدريب|training\s*status|"
         r"جاهزية\s*التدريب|control.?center.*train|هل\s*(التدريب|النموذج).*جاهز|"
-        r"next\s*training|can\s*we\s*train|متى\s*نتدرب",
+        r"next\s*training|can\s*we\s*train|متى\s*نتدرب|training_cycle|دورة\s*التدريب",
+        message or "",
+        re.I,
+    ))
+
+
+def _looks_like_web_intent(message: str) -> bool:
+    return bool(re.search(
+        r"ابحث\s*في\s*(الويب|الانترنت|الإنترنت)|search\s*(the\s*)?web|web\s*search|web\s*research|"
+        r"بحث\s*ويب|من\s*الإنترنت|from\s*the\s*internet|look\s*up\s*online|fetch\s*url|https?://",
         message or "",
         re.I,
     ))
 
 
 def _looks_like_coding_intent(message: str) -> bool:
+    # Web / training-status win over coding keyword collisions (e.g. "learn")
+    if _looks_like_web_intent(message) or _looks_like_training_status_intent(message):
+        return False
     return bool(re.search(
         r"علمني|teach me|learn |مبتدئ|full stack|اختبر مستواي|assess|تمرين|exercise|راجع هذا الكود|code review|"
         r"تلميح|hint|اشرح لي هذا الخطأ|debug|مشروع أتدرب|project|javascript|python|architecture|"
         r"لماذا هذا الكود|learning mode|engineering mode|sandbox|اختبرني|"
         r"مسار تعليمي|learning path|أكاديمية|coding academy|"
-        r"الدرس التالي|next lesson",
+        r"الدرس التالي|next lesson|أرسل الحل|submit (my )?(code|solution)",
         message or "",
         re.I,
     ))

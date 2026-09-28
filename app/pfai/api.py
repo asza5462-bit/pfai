@@ -231,6 +231,125 @@ def _tool_coding_next_lesson(owner: str = 'owner', track_id: str = 'python'):
     lesson = CODING_AGENT.tutor.lesson(track_id or 'python', lesson_id, reveal_solution=False) if lesson_id else None
     return {'ok': True, 'track_id': track_id or 'python', 'next': nxt, 'lesson': lesson, 'trained': False}
 
+def _tool_coding_hint(owner: str = 'owner', track_id: str = 'python', lesson_id: str = '', code: str = '', stderr: str = ''):
+    if not lesson_id:
+        nxt = CODING_AGENT.tutor.adaptive_next(owner, track_id or 'python')
+        lesson_id = (nxt.get('next') or {}).get('id') or 'py-intro'
+    return CODING_AGENT.tutor.hint(owner, track_id or 'python', lesson_id, code=code or '', stderr=stderr or '')
+
+def _tool_coding_exercise_submit(owner: str = 'owner', track_id: str = 'python', lesson_id: str = 'py-intro', code: str = ''):
+    result = CODING_AGENT.tutor.submit_exercise(owner, track_id or 'python', lesson_id or 'py-intro', code or '')
+    if result.get('passed') and result.get('mode') == 'sandbox' and (code or '').strip():
+        lesson = CODING_CURRICULUM.get_lesson(track_id or 'python', lesson_id or 'py-intro') or {}
+        prompt = (lesson.get('exercise') or {}).get('prompt') or f"Complete exercise {track_id}/{lesson_id}"
+        learn = AUTONOMOUS_TRAINING.experience.record_code_test_pass(
+            instruction=str(prompt),
+            code=code,
+            source_id=f"coding_chat:{track_id}/{lesson_id}",
+            provenance={'via': 'coding_exercise_submit_tool', 'owner_scoped': True},
+        )
+        result = {**result, 'learning_candidate': {
+            'eligibility': learn.get('eligibility'),
+            'candidate_id': learn.get('candidate_id'),
+            'trained': False,
+        }}
+    elif not result.get('passed'):
+        result = {**result, 'learning_candidate': {
+            'eligibility': 'INELIGIBLE',
+            'reason': 'tests_failed',
+            'trained': False,
+        }}
+    return result
+
+def _tool_web_status():
+    from .elite.web_fabric import web_config_report
+    return {'ok': True, **web_config_report()}
+
+def _tool_web_search(query: str = '', q: str = '', limit: int = 5, approved: bool = True, actor: str = 'chat'):
+    from .elite.web_fabric import web_config_report, WebResearchSession
+    query = (query or q or '').strip()
+    if not query:
+        return {'ok': False, 'error': 'query is required', 'fabricated_results': False, 'results': []}
+    status = web_config_report()
+    if status.get('WEB_FABRIC_STATUS') not in ('READY', 'CONFIGURED'):
+        return {
+            'ok': False,
+            'WEB_FABRIC_STATUS': status.get('WEB_FABRIC_STATUS') or 'NOT_CONFIGURED',
+            'error': 'web_provider_unavailable',
+            'fabricated_results': False,
+            'results': [],
+            'note': status.get('note') or 'Configure PFAI_WEB_ALLOW_NETWORK + search provider',
+        }
+    session = WebResearchSession()
+    return session.research(query, limit=int(limit or 5), approved=bool(approved), actor=str(actor or 'chat'))
+
+def _tool_web_fetch(url: str = '', max_bytes: int = 200000, approved: bool = True, actor: str = 'chat'):
+    from .elite.web_fabric import WebPolicyGate, web_config_report, validate_url_for_fetch, WebInformationFabric
+    url = (url or '').strip()
+    if not url:
+        return {'ok': False, 'error': 'url is required', 'fabricated_results': False}
+    gate = WebPolicyGate()
+    auth = gate.authorize_url(url, approved=bool(approved), actor=str(actor or 'chat'))
+    if not auth.get('ok'):
+        return {'ok': False, 'error': auth.get('error'), 'ssrf_blocked': True, 'fabricated_results': False}
+    status = web_config_report()
+    if status.get('WEB_FABRIC_STATUS') not in ('READY', 'CONFIGURED'):
+        return {
+            'ok': False,
+            'WEB_FABRIC_STATUS': status.get('WEB_FABRIC_STATUS') or 'NOT_CONFIGURED',
+            'error': 'web_provider_unavailable',
+            'fabricated_results': False,
+        }
+    check = validate_url_for_fetch(url)
+    if not check.get('ok'):
+        return {'ok': False, 'error': check.get('error'), 'ssrf_blocked': True, 'fabricated_results': False}
+    return WebInformationFabric().fetch_provider.fetch(url, max_bytes=int(max_bytes or 200000))
+
+def _tool_web_research(query: str = '', q: str = '', question: str = '', limit: int = 5, approved: bool = True, actor: str = 'chat'):
+    from .elite.web_research_pipeline import WebResearchPipeline
+    query = (query or q or question or '').strip()
+    if not query:
+        return {'ok': False, 'error': 'query is required', 'fabricated_results': False, 'citations': []}
+    return WebResearchPipeline().run(
+        query,
+        limit=int(limit or 5),
+        fetch_top=min(3, int(limit or 5)),
+        approved=bool(approved),
+        actor=str(actor or 'chat'),
+    )
+
+def _tool_app_control_status():
+    """Unified master snapshot so chat can steer the whole app."""
+    from .elite.web_fabric import web_config_report
+    cont = CONTINUOUS.status()
+    train = {}
+    try:
+        train = {
+            'eligibility': (AUTONOMOUS_TRAINING.learning_statistics().get('next_training_eligibility') or {}),
+            'control': AUTONOMOUS_TRAINING.control_center_status().get('labels') or {},
+        }
+    except Exception as exc:
+        train = {'error': str(exc)}
+    return {
+        'ok': True,
+        'version': __version__,
+        'health': runtime.health(extra={'continuous': continuous_gate_status()}),
+        'continuous': {
+            'service': (cont.get('service') or {}).get('status'),
+            'worker_alive': cont.get('worker_alive'),
+            'pending_examples': cont.get('pending_examples'),
+            'real_loop': cont.get('real_loop'),
+        },
+        'training': train,
+        'web': {
+            'WEB_FABRIC_STATUS': web_config_report().get('WEB_FABRIC_STATUS'),
+            'search_provider': web_config_report().get('search_provider'),
+        },
+        'academy_tracks': len(CODING_CURRICULUM.list_tracks()),
+        'master_chat': True,
+        'note': 'Chat is the control plane — use tools for ops/learn/train/web/code',
+    }
+
 def _tool_learner_snapshot(owner: str = 'owner'):
     profile = CODING_PROFILES.get_profile(owner)
     progress = CODING_PROFILES.progress(owner)
@@ -316,6 +435,13 @@ CODING_TOOL_SPECS = list(DEFAULT_TOOLS) + [
     ToolSpec('training_control_status', 'Read training control-center status', 'read', False, {}),
     ToolSpec('continuous_tick', 'Run one continuous-learning cycle now (no promote)', 'write', False, {}),
     ToolSpec('training_cycle_start', 'Start weight-training cycle from chat (activate_if_pass default false)', 'write', False, {'owner_requested': 'bool?', 'activate_if_pass': 'bool?'}),
+    ToolSpec('coding_hint', 'Progressive coding hint with diagnostics', 'read', False, {'owner': 'string?', 'track_id': 'string?', 'lesson_id': 'string?', 'code': 'string?', 'stderr': 'string?'}),
+    ToolSpec('coding_exercise_submit', 'Submit academy exercise code for sandbox grading', 'write', False, {'owner': 'string?', 'track_id': 'string', 'lesson_id': 'string', 'code': 'string'}),
+    ToolSpec('web_status', 'Web fabric readiness / providers', 'read', False, {}),
+    ToolSpec('web_search', 'Live web search (policy-gated, no fabricated results)', 'read', False, {'query': 'string', 'limit': 'int?'}),
+    ToolSpec('web_fetch', 'Fetch a URL via policy gate (SSRF-safe)', 'read', False, {'url': 'string', 'max_bytes': 'int?'}),
+    ToolSpec('web_research', 'Search + fetch research pipeline with citations', 'read', False, {'query': 'string', 'limit': 'int?'}),
+    ToolSpec('app_control_status', 'Master control snapshot for chat (ops+learn+train+web+academy)', 'read', False, {}),
 ]
 
 # PHASE 4: shared authorization choke-point (server-side only)
@@ -372,9 +498,16 @@ TOOL_ROUTER = ToolRouter({
     'coding_projects': lambda level='': {'projects': CODING_CURRICULUM.projects(level or None)},
     'coding_knowledge': lambda q='', limit=8: {'results': CODING_CURRICULUM.knowledge_search(q, int(limit or 8))},
     'coding_next_lesson': _tool_coding_next_lesson,
+    'coding_hint': _tool_coding_hint,
+    'coding_exercise_submit': _tool_coding_exercise_submit,
     'learner_snapshot': _tool_learner_snapshot,
     'training_eligibility': _tool_training_eligibility,
     'training_control_status': _tool_training_control_status,
+    'web_status': _tool_web_status,
+    'web_search': _tool_web_search,
+    'web_fetch': _tool_web_fetch,
+    'web_research': _tool_web_research,
+    'app_control_status': _tool_app_control_status,
 }, specs=CODING_TOOL_SPECS, executor=PLATFORM_EXECUTOR)
 COMMAND_AGENT = CommandAgent(TOOL_ROUTER, COMMAND_MEMORY, COMMAND_AUDIT, model=runtime.model)
 COMMAND_AGENT.coding_agent = CODING_AGENT

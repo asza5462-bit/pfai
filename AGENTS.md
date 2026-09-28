@@ -5,7 +5,7 @@ Do not rely on chat memory alone. Read the docs below before making changes.
 
 ## Product
 
-PFAI 8.1 is a production-oriented open AI control plane:
+PFAI 8.2 is a production-oriented open AI control plane (Master Chat Control):
 
 - Backend: FastAPI + Uvicorn (Python)
 - Frontend: single RTL Arabic dashboard at `app/pfai/static/index.html`

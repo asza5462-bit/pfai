@@ -97,6 +97,8 @@ class CodingAgent:
             return {"name": "exercise", "track_id": self._guess_track(low, text)}
         if re.search(r"تلميح|hint|لا تعطيني الحل", text, re.I):
             return {"name": "hint"}
+        if re.search(r"أرسل الحل|submit (my )?(code|solution|answer)|تحقق من حلي|submit_exercise", text, re.I):
+            return {"name": "submit"}
         if re.search(r"راجع هذا الكود|code review|review (this )?code|راجع architecture", text, re.I) or code.strip():
             if re.search(r"architecture|معمار", text, re.I):
                 return {"name": "review_architecture"}
@@ -153,18 +155,35 @@ class CodingAgent:
             lesson = self.tutor.lesson(track_id, lesson_id, reveal_solution=False)
             title = (lesson.get("lesson") or {}).get("title") or lesson_id
             prompt = ((lesson.get("exercise") or {}).get("prompt") or "")[:280]
+            concept = (lesson.get("concept") or "")[:220]
+            starter = ((lesson.get("exercise") or {}).get("starter") or "")[:200]
             reply = (
                 f"Exercise ready: {title} ({track_id}/{lesson_id}).\n"
-                f"{prompt}\n"
-                "Use the chat exercise card to submit code, or ask for a hint. "
-                "Passing sandbox work may become a learning candidate — training never auto-starts from chat."
+                f"Concept: {concept}\n"
+                f"Task: {prompt}\n"
+                f"Starter:\n{starter}\n"
+                "Submit via the exercise card or ask for a progressive hint. "
+                "Sandbox passes can become learning candidates; weight promotion stays explicit."
             )
             return {"ok": True, "reply": reply, "lesson": lesson, "next": nxt, "track_id": track_id}
         if name == "hint":
-            # Expect track/lesson encoded in message like track:lesson or use python first incomplete
             track_id, lesson_id = self._parse_lesson_ref(message, owner)
             timeline.append({"status": "teaching", "detail": "Providing progressive hint"})
-            return {"ok": True, "reply": "Hint generated.", "hint": self.tutor.hint(owner, track_id, lesson_id)}
+            code = _extract_code(message)
+            hint = self.tutor.hint(owner, track_id, lesson_id, code=code)
+            hint_text = hint.get("hint") or hint.get("message") or "No hint"
+            reply = f"Hint L{hint.get('level')} for {track_id}/{lesson_id}: {hint_text}"
+            return {"ok": True, "reply": reply, "hint": hint, "track_id": track_id, "lesson_id": lesson_id}
+        if name == "submit":
+            track_id, lesson_id = self._parse_lesson_ref(message, owner)
+            code = code or _extract_code(message)
+            timeline.append({"status": "running_test", "detail": f"Submitting {track_id}/{lesson_id}"})
+            result = self.tutor.submit_exercise(owner, track_id, lesson_id, code)
+            reply = (
+                f"{'PASSED' if result.get('passed') else 'FAILED'} {track_id}/{lesson_id}. "
+                f"{result.get('teaching') or result.get('message') or ''}"
+            )
+            return {"ok": True, "reply": reply.strip(), "submit": result, "track_id": track_id, "lesson_id": lesson_id}
         if name == "review":
             timeline.append({"status": "reviewing", "detail": "Static/security/maintainability review"})
             review = self.reviewer.review(code or _extract_code(message), language=language)
