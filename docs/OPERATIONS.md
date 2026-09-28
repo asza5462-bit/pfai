@@ -12,7 +12,7 @@ pip install -r requirements.txt
 export PFAI_OWNER_USERNAME='your_username'
 # Prefer: python -m pfai.hash_owner_secret   (prints pbkdf2 hash; paste below)
 # Treat any previously shared password as compromised — use a NEW secret before deploy.
-export PFAI_OWNER_SECRET_HASH='(paste hash only — never the plaintext password)'
+export PFAI_OWNER_PASSWORD_HASH='(paste hash only — never the plaintext password)'
 # export ANTHROPIC_API_KEY=...   # set in your shell/platform secrets only
 
 python run_web.py
@@ -89,7 +89,7 @@ Promotion to active **never** happens automatically. Use owner-authenticated API
 |---|---|---|
 | `ANTHROPIC_API_KEY` | For real Claude | Platform secret only |
 | `PFAI_OWNER_USERNAME` | For owner routes | Sole owner username (not email) |
-| `PFAI_OWNER_SECRET_HASH` | For owner routes | Password hash only (pbkdf2 or legacy sha256) |
+| `PFAI_OWNER_PASSWORD_HASH` | For owner routes | Password hash only (pbkdf2 or legacy sha256) |
 | `PFAI_OWNER_SESSION_TTL` | Optional | Owner session seconds |
 | `PFAI_OWNER_MAX_FAILURES` | Optional | Auth lockout threshold |
 | `PFAI_OWNER_LOCKOUT_SECONDS` | Optional | Auth lockout duration |
@@ -162,7 +162,7 @@ Rollback: `POST /platform/training/rollback` or `POST /platform/models/{id}/roll
 docker build -t pfai:8.0.0 .
 docker run --rm -p 8000:8000 \
   -e PFAI_OWNER_USERNAME \
-  -e PFAI_OWNER_SECRET_HASH \
+  -e PFAI_OWNER_PASSWORD_HASH \
   -e ANTHROPIC_API_KEY \
   -v pfai-data:/app/data \
   pfai:8.0.0

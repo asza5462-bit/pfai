@@ -9,7 +9,7 @@ PFAI owner privileges are **server-side only**. The Dashboard never stores the o
 | Variable | Purpose |
 |---|---|
 | `PFAI_OWNER_USERNAME` | Sole authorized owner username (not an email) |
-| `PFAI_OWNER_SECRET_HASH` | Password hash only — **never** the plaintext password |
+| `PFAI_OWNER_PASSWORD_HASH` | Password hash only — **never** the plaintext password |
 | `PFAI_ENV` | Set to `production` (or `prod`) on real hosts |
 
 Optional:
@@ -41,7 +41,7 @@ cd app
 python -m pfai.hash_owner_secret
 # enter password (hidden) → prints pbkdf2_sha256$... hash
 export PFAI_OWNER_USERNAME='your_username'
-export PFAI_OWNER_SECRET_HASH='(paste hash here)'
+export PFAI_OWNER_PASSWORD_HASH='(paste hash here)'
 ```
 
 Legacy SHA-256 hex hashes are still accepted for existing environments:
@@ -61,7 +61,7 @@ If no owner is configured and setup is not locked:
 3. Server stores **hash only** under `data/security/` and writes `owner_setup.lock`
 4. Setup cannot be re-run to steal ownership
 
-Production hosts should still set `PFAI_OWNER_USERNAME` / `PFAI_OWNER_SECRET_HASH` as platform secrets.
+Production hosts should still set `PFAI_OWNER_USERNAME` / `PFAI_OWNER_PASSWORD_HASH` as platform secrets.
 
 ## Login / logout / session
 
@@ -78,7 +78,7 @@ Routes `/owner/otp/request` and `/owner/otp/verify` are removed (404). Email is 
 
 Any password that was shared during development must be treated as **compromised**.
 Before any real deployment, choose a **new** production password, generate a new hash,
-and rotate `PFAI_OWNER_SECRET_HASH` (and clear old sessions).
+and rotate `PFAI_OWNER_PASSWORD_HASH` (and clear old sessions).
 
 ## Public vs owner-gated surfaces (security notes)
 

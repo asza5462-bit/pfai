@@ -43,7 +43,7 @@ services:
         value: "true"
       - key: PFAI_OWNER_USERNAME
         sync: false
-      - key: PFAI_OWNER_SECRET_HASH
+      - key: PFAI_OWNER_PASSWORD_HASH
         sync: false
       - key: ANTHROPIC_API_KEY
         sync: false

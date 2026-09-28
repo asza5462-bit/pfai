@@ -47,12 +47,12 @@ class TestOwnerPasscodeAuth(unittest.TestCase):
 
         oa.PBKDF2_ITERATIONS = 1000
         self.auth = OwnerAuthService(self.owner, root=str(self.root), session_ttl=30)
-        for k in ("PFAI_OWNER_USERNAME", "PFAI_OWNER_SECRET_HASH"):
+        for k in ("PFAI_OWNER_USERNAME", "PFAI_OWNER_PASSWORD_HASH"):
             os.environ.pop(k, None)
         self.auth.run_setup("owneruser", STRONG, STRONG)
 
     def tearDown(self):
-        for k in ("PFAI_OWNER_USERNAME", "PFAI_OWNER_SECRET_HASH"):
+        for k in ("PFAI_OWNER_USERNAME", "PFAI_OWNER_PASSWORD_HASH"):
             os.environ.pop(k, None)
         self.tmp.cleanup()
 
@@ -226,7 +226,7 @@ class TestPhase5APISecurity(unittest.TestCase):
     @classmethod
     def setUpClass(cls):
         os.environ["PFAI_OWNER_USERNAME"] = "testowner"
-        os.environ["PFAI_OWNER_SECRET_HASH"] = hashlib.sha256(b"test-secret").hexdigest()
+        os.environ["PFAI_OWNER_PASSWORD_HASH"] = hashlib.sha256(b"test-secret").hexdigest()
         os.environ.pop("ANTHROPIC_API_KEY", None)
         # TestClient is HTTP — production Secure cookies would not be stored.
         os.environ["PFAI_ENV"] = "test"

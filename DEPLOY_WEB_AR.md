@@ -49,7 +49,7 @@ PFAI_CORS_ORIGINS=https://your-site.example
 PFAI_CORS_ORIGINS=https://your-site.example,https://preview.example
 ```
 
-لا تضع `PFAI_OWNER_SECRET_HASH` أو `ANTHROPIC_API_KEY` في Frontend.
+لا تضع `PFAI_OWNER_PASSWORD_HASH` أو `ANTHROPIC_API_KEY` في Frontend.
 
 ## Production
 

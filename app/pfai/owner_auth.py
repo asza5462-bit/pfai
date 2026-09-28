@@ -248,6 +248,9 @@ class OwnerAuthService:
     # --- internals -----------------------------------------------------
     def _configured_hash(self) -> str:
         env_hash = os.environ.get(self.owner.secret_env, "")
+        if not env_hash:
+            # Legacy alias only for local/dev transition — never preferred in production docs.
+            env_hash = os.environ.get("PFAI_OWNER_SECRET_HASH", "")
         if env_hash:
             return env_hash
         data = self._load_json(self.credentials_path, {})

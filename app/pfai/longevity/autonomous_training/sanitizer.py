@@ -13,6 +13,7 @@ _SECRET_PATTERNS = [
     re.compile(r"(?i)pfai_owner_session\s*[:=]\s*\S+"),
     re.compile(r"(?i)(sk-|AKIA|ghp_|xox[baprs]-)[A-Za-z0-9/+=_-]{8,}"),
     re.compile(r"(?i)-----BEGIN (?:RSA |EC |OPENSSH )?PRIVATE KEY-----"),
+    re.compile(r"(?i)PFAI_OWNER_PASSWORD_HASH\s*[:=]\s*\S+"),
     re.compile(r"(?i)PFAI_OWNER_SECRET_HASH\s*[:=]\s*\S+"),
     re.compile(r"(?i)PFAI_SMTP_PASSWORD\s*[:=]\s*\S+"),
     re.compile(r"(?i)ANTHROPIC_API_KEY\s*[:=]\s*\S+"),

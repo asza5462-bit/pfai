@@ -9,7 +9,7 @@ class OwnerControl:
     The username may live in env/config; the secret must never be committed to source
     and is only ever read from the environment (or an env-managed secret store).
     """
-    def __init__(self, ledger_path='data/security/owner_control.jsonl', secret_env='PFAI_OWNER_SECRET_HASH',
+    def __init__(self, ledger_path='data/security/owner_control.jsonl', secret_env='PFAI_OWNER_PASSWORD_HASH',
                  username_env='PFAI_OWNER_USERNAME'):
         self.ledger=Path(ledger_path); self.ledger.parent.mkdir(parents=True, exist_ok=True)
         self.secret_env=secret_env

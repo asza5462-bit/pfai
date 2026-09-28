@@ -213,7 +213,7 @@
 - Context: Owner gate previously relied on sending a passcode via `X-Owner-Secret` and browser sessionStorage — unsafe for long-lived operation.
 - Decision:
   - Extend `OwnerControl` with `OwnerAuthService` (sessions, rate-limit/lockout, first-time setup lock).
-  - Store only password hashes (`pbkdf2_sha256$…` preferred; legacy sha256 accepted). Env: `PFAI_OWNER_USERNAME` + `PFAI_OWNER_SECRET_HASH` (email login/OTP removed).
+  - Store only password hashes (`pbkdf2_sha256$…` preferred; legacy sha256 accepted). Env: `PFAI_OWNER_USERNAME` + `PFAI_OWNER_PASSWORD_HASH` (email login/OTP removed).
   - HttpOnly cookie sessions (`pfai_owner_session`, SameSite=Strict; Secure always when `PFAI_ENV=production`, otherwise on HTTPS / `PFAI_COOKIE_SECURE=true`); legacy `X-Owner-Secret` header kept for automation.
   - First-time `/owner/setup` permanently disables itself via `owner_setup.lock`; no frontend-trusted roles.
   - Any password shared in development is considered compromised; require a new production hash before deploy.
