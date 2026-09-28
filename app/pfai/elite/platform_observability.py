@@ -68,7 +68,7 @@ class PlatformObservability:
                 model_router = {"available": False}
 
         snap = {
-            "phase": 19,
+            "phase": 20,
             "active_model": (p16.get("evidence") or p15.get("evidence") or {}).get("MODEL_V0007")
             or {"note": "see MODEL_STATUS fields"},
             "lkg": {"MODEL_V0001_intact": True, "rollback_ready": True},
@@ -114,12 +114,15 @@ class PlatformObservability:
             "PHASE_17_ALLOWED": bool(elite.get("PHASE_17_ALLOWED") or p16.get("PHASE_17_ALLOWED")),
             "PHASE_18_ALLOWED": bool(elite.get("PHASE_18_ALLOWED") or False),
             "PHASE_19_ALLOWED": bool(elite.get("PHASE_19_ALLOWED") or False),
-            "PHASE_20_ALLOWED": False,
+            "PHASE_20_ALLOWED": bool(elite.get("PHASE_20_ALLOWED") or False),
+            "PHASE_21_ALLOWED": False,
             "unified_ai_core": True,
+            "agent_execution_engine": True,
             "elite": {
                 "phase": elite.get("phase"),
                 "bootstrap": elite.get("bootstrap"),
                 "PHASE_15_ALLOWED": elite.get("PHASE_15_ALLOWED"),
+                "phase20_boot": (elite.get("bootstrap") or {}).get("phase20"),
             },
         }
         return _scrub(snap)

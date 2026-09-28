@@ -76,6 +76,7 @@ class EliteOrchestrator:
             "phase17": None,
             "phase18": None,
             "phase19": None,
+            "phase20": None,
         }
         if bootstrap_skills:
             from pfai.engineering.phase14_skills import register_phase14_skills
@@ -83,6 +84,7 @@ class EliteOrchestrator:
             from pfai.engineering.phase17_skills import register_phase17_skills
             from pfai.engineering.phase18_skills import register_phase18_skills
             from pfai.elite.phase19_skills import register_phase19_skills
+            from pfai.elite.phase20_skills import register_phase20_skills
 
             self._boot["skills"] = register_elite_skills(self.skills, activate=True)
             self._boot["phase14"] = register_phase14_skills(self.skills, activate=True)
@@ -90,6 +92,7 @@ class EliteOrchestrator:
             self._boot["phase17"] = register_phase17_skills(self.skills, activate=True)
             self._boot["phase18"] = register_phase18_skills(self.skills, activate=True)
             self._boot["phase19"] = register_phase19_skills(self.skills, activate=True)
+            self._boot["phase20"] = register_phase20_skills(self.skills, activate=True)
             self._boot["tools"] = self.tools.bootstrap_safe_tools()
             self._boot["security_tools"] = self.tools.bootstrap_security_tools()
         from pfai.elite.unified_intelligence_loop import UnifiedIntelligenceLoop
@@ -696,6 +699,7 @@ class EliteOrchestrator:
         from pfai.engineering.phase17_gates import phase17_status
         from pfai.engineering.phase18_gates import phase18_status
         from pfai.elite.phase19_gates import phase19_status
+        from pfai.elite.phase20_gates import phase20_status
 
         p14 = phase14_status()
         p15 = phase15_status()
@@ -703,8 +707,9 @@ class EliteOrchestrator:
         p17 = phase17_status()
         p18 = phase18_status()
         p19 = phase19_status()
+        p20 = phase20_status()
         return {
-            "phase": 19,
+            "phase": 20,
             "skills": self.skills.health(),
             "tools": {
                 "count": len(self.tools.catalog()),
@@ -725,16 +730,19 @@ class EliteOrchestrator:
             "phase17": p17,
             "phase18": p18,
             "phase19": p19,
+            "phase20": p20,
             "PHASE_14_ALLOWED": bool(p14.get("PHASE_14_ALLOWED")),
             "PHASE_15_ALLOWED": bool(p15.get("PHASE_15_ALLOWED")),
             "PHASE_16_ALLOWED": bool(p16.get("PHASE_16_ALLOWED")),
             "PHASE_17_ALLOWED": bool(p17.get("PHASE_17_ALLOWED")),
             "PHASE_18_ALLOWED": bool(p18.get("PHASE_18_ALLOWED")),
             "PHASE_19_ALLOWED": bool(p19.get("PHASE_19_ALLOWED")),
-            "PHASE_20_ALLOWED": False,
+            "PHASE_20_ALLOWED": bool(p20.get("PHASE_20_ALLOWED")),
+            "PHASE_21_ALLOWED": False,
             "skill_metrics": self.skill_metrics.summary(),
             "unified_intelligence_loop": True,
             "unified_ai_core": True,
+            "agent_execution_engine": True,
         }
 
     def chat(

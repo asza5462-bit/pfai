@@ -34,13 +34,14 @@ class UnifiedIntelligenceLoop:
     """
     User Intent → … → Activation or Rollback.
 
-    Phase 19: primary path is UnifiedAICore (capability routing + composition).
-    Meta intents (train/evaluate/rollback) remain bounded and never destroy LKG.
+    Phase 20: multi-step/complex requests → AgentExecutionEngine;
+    simpler turns still use UnifiedAICore. Meta intents remain bounded; LKG preserved.
     """
 
     def __init__(self, orchestrator: Any) -> None:
         self.orch = orchestrator
         self._core = None
+        self._agent = None
 
     def _core_instance(self):
         if self._core is None:
@@ -48,6 +49,38 @@ class UnifiedIntelligenceLoop:
 
             self._core = UnifiedAICore(self.orch)
         return self._core
+
+    def _agent_instance(self):
+        if self._agent is None:
+            from pfai.elite.agent_execution_engine import AgentExecutionEngine
+
+            self._agent = AgentExecutionEngine(self.orch)
+        return self._agent
+
+    def _use_agent_engine(self, message: str, ctx: dict[str, Any]) -> bool:
+        if ctx.get("force_agent_engine") or ctx.get("use_agent_execution_engine"):
+            return True
+        from pfai.elite.capability_router import CapabilityRouter
+
+        caps = CapabilityRouter().route(message, context=ctx).get("capabilities") or []
+        if len(caps) >= 3:
+            return True
+        t = (message or "").lower()
+        multi_markers = (
+            "and then",
+            "then ",
+            "finally",
+            "implement",
+            "run the tests",
+            "run tests",
+            "fix it",
+            "fix the",
+            "analyze this",
+            "find the bug",
+            "optimize",
+            "review this",
+        )
+        return sum(1 for m in multi_markers if m in t) >= 2
 
     def run(
         self,
@@ -85,39 +118,61 @@ class UnifiedIntelligenceLoop:
             result["loop_id"] = loop_id
             result["pipeline"] = PIPELINE_STAGES
             result["stages"] = stages
-            result["phase"] = 19
+            result["phase"] = 20
             result["latency_seconds"] = time.time() - started
-            result["PHASE_20_ALLOWED"] = False
+            result["PHASE_21_ALLOWED"] = False
             return result
 
-        mark("intent_classification", deferred_to="unified_ai_core")
-        mark("planning", deferred_to="unified_ai_core")
+        use_agent = self._use_agent_engine(message, ctx)
+        mark(
+            "intent_classification",
+            deferred_to="agent_execution_engine" if use_agent else "unified_ai_core",
+        )
+        mark("planning", deferred_to="agent_execution_engine" if use_agent else "unified_ai_core")
         mark("authorization", note="ActionPermissionGate/AuthorizedExecutor/ScopeEnforcement — never bypassed")
 
-        out = self._core_instance().handle(
-            message,
-            conversation_id=conversation_id,
-            context=ctx,
-            requested_mode=requested_mode,
-            approved=approved,
-            actor=actor,
-            attachments=attachments,
-            allow_training_ops=allow_training_ops,
-        )
-
-        # Merge core stages into loop stages (+ aliases for prior-phase stage names)
-        _alias = {
-            "model_routing": "model_selection",
-            "skill_selection": "skill_discovery",
-            "learning_experience_record": "experience_memory",
-            "validation_testing": "verification",
-            "capability_discovery": "skill_discovery",
-        }
-        for s in out.get("stages") or []:
-            stage = s.get("stage")
-            stages.append(s if "stage" in s else {"stage": "execution", **s})
-            if stage in _alias:
-                stages.append({**s, "stage": _alias[stage], "alias_of": stage})
+        if use_agent:
+            out = self._agent_instance().run(
+                message,
+                approved=approved,
+                actor=actor,
+                context=ctx,
+                force_tool_failure=bool(ctx.get("force_tool_failure")),
+                force_model_failure=bool(ctx.get("force_model_failure")),
+            )
+            # Map agent stages into loop stages
+            task = out.get("task") or {}
+            stages.append({"stage": "skill_discovery", "skills": out.get("skills")})
+            stages.append({"stage": "skill_composition", "plan_steps": len(task.get("steps") or [])})
+            stages.append({"stage": "model_selection", "model": out.get("model")})
+            stages.append({"stage": "tool_selection", "tools": out.get("tools")})
+            stages.append({"stage": "execution", "state": out.get("state"), "ok": out.get("ok")})
+            out = dict(out)
+            out["unified_ai_core"] = True
+            out["agent_execution_engine"] = True
+        else:
+            out = self._core_instance().handle(
+                message,
+                conversation_id=conversation_id,
+                context=ctx,
+                requested_mode=requested_mode,
+                approved=approved,
+                actor=actor,
+                attachments=attachments,
+                allow_training_ops=allow_training_ops,
+            )
+            _alias = {
+                "model_routing": "model_selection",
+                "skill_selection": "skill_discovery",
+                "learning_experience_record": "experience_memory",
+                "validation_testing": "verification",
+                "capability_discovery": "skill_discovery",
+            }
+            for s in out.get("stages") or []:
+                stage = s.get("stage")
+                stages.append(s if "stage" in s else {"stage": "execution", **s})
+                if stage in _alias:
+                    stages.append({**s, "stage": _alias[stage], "alias_of": stage})
 
         mark("observation", execution_status=out.get("execution_status"), ok=out.get("ok"))
         mark(
@@ -156,12 +211,12 @@ class UnifiedIntelligenceLoop:
         )
 
         out = dict(out)
-        out["phase"] = 19
+        out["phase"] = 20
         out["loop_id"] = loop_id
         out["pipeline"] = list(PIPELINE_STAGES)
         out["stages"] = stages
         out["learning_candidate"] = learn
-        out["PHASE_20_ALLOWED"] = False
+        out["PHASE_21_ALLOWED"] = False
         out["latency_seconds"] = time.time() - started
         out["unified_intelligence_loop"] = True
         out.setdefault("skills_used", out.get("skills_used") or out.get("skills_used") or [])
@@ -238,7 +293,17 @@ class UnifiedIntelligenceLoop:
                 "meta_intent": meta,
                 "platform": {
                     k: status.get(k)
-                    for k in ("phase", "PHASE_15_ALLOWED", "PHASE_16_ALLOWED", "PHASE_18_ALLOWED", "PHASE_19_ALLOWED", "model_router", "skills")
+                    for k in (
+                        "phase",
+                        "PHASE_15_ALLOWED",
+                        "PHASE_16_ALLOWED",
+                        "PHASE_18_ALLOWED",
+                        "PHASE_19_ALLOWED",
+                        "PHASE_20_ALLOWED",
+                        "PHASE_21_ALLOWED",
+                        "model_router",
+                        "skills",
+                    )
                 },
                 "lkg_preserved": True,
                 "skills_used": [],
