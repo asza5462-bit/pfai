@@ -109,15 +109,25 @@ class CommandAgent:
             timeline.append(step)
             return step
 
-        mark("thinking", "Loading relevant PFAI memory and safety context")
-        mem_ctx = self.memory.context_block(message)
-        dialog = self.memory.recent_dialog(cid, limit=6)
+        mark("thinking", "Loading legendary memory + deep comprehension")
+        try:
+            self.memory.ingest_user_turn(message, conversation_id=cid)
+        except Exception as exc:
+            log.debug("legendary ingest skipped: %s", exc)
+        dialog = self.memory.recent_dialog(cid, limit=10)
+        if hasattr(self.memory, "legendary_context"):
+            mem_ctx = self.memory.legendary_context(message, conversation_id=cid, limit=10)
+        else:
+            mem_ctx = self.memory.context_block(message)
+        from .deep_comprehension import comprehend, comprehension_block
+        understanding = comprehend(message, dialog=dialog, memory_hints=mem_ctx, language=lang)
+        mark("thinking", comprehension_block(understanding, language=lang)[:220])
 
         # Correction conversational shortcut
         if _is_correction_offer(message, dialog):
             return self._handle_correction_capture(cid, owner, message, lang, timeline, mark)
 
-        mark("planning", f"Planning with provider={self.provider_name()}")
+        mark("planning", f"Planning with provider={self.provider_name()} intent={understanding.get('intent')}")
         try:
             planned = self._plan(message, mem_ctx, dialog)
         except Exception as exc:
@@ -140,8 +150,8 @@ class CommandAgent:
             reply = _approval_reply(lang, pending_payload)
             final_status = "waiting_for_approval"
         else:
-            mark("thinking", "Composing answer from tool results + memory")
-            reply = self._compose(message, tool_results, mem_ctx, lang)
+            mark("thinking", "Composing elite answer from understanding + memory + tools")
+            reply = self._compose(message, tool_results, mem_ctx, lang, understanding=understanding)
             # Soft-complete: local brain stays responsive even if one lane degrades
             final_status = "completed" if (
                 not tool_results
@@ -153,9 +163,18 @@ class CommandAgent:
             else:
                 mark("failed", "Critical tools failed")
 
+        try:
+            self.memory.update_digest(cid, self.memory.recent_dialog(cid, limit=16) + [
+                {"role": "assistant", "content": reply}
+            ])
+        except Exception:
+            pass
         self.memory.add_message(
             cid, "assistant", reply, status=final_status,
-            meta={"timeline": timeline, "tools": tool_results, "pending": pending_payload, "provider": self.provider_name()},
+            meta={
+                "timeline": timeline, "tools": tool_results, "pending": pending_payload,
+                "provider": self.provider_name(), "understanding": understanding,
+            },
         )
         return {
             "ok": final_status in {"completed", "waiting_for_approval"},
@@ -166,6 +185,7 @@ class CommandAgent:
             "pending": pending_payload,
             "provider": self.provider_name(),
             "memory_used": mem_ctx,
+            "understanding": understanding,
             "status": final_status,
             "language": lang,
         }
@@ -376,13 +396,17 @@ class CommandAgent:
                 log.warning("model plan failed, using mock: %s", exc)
         return self.mock.plan_tools(message, allowed)
 
-    def _compose(self, message: str, tool_results: list[dict], mem_ctx: str, lang: str) -> str:
+    def _compose(self, message: str, tool_results: list[dict], mem_ctx: str, lang: str, understanding: dict | None = None) -> str:
         if self._model_generate_ready():
+            from .deep_comprehension import comprehension_block
+            u = understanding or {}
             prompt = (
-                "Compose a high-signal operator reply for PFAI Advanced Command Chat. "
-                "Sound like a real AI systems brain: structured findings, clear next steps, "
-                "link education/training when relevant. Use tool results only; do not invent metrics. "
-                "Prefer the owner's language. Keep it powerful but honest.\n"
+                "Compose an elite PFAI Command Chat reply that feels wiser than typical chatbots. "
+                "Lead with deep understanding of the user's latent need, weave legendary memory, "
+                "then precise live findings and one clear next move. "
+                "Be powerful, specific, and honest — never invent metrics or web facts. "
+                "Prefer the owner's language. No fluff, no corporate filler.\n"
+                f"Comprehension: {comprehension_block(u, language=lang)}\n"
                 f"Language hint: {lang}\nMessage: {message}\nMemory:\n{mem_ctx}\n"
                 f"Tool results: {json.dumps(tool_results, ensure_ascii=False, default=str)[:8000]}\n"
             )
@@ -393,7 +417,9 @@ class CommandAgent:
                 )
             except Exception as exc:
                 log.warning("model compose failed: %s", exc)
-        return self.mock.compose_reply(message, tool_results, mem_ctx, language=lang)
+        return self.mock.compose_reply(
+            message, tool_results, mem_ctx, language=lang, understanding=understanding or {},
+        )
 
     def _model_generate_ready(self) -> bool:
         if self._anthropic_ready():

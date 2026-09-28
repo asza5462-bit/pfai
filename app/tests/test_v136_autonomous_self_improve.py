@@ -1,4 +1,4 @@
-"""PFAI 8.5 — careful unlock: auto-learn accept + safe self-heal + chat autonomy tools."""
+"""PFAI 8.6 — careful unlock: auto-learn accept + safe self-heal + chat autonomy tools."""
 import hashlib
 import os
 import unittest
@@ -117,7 +117,7 @@ class TestAutonomyAPI(unittest.TestCase):
 
     def test_tools_and_version(self):
         from pfai import __version__
-        self.assertTrue(__version__.startswith("8.5"))
+        self.assertTrue(__version__.startswith("8.6"))
         tools = self.client.get("/chat/tools").json()
         self.assertEqual(tools.get("locked_count"), 0)
         names = {t["name"] for t in tools["tools"]}

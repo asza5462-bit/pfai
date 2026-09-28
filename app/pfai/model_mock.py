@@ -150,8 +150,18 @@ class MockCommandProvider(ModelProvider):
             add("forget_memory")
         if re.search(r"correct|تصحيح|هذا التحليل غير صحيح", text + ar):
             add("save_owner_correction")
-        # Unified one-mind asks — single pulse (speed + coherence)
+        # Legendary memory / deep understanding asks
         if re.search(
+            r"ذاكرة\s*أسطور|legendary\s*memory|تذكر\s*هذا|احفظ\s*هذا|افهمني|فهم\s*عالي|"
+            r"يتفوق|أقوى\s*الذكاء|memory\s*first|what\s*do\s*you\s*remember",
+            text + ar,
+            re.I,
+        ):
+            add("memory_search")
+            add("unified_brain_status")
+            add("app_control_status")
+        # Unified one-mind asks — single pulse (speed + coherence)
+        elif re.search(
             r"عقل\s*واحد|unified\s*brain|كل\s*شيء\s*يعمل|سلاسة|سرعة\s*متناه|"
             r"بدون\s*ا?خطاء|بدون\s*تأخير|ذكاء\s*خارق|قوة\s*و\s*دقة|طوره|وطوره|"
             r"و\s*طوره|super\s*brain|one\s*mind",
@@ -225,13 +235,24 @@ class MockCommandProvider(ModelProvider):
             tools.append({"tool": name, "args": args})
         return tools
 
-    def compose_reply(self, message: str, tool_results: list[dict], memory_context: str, language: str = "ar") -> str:
+    def compose_reply(
+        self,
+        message: str,
+        tool_results: list[dict],
+        memory_context: str,
+        language: str = "ar",
+        understanding: dict | None = None,
+    ) -> str:
+        """Elite reply: understanding → memory → live findings → next move."""
+        from .deep_comprehension import comprehend, comprehension_block
+
         ok = [t for t in tool_results if t.get("ok")]
         pending = [t for t in tool_results if t.get("needs_approval")]
         failed = [t for t in tool_results if not t.get("ok") and not t.get("needs_approval")]
         en = language.startswith("en")
+        u = understanding or comprehend(message, memory_hints=memory_context or "", language=language)
 
-        def _brief(obj, limit=420):
+        def _brief(obj, limit=360):
             try:
                 s = json.dumps(obj, ensure_ascii=False, default=str)
             except Exception:
@@ -242,140 +263,87 @@ class MockCommandProvider(ModelProvider):
         insights: list[str] = []
         for t in ok:
             name = t.get("tool") or "?"
-            res = t.get("result")
-            if name == "health_check":
-                st = (res or {}).get("status") if isinstance(res, dict) else res
-                insights.append(f"health={st}" if en else f"الصحة={st}")
-            elif name == "system_status" and isinstance(res, dict):
-                h = (res.get("health") or {}).get("status") if isinstance(res.get("health"), dict) else res.get("health")
-                insights.append(f"system health={h}" if en else f"حالة النظام={h}")
-            elif name == "metrics_snapshot" and isinstance(res, dict):
-                insights.append(("metrics: " if en else "المؤشرات: ") + _brief(res, 220))
-            elif name == "training_eligibility" and isinstance(res, dict):
-                elig = res.get("eligible")
-                insights.append(
-                    f"training eligible={elig} (use training_cycle_start; no silent promote)"
-                    if en else
-                    f"أهلية التدريب={elig} (استخدم training_cycle_start — بدون تفعيل صامت)"
-                )
+            res = t.get("result") if isinstance(t.get("result"), dict) else t.get("result")
+            if name == "unified_brain_pulse" and isinstance(res, dict):
+                insights.append(("unified " if en else "العقل الواحد ") + _brief(res.get("snapshot") or res, 280))
+            elif name == "app_control_status" and isinstance(res, dict):
+                insights.append(("ops " if en else "التشغيل ") + _brief({
+                    "version": res.get("version"), "continuous": res.get("continuous"),
+                    "advanced": res.get("advanced"), "web": res.get("web"),
+                }, 260))
             elif name in {"web_search", "web_research"} and isinstance(res, dict):
                 n = len(res.get("results") or res.get("citations") or [])
-                st = res.get("WEB_FABRIC_STATUS") or ("ok" if res.get("ok") else res.get("error"))
-                insights.append(
-                    f"web {name}: status={st} hits={n} fabricated={res.get('fabricated_results')}"
-                    if en else
-                    f"الويب {name}: حالة={st} نتائج={n} ملفّق={res.get('fabricated_results')}"
-                )
-            elif name == "web_fetch" and isinstance(res, dict):
-                insights.append(("web fetch: " if en else "جلب ويب: ") + _brief(res, 220))
-            elif name == "web_status" and isinstance(res, dict):
-                insights.append(f"WEB_FABRIC_STATUS={res.get('WEB_FABRIC_STATUS')}")
-            elif name == "coding_exercise_submit" and isinstance(res, dict):
-                insights.append(
-                    f"exercise {'PASSED' if res.get('passed') else 'FAILED'} · {res.get('teaching') or res.get('message') or ''}"
-                )
-            elif name == "coding_hint" and isinstance(res, dict):
-                insights.append(f"hint L{res.get('level')}: {(res.get('hint') or res.get('message') or '')[:160]}")
-            elif name == "app_control_status" and isinstance(res, dict):
-                insights.append(("master control: " if en else "التحكم الكامل: ") + _brief({
-                    "version": res.get("version"),
-                    "continuous": res.get("continuous"),
-                    "web": res.get("web"),
-                }, 260))
-            elif name == "training_control_status" and isinstance(res, dict):
-                insights.append(("training control: " if en else "مركز التدريب: ") + _brief({
-                    "paused": res.get("paused"),
-                    "autonomous_enabled": res.get("autonomous_enabled"),
-                    "can_start_from_chat": res.get("can_start_from_chat"),
-                }, 200))
-            elif name == "learner_snapshot" and isinstance(res, dict):
-                prof = res.get("profile") or {}
-                insights.append(
-                    f"academy level={prof.get('display_level')} mode={prof.get('mode')} done={prof.get('completed_lessons')}"
-                    if en else
-                    f"الأكاديمية مستوى={prof.get('display_level')} وضع={prof.get('mode')} دروس={prof.get('completed_lessons')}"
-                )
-            elif name == "continuous_status" and isinstance(res, dict):
-                insights.append(("continuous: " if en else "التعلم المستمر: ") + _brief(res, 220))
-            elif name in {"self_improve_tick", "self_heal_cycle", "self_check_run", "autonomy_status"} and isinstance(res, dict):
-                insights.append(
-                    ("autonomy: " if en else "الاستقلال الذاتي: ")
-                    + _brief({
-                        "check_ok": res.get("check_ok", res.get("ok")),
-                        "heal": res.get("heal") or {"applied": res.get("applied")},
-                        "auto_accept_learning": (res.get("autonomy") or res.get("learning") or {}).get("auto_accept_learning"),
-                        "weight_promotion": res.get("weight_promotion") or "never_auto",
-                    }, 260)
-                )
-            elif name in {"advanced_self_develop", "advanced_status", "advanced_awareness", "advanced_code_build"} and isinstance(res, dict):
-                mat = res.get("maturity") or res.get("advanced") or {}
-                insights.append(
-                    ("advanced self-develop: " if en else "التطوير الذاتي المتقدم: ")
-                    + _brief({
-                        "stage": res.get("stage") or mat.get("stage"),
-                        "ran": res.get("ran"),
-                        "task": res.get("task_id"),
-                        "solved": (res.get("build") or {}).get("solved", res.get("solved")),
-                        "passes": len((res.get("build") or {}).get("passes") or res.get("passes") or []),
-                        "weight_promotion": res.get("weight_promotion") or "never_auto",
-                    }, 280)
-                )
-            elif name == "unified_brain_pulse" and isinstance(res, dict):
-                insights.append(
-                    ("unified mind: " if en else "العقل الواحد: ")
-                    + _brief({
-                        "snapshot": res.get("snapshot"),
-                        "elapsed_ms": res.get("elapsed_ms"),
-                        "latency_class": res.get("latency_class"),
-                        "degraded": res.get("degraded_lanes"),
-                        "action": res.get("action"),
-                        "weight_promotion": res.get("weight_promotion") or "never_auto",
-                    }, 320)
-                )
-            elif name in {"continuous_start", "continuous_resume", "continuous_pause", "continuous_stop"}:
-                insights.append(f"{name} → {_brief(res, 160)}")
-            elif name in {"coding_teach", "coding_tracks", "coding_progress", "coding_next_lesson", "coding_assess"}:
-                insights.append(f"{name}: {_brief(res, 240)}")
-            elif name in {"remember_knowledge", "save_owner_correction", "correct_memory", "forget_memory"}:
+                insights.append(f"web hits={n} status={res.get('WEB_FABRIC_STATUS') or res.get('error')}")
+            elif name in {"advanced_self_develop", "self_improve_tick"} and isinstance(res, dict):
+                insights.append(_brief({
+                    "stage": res.get("stage") or (res.get("maturity") or {}).get("stage"),
+                    "ran": res.get("ran"), "solved": (res.get("build") or {}).get("solved"),
+                    "check_ok": res.get("check_ok"),
+                }, 220))
+            elif name == "coding_teach" and isinstance(res, dict):
+                insights.append(("teach: " if en else "تعليم: ") + _brief(res, 220))
+            elif isinstance(res, dict):
                 insights.append(f"{name}: {_brief(res, 160)}")
             else:
-                insights.append(f"{name}: {_brief(res, 180)}")
+                insights.append(f"{name}: {_brief(res, 120)}")
+
+        mem_lines = []
+        if memory_context and "no durable" not in memory_context.lower():
+            for line in (memory_context or "").splitlines():
+                line = line.strip()
+                if line.startswith("-") or line.startswith("Thread") or line.startswith("Facts"):
+                    mem_lines.append(line[:200])
+                if len(mem_lines) >= 5:
+                    break
+
+        latent = u.get("latent_need") or ""
+        intent = u.get("intent") or "general"
+        next_move = {
+            "unify_system": ("اطلب نبضة عقل واحد أو راقب اللوحة الحية.", "Ask for a unified pulse or watch the live board."),
+            "self_evolve": ("شغّل التطوير الذاتي المتقدم الآن.", "Run advanced self-develop now."),
+            "teach": ("ابدأ درساً أو سلّم تمريناً للتحقق.", "Start a lesson or submit an exercise to verify."),
+            "research": ("حدّد سؤالاً أدق للبحث الحي.", "Narrow the live research question."),
+            "train_learn": ("راجع أهلية التدريب ثم ابدأ دورة عند الجاهزية.", "Check training eligibility then start a cycle when ready."),
+            "memory_mind": ("قل ما تريدني أن أتذكره للأبد.", "Tell me what to remember forever."),
+            "ops_status": ("اطلب التحكم الكامل أو نبضة العقل.", "Ask for master control or a brain pulse."),
+        }.get(intent, ("قل الخطوة التالية التي تريدها بدقة.", "State the exact next step you want."))
+        nm = next_move[0] if not en else next_move[1]
 
         if en:
             parts = [
-                "PFAI Advanced Brain — analytical summary from live tools:",
+                "Understood.",
+                f"You want: {latent}",
+                comprehension_block(u, language="en"),
             ]
+            if mem_lines:
+                parts.append("From legendary memory:")
+                parts.extend(f"  {x}" for x in mem_lines[:5])
             if insights:
-                parts.append("Findings:")
-                parts.extend(f"• {x}" for x in insights[:10])
-            if ok:
-                parts.append("Executed: " + ", ".join(t.get("tool", "?") for t in ok) + ".")
+                parts.append("Live findings:")
+                parts.extend(f"• {x}" for x in insights[:8])
             if pending:
-                parts.append("Sensitive action(s) still await approval (locked mode).")
-            if failed:
-                parts.append("Some tools failed — see timeline for detail.")
-            if memory_context and "no durable" not in memory_context.lower():
-                parts.append("Durable memory considered: " + memory_context[:220])
-            parts.append(
-                "Education & training: academy tools teach; eligibility is read-only; "
-                "model promotion never auto-starts from chat."
-            )
+                parts.append("A sensitive action still awaits approval.")
+            if failed and not insights:
+                parts.append("Some tools degraded — answering from memory + remaining live lanes.")
+            parts.append(f"Next: {nm}")
+            parts.append("I stay precise: no invented metrics, no silent weight promotion.")
             return "\n".join(parts)
 
-        parts = ["عقل PFAI المتقدم — ملخص تحليلي من أدوات حية:"]
+        parts = [
+            "فهمتك.",
+            f"ما تريده في العمق: {latent}",
+            comprehension_block(u, language="ar"),
+        ]
+        if mem_lines:
+            parts.append("من الذاكرة الأسطورية:")
+            parts.extend(f"  {x}" for x in mem_lines[:5])
         if insights:
-            parts.append("النتائج:")
-            parts.extend(f"• {x}" for x in insights[:10])
-        if ok:
-            parts.append("الأدوات المنفذة: " + ", ".join(t.get("tool", "?") for t in ok))
+            parts.append("من الواقع الحي الآن:")
+            parts.extend(f"• {x}" for x in insights[:8])
         if pending:
-            parts.append("ما زال هناك إجراء بانتظار الموافقة (وضع الأقفال).")
-        if failed:
-            parts.append("بعض الأدوات فشلت — راجع المخطط الزمني.")
-        if memory_context and "no durable" not in memory_context.lower():
-            parts.append("تم أخذ الذاكرة الدائمة بالاعتبار.")
-        parts.append(
-            "التعليم والتدريب: أدوات الأكاديمية تعلّم؛ الأهلية للقراءة فقط؛ "
-            "ترقية أوزان النموذج لا تبدأ تلقائيًا من الشات."
-        )
+            parts.append("ما زال إجراء حسّاس بانتظار الموافقة.")
+        if failed and not insights:
+            parts.append("بعض المسارات تدهورت — أجيب من الذاكرة والمسارات الحية المتبقية.")
+        parts.append(f"الخطوة التالية: {nm}")
+        parts.append("أبقى دقيقاً: لا اختراع لمؤشرات، ولا ترقية أوزان صامتة.")
         return "\n".join(parts)

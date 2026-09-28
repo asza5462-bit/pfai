@@ -22,6 +22,10 @@ APPROVED_KINDS = {
     "correction",
     "feedback",
     "conversation_note",
+    "fact",
+    "lesson",
+    "epic_memory",
+    "user_desire",
 }
 
 
@@ -61,6 +65,23 @@ class CommandMemoryService:
                   resolved_at TEXT,
                   resolved_by TEXT
                 );
+                CREATE TABLE IF NOT EXISTS legendary_facts (
+                  id INTEGER PRIMARY KEY AUTOINCREMENT,
+                  subject TEXT,
+                  predicate TEXT,
+                  object TEXT,
+                  confidence REAL,
+                  source TEXT,
+                  created_at TEXT,
+                  last_seen TEXT
+                );
+                CREATE TABLE IF NOT EXISTS conversation_digests (
+                  conversation_id TEXT PRIMARY KEY,
+                  digest TEXT,
+                  turn_count INTEGER,
+                  updated_at TEXT
+                );
+                CREATE INDEX IF NOT EXISTS idx_legendary_subject ON legendary_facts(subject);
                 """
             )
             self.db.commit()
@@ -178,10 +199,26 @@ class CommandMemoryService:
         return int(self.memory.add(kind, content, source, confidence))
 
     def relevant(self, query: str, limit: int = 8) -> list[dict]:
-        hits = self.memory.search(query, limit=limit)
-        # Prefer preference/decision/correction/approved_knowledge
-        priority = {"preference": 0, "correction": 1, "decision": 2, "approved_knowledge": 3, "feedback": 4, "lesson": 5}
-        hits.sort(key=lambda r: (priority.get(r.get("kind"), 9), -(r.get("score") or 0), -int(r.get("id") or 0)))
+        # Tokenize query for broader recall (legendary memory)
+        tokens = [t for t in re_split_tokens(query) if len(t) >= 3][:8]
+        hits = list(self.memory.search(query, limit=max(limit, 12)) or [])
+        seen = {h.get("id") for h in hits}
+        for tok in tokens:
+            for h in self.memory.search(tok, limit=4) or []:
+                if h.get("id") in seen:
+                    continue
+                seen.add(h.get("id"))
+                hits.append(h)
+        # Prefer preference/decision/correction/approved_knowledge/desires
+        priority = {
+            "preference": 0, "user_desire": 0, "correction": 1, "decision": 2,
+            "epic_memory": 2, "approved_knowledge": 3, "fact": 3, "feedback": 4, "lesson": 5,
+        }
+        hits.sort(key=lambda r: (
+            priority.get(r.get("kind"), 9),
+            -(float(r.get("score") or r.get("confidence") or 0)),
+            -int(r.get("id") or 0),
+        ))
         return hits[:limit]
 
     def forget(self, memory_id: int) -> bool:
@@ -195,16 +232,145 @@ class CommandMemoryService:
         return ok
 
     def context_block(self, query: str, limit: int = 6) -> str:
+        return self.legendary_context(query, limit=limit)
+
+    # -- legendary memory ----------------------------------------------
+    def remember_fact(self, subject: str, predicate: str, obj: str, *, confidence: float = 0.85, source: str = "chat") -> int:
+        subject, predicate, obj = (subject or "").strip()[:120], (predicate or "").strip()[:80], (obj or "").strip()[:400]
+        if not subject or not obj:
+            return 0
+        now = _now()
+        with self._lock:
+            row = self.db.execute(
+                "SELECT id FROM legendary_facts WHERE subject=? AND predicate=? AND object=? LIMIT 1",
+                (subject, predicate, obj),
+            ).fetchone()
+            if row:
+                self.db.execute("UPDATE legendary_facts SET last_seen=?, confidence=? WHERE id=?", (now, float(confidence), row[0]))
+                self.db.commit()
+                return int(row[0])
+            cur = self.db.execute(
+                "INSERT INTO legendary_facts(subject,predicate,object,confidence,source,created_at,last_seen) VALUES(?,?,?,?,?,?,?)",
+                (subject, predicate, obj, float(confidence), source, now, now),
+            )
+            self.db.commit()
+            return int(cur.lastrowid)
+
+    def recall_facts(self, query: str, limit: int = 8) -> list[dict]:
+        tokens = [t for t in re_split_tokens(query) if len(t) >= 2][:10]
+        if not tokens:
+            return []
+        out: list[dict] = []
+        seen = set()
+        with self._lock:
+            for tok in tokens:
+                rows = self.db.execute(
+                    "SELECT id,subject,predicate,object,confidence,source,last_seen FROM legendary_facts "
+                    "WHERE subject LIKE ? OR object LIKE ? OR predicate LIKE ? "
+                    "ORDER BY last_seen DESC LIMIT ?",
+                    (f"%{tok}%", f"%{tok}%", f"%{tok}%", max(2, limit // 2)),
+                ).fetchall()
+                for r in rows:
+                    if r[0] in seen:
+                        continue
+                    seen.add(r[0])
+                    out.append(dict(
+                        id=r[0], subject=r[1], predicate=r[2], object=r[3],
+                        confidence=r[4], source=r[5], last_seen=r[6],
+                    ))
+        return out[:limit]
+
+    def update_digest(self, conversation_id: str, dialog: list[dict]) -> str:
+        """Compress recent dialog into a durable conversation digest."""
+        if not conversation_id or not dialog:
+            return ""
+        bits = []
+        for m in dialog[-12:]:
+            role = m.get("role") or "?"
+            content = re_sub_ws((m.get("content") or "")[:220])
+            if content:
+                bits.append(f"{role}: {content}")
+        digest = " | ".join(bits)[:1800]
+        with self._lock:
+            self.db.execute(
+                "INSERT INTO conversation_digests(conversation_id,digest,turn_count,updated_at) VALUES(?,?,?,?) "
+                "ON CONFLICT(conversation_id) DO UPDATE SET digest=excluded.digest, turn_count=excluded.turn_count, updated_at=excluded.updated_at",
+                (conversation_id, digest, len(dialog), _now()),
+            )
+            self.db.commit()
+        return digest
+
+    def get_digest(self, conversation_id: str) -> str:
+        if not conversation_id:
+            return ""
+        with self._lock:
+            row = self.db.execute(
+                "SELECT digest FROM conversation_digests WHERE conversation_id=?",
+                (conversation_id,),
+            ).fetchone()
+        return (row[0] if row else "") or ""
+
+    def ingest_user_turn(self, message: str, *, conversation_id: str = "") -> dict:
+        """Auto-capture desires/preferences/facts from a user turn (legendary intake)."""
+        import re
+        text = (message or "").strip()
+        stored = []
+        if not text:
+            return {"stored": 0}
+        # Desires
+        m = re.search(r"(?:أريد|اريد|I want|I need)\s+(.{8,240})", text, re.I)
+        if m:
+            desire = m.group(1).strip()
+            mid = self.remember("user_desire", desire, source="legendary_ingest", confidence=0.9)
+            self.remember_fact("user", "desires", desire, confidence=0.9, source="legendary_ingest")
+            stored.append(("user_desire", mid))
+        # Preferences
+        m = re.search(r"(?:فضّل|prefer|دائماً|always|لا ت(?:قم|فعل)|never)\s+(.{6,200})", text, re.I)
+        if m:
+            pref = m.group(1).strip()
+            mid = self.remember("preference", pref, source="legendary_ingest", confidence=0.85)
+            self.remember_fact("user", "prefers", pref, confidence=0.85, source="legendary_ingest")
+            stored.append(("preference", mid))
+        # Explicit remember requests
+        if re.search(r"\bremember\b|تذكّر|تذكر هذا|احفظ", text, re.I):
+            mid = self.remember("epic_memory", text[:500], source="legendary_ingest", confidence=0.95)
+            stored.append(("epic_memory", mid))
+        if conversation_id:
+            self.update_digest(conversation_id, self.recent_dialog(conversation_id, limit=16))
+        return {"stored": len(stored), "items": stored}
+
+    def legendary_context(self, query: str, *, conversation_id: str = "", limit: int = 10) -> str:
+        """Rich memory block: durable hits + facts + conversation digest."""
         rows = self.relevant(query, limit=limit)
-        if not rows:
+        facts = self.recall_facts(query, limit=6)
+        digest = self.get_digest(conversation_id) if conversation_id else ""
+        lines = ["## Legendary Memory"]
+        if digest:
+            lines.append(f"Thread digest: {digest[:500]}")
+        if facts:
+            lines.append("Facts:")
+            for f in facts:
+                lines.append(f"- ({f.get('subject')}) {f.get('predicate')} → {f.get('object')}")
+        if rows:
+            lines.append("Durable:")
+            for r in rows:
+                lines.append(f"- [{r.get('kind')}|id={r.get('id')}|c={r.get('confidence')}] {r.get('content')}")
+        if len(lines) == 1:
             return "(no durable memory hits)"
-        lines = []
-        for r in rows:
-            lines.append(f"- [{r.get('kind')}|id={r.get('id')}] {r.get('content')}")
         return "\n".join(lines)
 
     def close(self):
         self.db.close()
+
+
+def re_split_tokens(text: str) -> list[str]:
+    import re
+    return [t for t in re.split(r"[^\w\u0600-\u06FF]+", (text or "").lower()) if t]
+
+
+def re_sub_ws(text: str) -> str:
+    import re
+    return re.sub(r"\s+", " ", (text or "")).strip()
 
 
 def _now() -> str:
