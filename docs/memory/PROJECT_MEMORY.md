@@ -1,6 +1,6 @@
 # PFAI Project Memory
 
-Last updated: 2026-09-28 (PFAI 8.1 — unrestricted superlearn)
+Last updated: 2026-09-28 (PFAI 8.2 — master chat · code · web)
 
 ## Snapshot
 
