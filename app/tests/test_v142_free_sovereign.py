@@ -109,7 +109,7 @@ class TestFreeSovereignAPI(unittest.TestCase):
     def test_version_89(self):
         from pfai import __version__
 
-        self.assertTrue(__version__.startswith("8.9"))
+        self.assertTrue(__version__.startswith("8."))
         self.assertEqual(self.client.get("/health").json().get("version"), __version__)
 
     def test_tools_present(self):

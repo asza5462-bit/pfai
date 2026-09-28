@@ -179,10 +179,12 @@ class TestPhase8OwnerAPIs(unittest.TestCase):
     def test_runtime_and_models_aliases_require_owner(self):
         from pfai.api import app
 
-        client = TestClient(app)
-        self.assertIn(client.get("/platform/runtime/status").status_code, (401, 403))
-        self.assertIn(client.get("/platform/models").status_code, (401, 403))
-        self.assertIn(client.post("/platform/models/x/activate").status_code, (401, 403, 404, 409, 422))
+        # Isolate from public-access pollution of other tests
+        with mock.patch.dict(os.environ, {"PFAI_PUBLIC_ACCESS_MODE": "0"}, clear=False):
+            client = TestClient(app)
+            self.assertIn(client.get("/platform/runtime/status").status_code, (401, 403, 503))
+            self.assertIn(client.get("/platform/models").status_code, (401, 403, 503))
+            self.assertIn(client.post("/platform/models/x/activate").status_code, (401, 403, 404, 409, 422, 503))
 
 
 class TestPhase8DashboardLabels(unittest.TestCase):

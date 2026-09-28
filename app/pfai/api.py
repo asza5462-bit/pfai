@@ -27,6 +27,7 @@ from .quantum_core import QuantumInspiredCore, quantum_core_enabled
 from .iot_mind import IoTMind
 from .evolution_cadence import EvolutionCadence, evolution_enabled
 from .free_sovereign import FreeSovereignIntegrity
+from .smart_training import SmartTrainingController
 from .logging_setup import setup_logging
 from .command_audit import CommandAuditLog
 from .command_memory import CommandMemoryService
@@ -302,32 +303,59 @@ def _tool_smart_continuous_status():
         'note': 'Focused high-precision continuous curation; weight promotion stays owner-gated.',
     }
 
-def _tool_training_cycle_start(owner_requested: bool = True, activate_if_pass: bool = False):
-    """Start a weight-training cycle from chat. Never silent-promotes (activate_if_pass default False)."""
+def _resolve_training_base_model() -> str:
+    """Prefer env/local paths, then active runtime base, then bundled distilgpt2."""
+    for key in ('MODEL_PATH', 'MODEL_NAME', 'PFAI_LOCAL_MODEL_ID', 'PFAI_MODEL_NAME'):
+        val = (os.environ.get(key) or '').strip()
+        if val and val not in ('local', 'none', 'unset') and Path(val).exists():
+            return val
+    try:
+        active = (AUTONOMOUS_TRAINING.models.active() or {}).get('base_model')
+        if active and Path(str(active)).exists():
+            return str(active)
+        rt = (AUTONOMOUS_TRAINING.active_runtime.current() or {}).get('base_model')
+        if rt and Path(str(rt)).exists():
+            return str(rt)
+    except Exception:
+        pass
+    for fallback in ('data/models/distilgpt2', 'data/models/tiny-random-gpt2'):
+        if Path(fallback).exists():
+            return fallback
+    return 'data/models/distilgpt2'
+
+
+def _run_weight_training_cycle(*, owner_requested: bool = True, activate_if_pass: bool = False, via: str = 'chat') -> dict:
+    """Real LoRA cycle — never mock. Activation only if explicitly requested."""
     cfg = TrainingConfig(
         method='lora',
-        base_model=os.environ.get('MODEL_NAME') or 'local',
+        base_model=_resolve_training_base_model(),
         allow_mock_backend=False,
         max_runtime_seconds=AUTONOMOUS_TRAINING.triggers.max_runtime,
+        batch_size=int(os.environ.get('TRAINING_BATCH_SIZE') or 1),
+        epochs=float(os.environ.get('TRAINING_EPOCHS') or 1),
+        learning_rate=float(os.environ.get('TRAINING_LR') or 2e-5),
     )
-    result = AUTONOMOUS_TRAINING.run_cycle(
+    return AUTONOMOUS_TRAINING.run_cycle(
         owner_requested=bool(owner_requested),
         explicit_retrain=True,
         activate_if_pass=bool(activate_if_pass),
         config=cfg,
-        request={'owner': 'chat', 'via': 'training_cycle_start'},
+        request={'owner': 'chat', 'via': via},
     )
-    return {
-        'ok': bool(result.get('ok')),
-        'status': result.get('status'),
-        'actual_training_executed': bool(result.get('actual_training_executed')),
-        'model_activated': bool(result.get('model_activated')),
-        'can_start_from_chat': True,
-        'activate_if_pass': bool(activate_if_pass),
-        'reason': result.get('reason') or result.get('error') or result.get('status'),
-        'job_id': (result.get('job') or {}).get('job_id'),
-        'note': 'cycle start from chat; activation still explicit unless activate_if_pass=true',
-    }
+
+def _tool_training_cycle_start(owner_requested: bool = True, activate_if_pass: bool = False):
+    """Start a REAL weight-training cycle from chat (write path — not read-only)."""
+    return SMART_TRAINING.start(
+        owner_requested=bool(owner_requested),
+        activate_if_pass=bool(activate_if_pass),
+        force_prepare=True,
+    )
+
+def _tool_smart_training_status():
+    return {**SMART_TRAINING.status(), **SMART_TRAINING.diagnose()}
+
+def _tool_smart_training_start(activate_if_pass: bool = False):
+    return SMART_TRAINING.start(owner_requested=True, activate_if_pass=bool(activate_if_pass), force_prepare=True)
 
 def _tool_run_sandbox(code: str = '', test_code: str = ''):
     r = CODING_SANDBOX.evaluate(code or '', test_code or '')
@@ -538,7 +566,7 @@ def _tool_learner_snapshot(owner: str = 'owner'):
     }
 
 def _tool_training_eligibility():
-    """Next-training eligibility (read). Cycle start is a separate tool."""
+    """Next-training eligibility. Write path = training_cycle_start / smart_training_start."""
     stats = AUTONOMOUS_TRAINING.learning_statistics()
     elig = stats.get('next_training_eligibility') or {}
     return {
@@ -550,7 +578,10 @@ def _tool_training_eligibility():
         'dataset_version': stats.get('dataset_version'),
         'trained': False,
         'can_start_from_chat': True,
-        'note': 'eligible snapshot; call training_cycle_start to begin a cycle (no silent activate)',
+        'write_path': True,
+        'read_only': False,
+        'next_write_tool': 'smart_training_start',
+        'note': 'Not read-only: call smart_training_start / training_cycle_start to run REAL LoRA (no silent activate)',
     }
 
 def _tool_training_control_status():
@@ -603,7 +634,9 @@ CODING_TOOL_SPECS = list(DEFAULT_TOOLS) + [
     ToolSpec('training_control_status', 'Read training control-center status', 'read', False, {}),
     ToolSpec('continuous_tick', 'Run one continuous-learning cycle now (no promote)', 'write', False, {}),
     ToolSpec('smart_continuous_status', 'Focused high-precision continuous training status', 'read', False, {}),
-    ToolSpec('training_cycle_start', 'Start weight-training cycle from chat (activate_if_pass default false)', 'write', False, {'owner_requested': 'bool?', 'activate_if_pass': 'bool?'}),
+    ToolSpec('training_cycle_start', 'START real weight-training cycle from chat (write — not read-only)', 'write', False, {'owner_requested': 'bool?', 'activate_if_pass': 'bool?'}),
+    ToolSpec('smart_training_status', 'Smart real-training diagnosis (write-path ready)', 'read', False, {}),
+    ToolSpec('smart_training_start', 'Prepare + start REAL LoRA training cycle', 'write', False, {'activate_if_pass': 'bool?'}),
     ToolSpec('coding_hint', 'Progressive coding hint with diagnostics', 'read', False, {'owner': 'string?', 'track_id': 'string?', 'lesson_id': 'string?', 'code': 'string?', 'stderr': 'string?'}),
     ToolSpec('coding_exercise_submit', 'Submit academy exercise code for sandbox grading', 'write', False, {'owner': 'string?', 'track_id': 'string', 'lesson_id': 'string', 'code': 'string'}),
     ToolSpec('web_status', 'Web fabric readiness / providers', 'read', False, {}),
@@ -659,6 +692,8 @@ TOOL_ROUTER = ToolRouter({
     'continuous_stop': lambda: CONTINUOUS.stop('stopped via command chat'),
     'continuous_tick': _tool_continuous_tick,
     'training_cycle_start': _tool_training_cycle_start,
+    'smart_training_status': _tool_smart_training_status,
+    'smart_training_start': _tool_smart_training_start,
     'remember_knowledge': _tool_remember_knowledge,
     'forget_memory': _tool_forget_memory,
     'correct_memory': _tool_correct_memory,
@@ -793,6 +828,24 @@ def _push_curated_to_experience(rows: list) -> dict:
 
 CONTINUOUS.bind_experience_ingest(_pull_accepted_experience_rows)
 CONTINUOUS.bind_experience_push(_push_curated_to_experience)
+
+def _smart_training_eligibility() -> dict:
+    stats = AUTONOMOUS_TRAINING.learning_statistics()
+    return stats.get('next_training_eligibility') or {}
+
+def _smart_training_run_cycle(*, owner_requested: bool = True, activate_if_pass: bool = False) -> dict:
+    return _run_weight_training_cycle(
+        owner_requested=owner_requested,
+        activate_if_pass=activate_if_pass,
+        via='smart_training',
+    )
+
+SMART_TRAINING = SmartTrainingController(
+    eligibility_fn=_smart_training_eligibility,
+    run_cycle_fn=_smart_training_run_cycle,
+    continuous_tick_fn=lambda: CONTINUOUS.tick_once() if is_continuous_enabled() else {'ok': True, 'skipped': True},
+    experience_push_fn=lambda: _push_curated_to_experience(CONTINUOUS.pending_examples(limit=24)),
+)
 
 
 def _pfai_startup_continuous() -> None:
@@ -1439,9 +1492,27 @@ def _evolve_hour_with_sovereign() -> dict:
         sov = FREE_SOVEREIGN.sovereign_cycle(deep_code=True)
     except Exception as exc:
         sov = {'ok': False, 'error': str(exc)[:160]}
-    return {'ok': bool((base or {}).get('ok')) and bool(sov.get('ok')), 'autonomy': base, 'sovereign': {
-        'ok': sov.get('ok'), 'improved': sov.get('improved'), 'after': sov.get('after'),
-    }}
+    train_out = {'ok': True, 'skipped': True}
+    auto_train = (os.environ.get('PFAI_AUTO_TRAIN_WHEN_ELIGIBLE') or '').strip().lower() in {'1', 'true', 'on', 'yes'}
+    if auto_train:
+        try:
+            # Owner-style start: prepare + real cycle. Orchestrator enforces honesty/gates.
+            # activate_if_pass stays False — never silent weight promote.
+            train_out = SMART_TRAINING.start(owner_requested=True, activate_if_pass=False, force_prepare=True)
+        except Exception as exc:
+            train_out = {'ok': False, 'error': str(exc)[:160]}
+    return {
+        'ok': bool((base or {}).get('ok')) and bool(sov.get('ok')),
+        'autonomy': base,
+        'sovereign': {'ok': sov.get('ok'), 'improved': sov.get('improved'), 'after': sov.get('after')},
+        'smart_training': {
+            'ok': train_out.get('ok'),
+            'executed': (train_out.get('cycle') or {}).get('actual_training_executed'),
+            'status': (train_out.get('cycle') or {}).get('status') or train_out.get('status'),
+            'skipped': train_out.get('skipped'),
+            'auto_promote': False,
+        },
+    }
 
 EVOLUTION.hour_fn = _evolve_hour_with_sovereign
 
@@ -4240,15 +4311,26 @@ def chat_message(x: ChatMessage, owner: str = Depends(access_public)):
             'coding_teach', 'coding_tracks', 'coding_assess', 'coding_progress',
             'coding_projects', 'coding_knowledge', 'coding_next_lesson', 'coding_review',
             'learner_snapshot', 'training_eligibility', 'training_control_status', 'run_sandbox',
+            'training_cycle_start', 'smart_training_start', 'smart_training_status',
         }
         if any((t.get('tool') in edu_tools) for t in tools if isinstance(t, dict)):
             result['learning_hub'] = _chat_learning_hub(owner)
+            wrote = any(
+                (t.get('tool') in {'training_cycle_start', 'smart_training_start'})
+                for t in tools if isinstance(t, dict)
+            )
             result.setdefault('learning_context', {
                 'intent': 'tools',
-                'training_auto': False,
-                'can_start_training_from_chat': False,
+                'training_auto': bool(os.environ.get('PFAI_AUTO_TRAIN_WHEN_ELIGIBLE', '').strip() in {'1', 'true', 'on'}),
+                'can_start_training_from_chat': True,
+                'write_path': True,
+                'read_only': False,
                 'tools': [t.get('tool') for t in tools if isinstance(t, dict) and t.get('tool') in edu_tools],
-                'note': 'Education/training status via read-only tools — never auto-train from chat',
+                'wrote_training': bool(wrote),
+                'note': (
+                    'Training write-path available from chat (training_cycle_start / smart_training_start). '
+                    'Activation stays explicit.'
+                ),
             })
     return result
 

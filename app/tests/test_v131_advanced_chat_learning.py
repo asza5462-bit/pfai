@@ -34,16 +34,17 @@ class TestLearningContextHelper(unittest.TestCase):
 
 
 class TestMockTrainingRouting(unittest.TestCase):
-    def test_eligibility_routes_to_read_only_training_tools(self):
+    def test_eligibility_routes_to_training_status_and_start(self):
         m = MockCommandProvider()
         allowed = [
             "training_eligibility", "training_control_status", "continuous_status",
             "continuous_start", "coding_teach", "learner_snapshot", "coding_progress",
-            "coding_next_lesson", "system_status",
+            "coding_next_lesson", "system_status", "smart_training_status", "smart_training_start",
         ]
         tools = {t["tool"] for t in m.plan_tools("ما هي أهلية التدريب الآن؟", allowed)}
         self.assertIn("training_eligibility", tools)
         self.assertIn("training_control_status", tools)
+        self.assertIn("smart_training_start", tools)  # write path available from eligibility turn
         self.assertNotIn("continuous_start", tools)
 
     def test_learner_snapshot_routing(self):
@@ -100,7 +101,7 @@ class TestAdvancedChatAPI(unittest.TestCase):
         os.environ.pop("PFAI_OWNER_USERNAME", None)
         os.environ.pop("PFAI_OWNER_PASSWORD_HASH", None)
 
-    def test_chat_tools_include_education_and_training_readonly(self):
+    def test_chat_tools_include_education_and_training_write_path(self):
         r = self.client.get("/chat/tools", headers=self.h)
         self.assertEqual(r.status_code, 200)
         names = {t["name"] for t in r.json()["tools"]}
@@ -108,19 +109,23 @@ class TestAdvancedChatAPI(unittest.TestCase):
             "training_eligibility", "training_control_status",
             "learner_snapshot", "coding_next_lesson",
             "coding_teach", "coding_progress",
+            "smart_training_start", "smart_training_status",
         ):
             self.assertIn(n, names)
-        # Weight activation / promote must not be chat tools; cycle start is allowed
+        # Weight activation / promote must not be chat tools; cycle start is write path
         self.assertIn("training_cycle_start", names)
         self.assertIn("continuous_tick", names)
         for banned in ("activate_model", "platform_training_cycle", "training_promote"):
             self.assertNotIn(banned, names)
 
-    def test_training_tools_are_read_only_no_approval(self):
+    def test_status_tools_read_and_start_tools_write(self):
         catalog = {t["name"]: t for t in self.TOOL_ROUTER.catalog()}
-        for n in ("training_eligibility", "training_control_status", "learner_snapshot"):
+        for n in ("training_eligibility", "training_control_status", "learner_snapshot", "smart_training_status"):
             self.assertEqual(catalog[n]["risk"], "read")
             self.assertFalse(catalog[n]["requires_approval"])
+        for n in ("training_cycle_start", "smart_training_start"):
+            self.assertEqual(catalog[n]["risk"], "write")
+            self.assertFalse(catalog[n]["requires_approval"])  # open mode — no approval friction
 
     def test_chat_teach_returns_learning_context_and_hub(self):
         r = self.client.post("/chat/message", headers=self.h, json={"message": "علمني Python"})

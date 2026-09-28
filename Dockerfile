@@ -7,7 +7,11 @@ ENV PYTHONDONTWRITEBYTECODE=1 \
     PFAI_LOG_LEVEL=INFO
 WORKDIR /app
 COPY app/requirements.txt /app/requirements.txt
-RUN pip install --no-cache-dir -r /app/requirements.txt
+COPY app/requirements-training.txt /app/requirements-training.txt
+# Core API + real CPU LoRA training stack (torch CPU wheel — not a mock backend).
+RUN pip install --no-cache-dir -r /app/requirements.txt \
+ && pip install --no-cache-dir --extra-index-url https://download.pytorch.org/whl/cpu \
+      -r /app/requirements-training.txt
 COPY app/ /app/
 # Base open-weight (~328MB) is not stored in git (GitHub file limit). Fetch at build.
 RUN python - <<'PY'

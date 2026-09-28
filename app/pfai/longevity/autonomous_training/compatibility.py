@@ -65,9 +65,19 @@ class ModelCompatibilityChecker:
         if probe.disk_free_gb is not None and probe.disk_free_gb < min_disk:
             reasons.append(CompatibilityBlockReason.INSUFFICIENT_DISK)
 
-        # Model existence / format
+        # Model existence / format — fall back to bundled base only for empty/placeholder
         path_env = (os.environ.get("MODEL_PATH") or "").strip()
         base = model_path or path_env or config.base_model or os.environ.get("MODEL_NAME") or ""
+        if not base or base in ("local", "none", "unset"):
+            for fallback in (
+                path_env,
+                (os.environ.get("PFAI_LOCAL_MODEL_ID") or "").strip(),
+                "data/models/distilgpt2",
+                "data/models/tiny-random-gpt2",
+            ):
+                if fallback and fallback not in ("local", "none", "unset") and Path(fallback).exists():
+                    base = fallback
+                    break
         details["base_model"] = base
         details["model_revision"] = os.environ.get("MODEL_REVISION") or config.extra.get("revision")
         details["model_provider"] = os.environ.get("MODEL_PROVIDER") or os.environ.get("PFAI_MODEL_PROVIDER") or "local_open_weight"

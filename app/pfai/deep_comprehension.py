@@ -77,10 +77,16 @@ def comprehend(
         intent = "research"
         goals.append("grounded_web_facts")
         strategy = "cite_then_synthesize"
-    elif re.search(r"تدريب|training|continuous|تعلم\s*مستمر", text, re.I):
+    elif re.search(r"تدريب|training|continuous|تعلم\s*مستمر|lora|fine.?tun", text, re.I):
         intent = "train_learn"
+        goals.append("real_weight_training")
         goals.append("continuous_capability")
-        strategy = "status_then_next_step"
+        strategy = "start_real_training"
+        latent = (
+            "تشغيل تدريب LoRA حقيقي من الشات — ليس قراءة فقط وليس وهماً"
+            if ar else
+            "run real LoRA training from chat — not read-only, not simulated"
+        )
     elif re.search(r"ذاكرة|memory|تذكر|remember|افهم|فهم", text, re.I):
         intent = "memory_mind"
         goals.append("legendary_recall")
@@ -165,7 +171,7 @@ def _default_latent(intent: str, lang: str) -> str:
         "self_evolve": ("ذكاء يطوّر نفسه بتحقق حقيقي", "self-improving intelligence with real verification"),
         "teach": ("تعلّم فعّال بخطوات واضحة", "effective learning with clear steps"),
         "research": ("حقائق موثوقة مع مصادر", "reliable facts with sources"),
-        "train_learn": ("تعلّم/تدريب مستمر دقيق", "precise continuous learning/training"),
+        "train_learn": ("تدريب أوزان حقيقي LoRA من الشات", "real LoRA weight training from chat"),
         "memory_mind": ("فهم عميق + ذاكرة لا تنسى المهم", "deep understanding + memory that keeps what matters"),
         "ops_status": ("صورة تشغيلية دقيقة الآن", "precise live operational picture"),
         "followup": ("إكمال الطلب السابق بدقة أعلى", "continue prior request with higher precision"),

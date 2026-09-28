@@ -54,17 +54,32 @@ class MockCommandProvider(ModelProvider):
             add("evolution_status")
             add("quantum_status")
         if re.search(
+            r"ابدأ\s*التدريب|شغ[ّل]\s*التدريب|درّب|درب\s*الان|run\s*training|"
+            r"training_cycle|smart_training|تدريب\s*حقيقي|تدريب\s*فعلي|"
+            r"ليس\s*وهم|بلا\s*حدود.*تدريب|تدريب.*بلا\s*حدود",
+            text + ar,
+            re.I,
+        ):
+            add("smart_training_start")
+            add("training_cycle_start")
+            add("smart_training_status")
+            add("training_eligibility")
+        elif re.search(
             r"eligib|أهلية|حالة\s*التدريب|training\s*status|جاهزية\s*التدريب|"
             r"هل\s*(التدريب|النموذج)|next\s*training|can\s*we\s*train|متى\s*نتدرب",
             text + ar,
             re.I,
         ):
             add("training_eligibility")
+            add("smart_training_status")
             add("training_control_status")
+            add("smart_training_start")
         elif re.search(r"continuous|تعلم\s*مستمر|continuous\s*learning", text + ar):
             add("continuous_status")
-        elif re.search(r"\btraining\b|تدريب\s*النموذج|تدريب\s*النماذج", text + ar):
-            add("training_control_status")
+        elif re.search(r"\btraining\b|تدريب\s*النموذج|تدريب\s*النماذج|التدريب", text + ar):
+            add("smart_training_start")
+            add("training_cycle_start")
+            add("smart_training_status")
             add("training_eligibility")
         if re.search(r"health|صح[ةه]|فحص.*صح", text + ar):
             add("health_check")
@@ -162,8 +177,9 @@ class MockCommandProvider(ModelProvider):
             text + ar,
             re.I,
         ):
-            add("training_eligibility")
+            add("smart_training_start")
             add("training_cycle_start")
+            add("training_eligibility")
         if re.search(r"stop continuous|أوقف.*تعلم|ايقاف.*تعلم", text + ar):
             add("continuous_stop")
         if re.search(r"resume continuous|استأنف.*تعلم", text + ar):
@@ -340,6 +356,14 @@ class MockCommandProvider(ModelProvider):
                     "alive": res.get("alive"), "minute": res.get("minute_ticks"),
                     "hour": res.get("hour_ticks"), "day": res.get("day_ticks"),
                 }, 180))
+            elif name in {"smart_training_start", "training_cycle_start"} and isinstance(res, dict):
+                cy = res.get("cycle") or res
+                insights.append(_brief({
+                    "executed": cy.get("actual_training_executed") or res.get("actual_training_executed"),
+                    "status": cy.get("status") or res.get("status"),
+                    "reason": cy.get("reason") or res.get("reason"),
+                    "read_only": res.get("read_only"),
+                }, 220))
             elif name in {"free_sovereign_cycle", "free_sovereign_repair", "free_sovereign_audit"} and isinstance(res, dict):
                 insights.append(_brief({
                     "ok": res.get("ok"), "improved": res.get("improved"),
@@ -390,7 +414,7 @@ class MockCommandProvider(ModelProvider):
             "self_evolve": ("شغّل التطوير الذاتي المتقدم الآن.", "Run advanced self-develop now."),
             "teach": ("ابدأ درساً أو سلّم تمريناً للتحقق.", "Start a lesson or submit an exercise to verify."),
             "research": ("حدّد سؤالاً أدق للبحث الحي.", "Narrow the live research question."),
-            "train_learn": ("راجع أهلية التدريب ثم ابدأ دورة عند الجاهزية.", "Check training eligibility then start a cycle when ready."),
+            "train_learn": ("شغّل smart_training_start الآن — تدريب حقيقي LoRA من الشات.", "Run smart_training_start now — real LoRA from chat."),
             "memory_mind": ("قل ما تريدني أن أتذكره للأبد.", "Tell me what to remember forever."),
             "ops_status": ("اطلب التحكم الكامل أو نبضة العقل.", "Ask for master control or a brain pulse."),
         }.get(intent, ("قل الخطوة التالية التي تريدها بدقة.", "State the exact next step you want."))

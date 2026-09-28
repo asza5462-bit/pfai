@@ -1,4 +1,4 @@
-/* PFAI Command Chat — Advanced Brain UI linked to Academy + Training (read-only) */
+/* PFAI Command Chat — Advanced Brain UI linked to Academy + REAL Training (write-path) */
 (function () {
   let conversationId = localStorage.getItem('pfai_chat_conversation') || null;
   let busy = false;
@@ -71,7 +71,11 @@
     if (ctx.track_id) bits.push(`track: ${ctx.track_id}`);
     if (ctx.lesson_title || ctx.lesson_id) bits.push(`${ctx.lesson_title || ctx.lesson_id}`);
     if (ctx.assessment_count) bits.push(`assessment: ${ctx.assessment_count}`);
-    bits.push(lang === 'en' ? 'training auto: off' : 'تدريب تلقائي: متوقف');
+    if (ctx.can_start_training_from_chat !== false) {
+      bits.push(lang === 'en' ? 'training: writable from chat' : 'تدريب: قابل للتشغيل من الشات');
+    }
+    if (ctx.training_auto) bits.push(lang === 'en' ? 'auto-train when eligible' : 'تدريب تلقائي عند الجاهزية');
+    if (ctx.read_only === false || ctx.write_path) bits.push(lang === 'en' ? 'not read-only' : 'ليس قراءة فقط');
     return `<div class="chat-learn-strip">${bits.map(b => `<span class="chat-chip">${esc(String(b))}</span>`).join('')}</div>`;
   }
 
@@ -82,11 +86,16 @@
       if (!t || !t.ok) return;
       const name = t.tool || '';
       const res = t.result || {};
-      if (name === 'training_eligibility' || (res.eligibility && res.can_start_from_chat === false && 'eligible' in res)) {
+      if (name === 'training_eligibility' || name === 'smart_training_status' || (res.eligibility && 'eligible' in res)) {
         const elig = res.eligible;
         const reason = (res.eligibility && (res.eligibility.reason || (res.eligibility.reasons || [])[0])) || res.reason || '';
         chips.push(`<span class="chat-chip ${elig ? 'ok' : 'warn'}">${lang === 'en' ? 'Training eligible' : 'أهلية التدريب'}: ${elig ? 'YES' : 'NO'}${reason ? ' · ' + esc(String(reason).slice(0, 80)) : ''}</span>`);
-        chips.push(`<span class="chat-chip muted">${lang === 'en' ? 'Cannot start from chat' : 'لا يبدأ من الشات'}</span>`);
+        chips.push(`<span class="chat-chip ok">${lang === 'en' ? 'Start from chat: YES' : 'يبدأ من الشات: نعم'}</span>`);
+      }
+      if (name === 'training_cycle_start' || name === 'smart_training_start') {
+        const ex = !!(res.actual_training_executed || (res.cycle && res.cycle.actual_training_executed));
+        const st = (res.cycle && res.cycle.status) || res.status || '';
+        chips.push(`<span class="chat-chip ${ex ? 'ok' : 'warn'}">${lang === 'en' ? 'REAL train' : 'تدريب حقيقي'}: ${ex ? 'EXECUTED' : esc(String(st).slice(0, 48))}</span>`);
       }
       if (name === 'training_control_status') {
         chips.push(`<span class="chat-chip">control: ${esc(String(res.paused === true ? 'paused' : (res.autonomous_enabled ? 'autonomous' : 'manual')))}</span>`);

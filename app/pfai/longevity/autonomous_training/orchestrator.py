@@ -1073,15 +1073,29 @@ class AutonomousTrainingOrchestrator:
         if not self.autonomous_enabled and not owner_requested and not explicit_retrain:
             return {"ok": False, "status": "AUTONOMOUS_DISABLED", "error": "autonomous_training_disabled"}
 
+        _base = (
+            os.environ.get("MODEL_PATH")
+            or os.environ.get("MODEL_NAME")
+            or os.environ.get("PFAI_LOCAL_MODEL_ID")
+            or os.environ.get("PFAI_MODEL_NAME")
+            or ""
+        ).strip()
+        if not _base or _base in ("local", "none", "unset") or not Path(_base).exists():
+            for _fb in (
+                (self.models.active() or {}).get("base_model"),
+                (self.active_runtime.current() or {}).get("base_model"),
+                "data/models/distilgpt2",
+                "data/models/tiny-random-gpt2",
+            ):
+                if _fb and Path(str(_fb)).exists():
+                    _base = str(_fb)
+                    break
+            else:
+                _base = "data/models/distilgpt2"
         cfg = config or TrainingConfig(
             max_runtime_seconds=self.triggers.max_runtime,
             allow_mock_backend=self.allow_mock_backend,
-            base_model=(
-                os.environ.get("MODEL_PATH")
-                or os.environ.get("MODEL_NAME")
-                or os.environ.get("PFAI_MODEL_NAME")
-                or "local"
-            ),
+            base_model=_base,
             method=os.environ.get("TRAINING_METHOD") or "lora",
         )
         cfg.allow_mock_backend = bool(cfg.allow_mock_backend or self.allow_mock_backend)

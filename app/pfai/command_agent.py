@@ -68,7 +68,7 @@ class CommandAgent:
         self.memory.add_message(cid, "user", message, status="completed")
 
         # Delegate coding-education intents to Coding Academy brain when wired.
-        # Training eligibility / control status stay on ToolRouter (read-only).
+        # Training: eligibility is read; training_cycle_start / smart_training_start are write.
         coding_agent = getattr(self, "coding_agent", None)
         if (
             coding_agent is not None
@@ -259,7 +259,8 @@ class CommandAgent:
         "continuous_status", "smart_continuous_status", "deployments_list", "knowledge_search", "memory_search",
         "recovery_verify", "research_verify", "regression_pending", "chat_audit_recent",
         "propose_improvement", "learner_snapshot", "training_eligibility",
-        "training_control_status", "coding_tracks", "coding_progress", "coding_projects",
+        "training_control_status", "smart_training_status",
+        "coding_tracks", "coding_progress", "coding_projects",
         "coding_knowledge", "coding_next_lesson", "web_status", "app_control_status",
         "autonomy_status", "advanced_status", "advanced_awareness", "self_check_run",
         "unified_brain_status", "quantum_status", "quantum_pulse", "iot_status", "iot_understand",
@@ -524,7 +525,7 @@ def _budget_plan(planned: list[dict], *, max_tools: int = 3) -> list[dict]:
         pulse = next(p for p in planned if p.get("tool") == "unified_brain_pulse")
         companion_ok = {
             "advanced_self_develop", "self_improve_tick", "app_control_status",
-            "training_cycle_start", "continuous_tick", "continuous_start",
+            "training_cycle_start", "smart_training_start", "continuous_tick", "continuous_start",
             "quantum_pulse", "iot_understand", "evolution_tick",
             "free_sovereign_cycle", "free_sovereign_repair", "self_heal_cycle",
             "self_improve_tick", "advanced_self_develop",

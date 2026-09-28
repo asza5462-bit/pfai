@@ -43,6 +43,24 @@ services:
         value: "1"
       - key: PFAI_EVOLVE_MINUTE_SECONDS
         value: "60"
+      - key: TRAINING_ALLOW_CPU
+        value: "true"
+      - key: TRAINING_MIN_FREE_MEMORY
+        value: "0.5"
+      - key: TRAINING_MAX_RAM_GB
+        value: "8"
+      - key: PFAI_AUTO_TRAIN_WHEN_ELIGIBLE
+        value: "1"
+      - key: MODEL_PATH
+        value: "data/models/distilgpt2"
+      - key: TRAINING_METHOD
+        value: "lora"
+      - key: TRAINING_BATCH_SIZE
+        value: "1"
+      - key: TRAINING_EPOCHS
+        value: "1"
+      - key: TRAINING_MAX_STEPS
+        value: "60"
       - key: PFAI_WEB_ALLOW_NETWORK
         value: "1"
       - key: PFAI_WEB_SEARCH_PROVIDER

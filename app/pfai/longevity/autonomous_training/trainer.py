@@ -119,6 +119,19 @@ class MockModelTrainer(ModelTrainer):
         )
 
 
+def _default_local_base_model() -> str:
+    """Bundled open-weight base used when MODEL_PATH/NAME are unset or 'local'."""
+    for candidate in (
+        (os.environ.get("MODEL_PATH") or "").strip(),
+        (os.environ.get("PFAI_LOCAL_MODEL_ID") or "").strip(),
+        "data/models/distilgpt2",
+        "data/models/tiny-random-gpt2",
+    ):
+        if candidate and candidate not in ("local", "none", "unset") and Path(candidate).exists():
+            return candidate
+    return "data/models/distilgpt2"
+
+
 def _resolve_model_source(config: TrainingConfig) -> dict[str, Any]:
     """Resolve local path or hub id; never download without explicit approval."""
     path_env = (os.environ.get("MODEL_PATH") or "").strip()
@@ -139,7 +152,14 @@ def _resolve_model_source(config: TrainingConfig) -> dict[str, Any]:
         or "local_open_weight"
     )
     download_ok = (os.environ.get("MODEL_DOWNLOAD_APPROVED") or "").lower() in ("1", "true", "yes")
+    # Treat placeholder 'local' as "use bundled open-weight base"
+    if not name or name in ("local", "none", "unset"):
+        name = _default_local_base_model()
     local_candidate = path_env or (name if name and Path(name).exists() else "")
+    if not local_candidate:
+        fallback = _default_local_base_model()
+        if Path(fallback).exists():
+            local_candidate = fallback
     if local_candidate and Path(local_candidate).exists():
         return {
             "ok": True,
@@ -154,7 +174,7 @@ def _resolve_model_source(config: TrainingConfig) -> dict[str, Any]:
         return {
             "ok": False,
             "reason": "NO_COMPATIBLE_MODEL",
-            "detail": "MODEL_NAME/MODEL_PATH unset or placeholder",
+            "detail": "MODEL_NAME/MODEL_PATH unset and bundled base missing",
             "license": license_meta,
             "provider": provider,
         }
