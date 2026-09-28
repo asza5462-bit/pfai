@@ -112,3 +112,18 @@ See `app/.env.example` and `docs/PHASE_23_WEB_FABRIC.md`. Credentials must come 
 - Local commit only after validation
 
 **PHASE_24_ALLOWED=false**
+
+
+## Read-only verification re-run
+
+Verified at 2026-09-28T02:10:13.338115+00:00 on commit `9ff704f` (+ local production_config endpoint).
+
+- FULL_TESTS re-executed: 812 passed, 0 failed, 1 skipped (total 813)
+- E2E API/security (phase23): passed
+- Local uvicorn health: OK on :8010; frontend `/` and `/assets/chat.js` = 200
+- Docker socket: permission denied in this environment (image build not executed here)
+- Public hosting: Render/Docker artifacts present; account authorization required
+- WEB: implemented=yes, configured=no, executable=no (NOT_CONFIGURED)
+- DDG keyless probe: adapters load READY but returned 0 results — not claimed as live research success
+- Backup: `/agent/pfai/backups/pfai-pre-production-20260928T020813Z.tar.gz`
+- REMOTE_PUSH=no; DEPLOYMENT=no (public); PHASE_24_STARTED=no

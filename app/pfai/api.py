@@ -1418,6 +1418,13 @@ def mcp_capabilities(owner: str = Depends(require_owner)):
         return {'ok': False, 'error': 'mcp_registry_unavailable'}
     return reg.discover_capabilities()
 
+@app.get('/platform/config/status')
+def production_config_status(owner: str = Depends(require_owner)):
+    """Capability + missing one-time owner actions — never secret values."""
+    _ = owner
+    from .elite.production_config import detect_production_config
+    return detect_production_config()
+
 @app.get('/runtime/status')
 def runtime_status(owner: str = Depends(require_owner)):
     _ = owner
