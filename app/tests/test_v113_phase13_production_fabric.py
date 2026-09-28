@@ -54,7 +54,7 @@ class TestEmailProvidersPhase13(unittest.TestCase):
         self.assertFalse(hasattr(oa, "request_otp"))
         st = oa.public_status()
         self.assertNotIn("email_otp", st["auth_methods"])
-        self.assertIn("passcode", st["auth_methods"])
+        self.assertIn("password", st["auth_methods"])
         self.assertEqual(st.get("email_otp"), "REMOVED")
         self.assertNotIn("email_config", st)
         login = oa.login("owner@example.com", "StrongPassw0rd!", client_key="t13")

@@ -224,7 +224,7 @@ class TestPhase7API(unittest.TestCase):
         st = self.client.get("/owner/status")
         self.assertEqual(st.status_code, 200)
         self.assertNotIn("email_otp", st.json().get("auth_methods", []))
-        self.assertIn("passcode", st.json().get("auth_methods", []))
+        self.assertIn("password", st.json().get("auth_methods", []))
         self.assertNotIn("otp_code", json.dumps(st.json()).lower())
 
     def test_schema_target_5(self):

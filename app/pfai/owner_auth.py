@@ -1,12 +1,13 @@
-"""Owner authentication: setup, sessions, rate-limit, lockout, passcode login.
+"""Owner authentication: setup, sessions, rate-limit, lockout, email+password.
 
 Integrates with OwnerControl — does not replace it.
-Never stores or logs plaintext passcodes. Never returns hashes to clients
+Never stores or logs plaintext passwords. Never returns hashes to clients
 except via operator-side tooling that hashes stdin locally.
 
-Email OTP delivery was permanently removed. Owner auth is passcode + session
-cookie (+ optional X-Owner-Secret header for API clients).
+Email OTP delivery was permanently removed. Owner auth is email + password
+(+ HttpOnly session cookie, optional X-Owner-Secret header for API clients).
 """
+
 from __future__ import annotations
 
 import hashlib
@@ -67,12 +68,12 @@ class OwnerAuthService:
             "session_ttl_seconds": self.session_ttl,
             "session_abs_max_seconds": self.session_abs_max,
             "auth_methods": [
-                "passcode",
+                "password",
                 "session_cookie",
                 "x_owner_secret_header",
             ],
             "email_otp": "REMOVED",
-            "note": "Passcodes are never returned. Prefer a new production passcode before any deploy. Email OTP is permanently removed.",
+            "note": "Passwords are never returned. Configure PFAI_OWNER_EMAIL + PFAI_OWNER_SECRET_HASH. Email OTP is permanently removed.",
         }
 
     def setup_required(self) -> bool:

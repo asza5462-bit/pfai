@@ -2,14 +2,16 @@
 
 PFAI owner privileges are **server-side only**. The Dashboard never stores the owner passcode.
 
-**Email OTP was permanently removed.** Owner login is passcode + HttpOnly session only.
+**Email OTP was permanently removed.** Owner login is **email + password** + HttpOnly session only.
 
 ## Environment variables (required for production)
 
+Set these in the host secret store (e.g. Render Environment Variables). Never commit values.
+
 | Variable | Purpose |
 |---|---|
-| `PFAI_OWNER_EMAIL` | Sole authorized owner identity |
-| `PFAI_OWNER_SECRET_HASH` | Passcode hash only — **never** the plaintext passcode |
+| `PFAI_OWNER_EMAIL` | Sole authorized owner email (server-side allowlist) |
+| `PFAI_OWNER_SECRET_HASH` | Password hash only — **never** the plaintext password |
 | `PFAI_ENV` | Set to `production` (or `prod`) on real hosts |
 
 Optional:
@@ -39,18 +41,15 @@ Local development may use HTTP when `PFAI_ENV` is unset/non-production and (opti
 ```bash
 cd app
 python -m pfai.hash_owner_secret
-# enter passcode (hidden) → prints pbkdf2_sha256$... hash
-export PFAI_OWNER_EMAIL='owner@example.com'
-export PFAI_OWNER_SECRET_HASH='(paste hash here)'
+# enter password (hidden) → prints pbkdf2_sha256$... hash
+# Set on Render (or local env):
+#   PFAI_OWNER_EMAIL=<owner email>
+#   PFAI_OWNER_SECRET_HASH=<paste hash only>
 ```
 
-Legacy SHA-256 hex hashes are still accepted for existing environments:
+Legacy SHA-256 hex hashes are still accepted for existing environments, but new setups should use PBKDF2 via `hash_owner_secret`.
 
-```bash
-python3 -c 'import hashlib; print(hashlib.sha256(b"YOUR_NEW_SECRET").hexdigest())'
-```
-
-**Never** put the plaintext passcode in Git, README, frontend, tests, logs, or chat.
+**Never** put the plaintext password or hash in Git, README, frontend, tests, logs, or chat.
 
 ## First-time setup (local / fresh volume)
 
@@ -65,7 +64,7 @@ Production hosts should still set `PFAI_OWNER_EMAIL` / `PFAI_OWNER_SECRET_HASH` 
 
 ## Login / logout / session
 
-- `POST /owner/login` `{ "email", "passcode" }` → HttpOnly session cookie `pfai_owner_session` (SameSite=Strict; Secure on HTTPS / always in production)
+- `POST /owner/login` `{ "email", "password" }` → HttpOnly session cookie `pfai_owner_session` (SameSite=Strict; Secure on HTTPS / always in production). Legacy field `passcode` is still accepted as an alias.
 - `POST /owner/logout` → clears session
 - `GET /owner/status` → public flags (`setup_required`, `authenticated`, `auth_methods`) — no secrets; `email_otp=REMOVED`
 - Owner APIs also accept legacy `X-Owner-Secret` for automation (verified server-side)

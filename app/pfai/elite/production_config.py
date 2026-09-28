@@ -31,7 +31,7 @@ def detect_production_config() -> dict[str, Any]:
         missing.append(
             {
                 "id": "OWNER_AUTH_SECRETS",
-                "why": "Owner login email identity and passcode hash are required for protected routes",
+                "why": "Owner login email identity and password hash are required for protected routes",
                 "where": "Deployment secret store / host environment (PFAI_OWNER_EMAIL, PFAI_OWNER_SECRET_HASH)",
                 "owner_action": "Set both variables from a private secret store; never commit values",
             }

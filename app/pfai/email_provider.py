@@ -19,7 +19,7 @@ def email_config_report(*_args: Any, **_kwargs: Any) -> dict[str, Any]:
         "EMAIL_REQUIRE_PRODUCTION": False,
         "EMAIL_VERIFIED": False,
         "ok": True,
-        "note": "Email OTP and login email delivery permanently removed; owner auth is passcode/session only",
+        "note": "Email OTP and login email delivery permanently removed; owner auth is email+password/session only",
         "host_configured": False,
         "endpoint_configured": False,
         "from_configured": False,

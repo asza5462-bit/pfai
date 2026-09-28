@@ -76,7 +76,7 @@ class TestOwnerPasscodeAuth(unittest.TestCase):
 
     def test_public_status_lists_passcode_not_email_otp(self):
         st = self.auth.public_status()
-        self.assertIn("passcode", st["auth_methods"])
+        self.assertIn("password", st["auth_methods"])
         self.assertNotIn("email_otp", st["auth_methods"])
         self.assertEqual(st.get("email_otp"), "REMOVED")
         self.assertNotIn("passcode_hash", json.dumps(st))
@@ -256,7 +256,7 @@ class TestPhase5APISecurity(unittest.TestCase):
         self.assertIn(bad.status_code, (401, 429))
         ok = client.post(
             "/owner/login",
-            json={"email": "test-owner@example.invalid", "passcode": "test-secret"},
+            json={"email": "test-owner@example.invalid", "password": "test-secret"},
         )
         self.assertEqual(ok.status_code, 200, ok.text)
         self.assertTrue(ok.json()["authenticated"])

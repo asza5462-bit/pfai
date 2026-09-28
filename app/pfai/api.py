@@ -367,7 +367,7 @@ PLATFORM_SELF_CHECK = SelfCheck({
         'runtime': detect_runtime_capabilities(probe_inference=False).get('status'),
     },
     'owner_auth_ready': lambda: {
-        'ok': 'passcode' in OWNER_AUTH.public_status().get('auth_methods', []),
+        'ok': 'password' in OWNER_AUTH.public_status().get('auth_methods', []),
         'email_otp': 'REMOVED',
         'auth_methods': OWNER_AUTH.public_status().get('auth_methods', []),
     },
@@ -632,26 +632,43 @@ def owner_status(
 
 
 class OwnerSetupBody(BaseModel):
+    """Owner setup accepts password (preferred) or legacy passcode alias."""
+
     email: str
-    passcode: str
-    passcode_confirm: str
+    password: str | None = None
+    password_confirm: str | None = None
+    passcode: str | None = None
+    passcode_confirm: str | None = None
+
+    def secret(self) -> str:
+        return (self.password or self.passcode or '').strip()
+
+    def secret_confirm(self) -> str:
+        return (self.password_confirm or self.passcode_confirm or '').strip()
 
 
 class OwnerLoginBody(BaseModel):
+    """Owner login: email + password (passcode kept as legacy alias)."""
+
     email: str
-    passcode: str
+    password: str | None = None
+    passcode: str | None = None
+
+    def secret(self) -> str:
+        return (self.password or self.passcode or '').strip()
 
 
 @app.post('/owner/setup')
 def owner_setup(x: OwnerSetupBody, request: Request, response: Response):
     """First-time owner initialization only. Permanently disabled after success."""
-    result = OWNER_AUTH.run_setup(x.email, x.passcode, x.passcode_confirm)
-    # Never echo passcode fields back.
+    secret = x.secret()
+    result = OWNER_AUTH.run_setup(x.email, secret, x.secret_confirm())
+    # Never echo password/passcode fields back.
     if not result.get('ok'):
         code = 409 if result.get('error') == 'owner setup is disabled' else 400
         raise HTTPException(code, result.get('error') or 'setup failed')
     # Auto-login session after setup
-    login = OWNER_AUTH.login(x.email, x.passcode, client_key=_client_key(request))
+    login = OWNER_AUTH.login(x.email, secret, client_key=_client_key(request))
     if login.get('ok') and login.get('token'):
         response.set_cookie(COOKIE_NAME, login['token'], **_secure_cookie_flags(request))
     return {
@@ -665,9 +682,9 @@ def owner_setup(x: OwnerSetupBody, request: Request, response: Response):
 
 @app.post('/owner/login')
 def owner_login(x: OwnerLoginBody, request: Request, response: Response):
-    result = OWNER_AUTH.login(x.email, x.passcode, client_key=_client_key(request))
+    result = OWNER_AUTH.login(x.email, x.secret(), client_key=_client_key(request))
     if not result.get('ok'):
-        # Uniform failure (no email/passcode distinction); 429 when locked out.
+        # Uniform failure (no email/password distinction); 429 when locked out.
         status = 429 if result.get('locked') else 401
         raise HTTPException(status, AUTH_FAIL_MESSAGE)
     response.set_cookie(COOKIE_NAME, result['token'], **_secure_cookie_flags(request))
