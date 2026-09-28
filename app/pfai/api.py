@@ -1230,6 +1230,61 @@ def phase20_platform_status(owner: str = Depends(require_owner)):
     st['PHASE_21_ALLOWED'] = False
     return {'ok': True, **st}
 
+@app.get('/platform/phase21/status')
+def phase21_platform_status(owner: str = Depends(require_owner)):
+    from .elite.phase21_gates import phase21_status
+    st = phase21_status()
+    st['elite'] = {
+        'skill_count': ELITE.skills.health().get('count'),
+        'phase21_boot': (ELITE._boot or {}).get('phase21'),
+        'phase20_boot': (ELITE._boot or {}).get('phase20'),
+        'unified_ai_core': True,
+        'agent_execution_engine': True,
+        'performance_reliability_engine': True,
+    }
+    st['scheduler'] = ELITE.performance.scheduler_status() if getattr(ELITE, 'performance', None) else None
+    st['PHASE_22_ALLOWED'] = False
+    return {'ok': True, **st}
+
+class PerfTaskBody(BaseModel):
+    message: str
+    priority: str = 'USER_INTERACTIVE'
+    approved: bool = False
+    context: dict = {}
+
+@app.post('/platform/phase21/tasks')
+def phase21_submit_task(body: PerfTaskBody, owner: str = Depends(require_owner)):
+    out = ELITE.performance.submit_task(
+        body.message,
+        priority=body.priority,
+        actor=owner,
+        approved=bool(body.approved),
+        context=dict(body.context or {}),
+    )
+    out['PHASE_22_ALLOWED'] = False
+    return {'ok': bool(out.get('ok')), **out}
+
+@app.get('/platform/phase21/tasks/{task_id}')
+def phase21_task_status(task_id: str, owner: str = Depends(require_owner)):
+    return {'ok': True, **ELITE.performance.task_status(task_id)}
+
+@app.get('/platform/phase21/tasks/{task_id}/progress')
+def phase21_task_progress(task_id: str, owner: str = Depends(require_owner)):
+    return ELITE.performance.task_progress(task_id)
+
+@app.post('/platform/phase21/tasks/{task_id}/cancel')
+def phase21_cancel_task(task_id: str, owner: str = Depends(require_owner)):
+    return ELITE.performance.cancel_task(task_id)
+
+@app.get('/platform/phase21/scheduler')
+def phase21_scheduler_status(owner: str = Depends(require_owner)):
+    return {'ok': True, **ELITE.performance.scheduler_status()}
+
+@app.post('/platform/phase21/benchmarks/run')
+def phase21_run_benchmarks(owner: str = Depends(require_owner)):
+    from .elite.phase21_benchmarks import run_phase21_benchmarks
+    return {'ok': True, **run_phase21_benchmarks(orchestrator=ELITE)}
+
 @app.get('/platform/observability')
 def platform_observability(owner: str = Depends(require_owner)):
     from .elite.platform_observability import PlatformObservability

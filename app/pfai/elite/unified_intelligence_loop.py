@@ -118,9 +118,9 @@ class UnifiedIntelligenceLoop:
             result["loop_id"] = loop_id
             result["pipeline"] = PIPELINE_STAGES
             result["stages"] = stages
-            result["phase"] = 20
+            result["phase"] = 21
             result["latency_seconds"] = time.time() - started
-            result["PHASE_21_ALLOWED"] = False
+            result["PHASE_22_ALLOWED"] = False
             return result
 
         use_agent = self._use_agent_engine(message, ctx)
@@ -211,12 +211,12 @@ class UnifiedIntelligenceLoop:
         )
 
         out = dict(out)
-        out["phase"] = 20
+        out["phase"] = 21
         out["loop_id"] = loop_id
         out["pipeline"] = list(PIPELINE_STAGES)
         out["stages"] = stages
         out["learning_candidate"] = learn
-        out["PHASE_21_ALLOWED"] = False
+        out["PHASE_22_ALLOWED"] = False
         out["latency_seconds"] = time.time() - started
         out["unified_intelligence_loop"] = True
         out.setdefault("skills_used", out.get("skills_used") or out.get("skills_used") or [])
@@ -301,6 +301,7 @@ class UnifiedIntelligenceLoop:
                         "PHASE_19_ALLOWED",
                         "PHASE_20_ALLOWED",
                         "PHASE_21_ALLOWED",
+                        "PHASE_22_ALLOWED",
                         "model_router",
                         "skills",
                     )

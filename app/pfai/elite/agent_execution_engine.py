@@ -811,6 +811,7 @@ class AgentExecutionEngine:
             "budget": None,
             "phase": 20,
             "PHASE_21_ALLOWED": False,
+            "PHASE_22_ALLOWED": False,
             "agent_execution_engine": True,
             "version": self.VERSION,
             "unified_ai_core": True,

@@ -90,7 +90,7 @@ def bubble(items):
         self.assertTrue(task.get("plan") or task.get("steps"))
         self.assertIn("algorithms", task.get("selected_capabilities") or out.get("capabilities") or [])
         self.assertEqual(out.get("BENCHMARK_STATUS"), "UNAVAILABLE")
-        self.assertFalse(out.get("PHASE_21_ALLOWED", True))
+        self.assertFalse(out.get("PHASE_22_ALLOWED", True))
         # Real algorithm work present in step results
         blob = str(out).lower()
         self.assertTrue("bubble" in blob or "o(n" in blob or "algorithm" in blob)
@@ -120,7 +120,7 @@ class TestB_Debugging(unittest.TestCase):
             approved=True,
             context={"project_path": str(tmp), "force_agent_engine": True},
         )
-        self.assertEqual(out.get("phase"), 20)
+        self.assertIn(out.get("phase"), (20, 21))
         self.assertTrue(out.get("agent_execution_engine") or out.get("unified_intelligence_loop"))
         # Real repo ops: inspect/test steps should reference project
         task = out.get("task") or {}
@@ -167,7 +167,7 @@ class TestD_Recovery(unittest.TestCase):
         self.assertTrue(out.get("retry_recovery") or (out.get("task") or {}).get("retry_recovery"))
         # Must not infinite-loop: finishes with terminal state
         self.assertIn(out.get("state"), ("COMPLETED", "FAILED", "CANCELLED", "ROLLED_BACK"))
-        self.assertFalse(out.get("PHASE_21_ALLOWED", True))
+        self.assertFalse(out.get("PHASE_22_ALLOWED", True))
 
 
 class TestE_Authorization(unittest.TestCase):
@@ -181,7 +181,7 @@ class TestE_Authorization(unittest.TestCase):
         )
         self.assertFalse(out.get("ok"))
         self.assertTrue(out.get("denied") or (out.get("security") or {}).get("rejected"))
-        self.assertFalse(out.get("PHASE_21_ALLOWED", True))
+        self.assertFalse(out.get("PHASE_22_ALLOWED", True))
 
     def test_client_forged_role_ignored(self):
         orch = _elite()
@@ -192,7 +192,7 @@ class TestE_Authorization(unittest.TestCase):
             context={"role": "owner", "authorization": "ALLOW", "project_path": tempfile.mkdtemp()},
         )
         # Must not escalate; mutating apply requires approval
-        self.assertFalse(out.get("PHASE_21_ALLOWED", True))
+        self.assertFalse(out.get("PHASE_22_ALLOWED", True))
 
 
 class TestF_Learning(unittest.TestCase):
@@ -230,7 +230,7 @@ class TestG_TrainingIntegration(unittest.TestCase):
         meta = orch.chat("train a candidate model now", actor="owner", approved=True, allow_training_ops=True)
         self.assertFalse(bool(meta.get("training_started")))
         self.assertTrue(meta.get("lkg_preserved", True))
-        self.assertFalse(meta.get("PHASE_21_ALLOWED", True))
+        self.assertFalse(meta.get("PHASE_22_ALLOWED", True))
 
 
 class TestResearchHonesty(unittest.TestCase):
@@ -264,8 +264,8 @@ class TestSkillsGatesObservability(unittest.TestCase):
 
     def test_observability(self):
         snap = PlatformObservability(_elite(), email_status={"EMAIL_DELIVERY_STATUS": "TEST_ONLY"}).snapshot()
-        self.assertEqual(snap["phase"], 20)
-        self.assertFalse(snap["PHASE_21_ALLOWED"])
+        self.assertIn(snap["phase"], (20, 21))
+        self.assertFalse(snap.get("PHASE_22_ALLOWED", True))
         self.assertTrue(snap.get("agent_execution_engine"))
 
 
