@@ -33,6 +33,14 @@ class MockCommandProvider(ModelProvider):
             if name in allowed and name not in picks:
                 picks.append(name)
 
+        web_intent = bool(re.search(
+            r"ابحث\s*في\s*(الويب|الانترنت|الإنترنت)|search\s*(the\s*)?web|web\s*search|"
+            r"web\s*research|بحث\s*ويب|من\s*الإنترنت|from\s*the\s*internet|look\s*up\s*online|"
+            r"fetch\s*url|افتح\s*الرابط|https?://|web\s*status|حالة\s*الويب",
+            text + ar,
+            re.I,
+        ))
+
         if re.search(
             r"eligib|أهلية|حالة\s*التدريب|training\s*status|جاهزية\s*التدريب|"
             r"هل\s*(التدريب|النموذج)|next\s*training|can\s*we\s*train|متى\s*نتدرب",
@@ -48,9 +56,9 @@ class MockCommandProvider(ModelProvider):
             add("training_eligibility")
         if re.search(r"health|صح[ةه]|فحص.*صح", text + ar):
             add("health_check")
-        if re.search(r"system|حال[ةه].*نظام|حل[ل].*نظام|status|حل[ل]\s*النظام", text + ar):
+        if re.search(r"system|حال[ةه].*نظام|حل[ل].*نظام|status|حل[ل]\s*النظام", text + ar) and not web_intent:
             add("system_status")
-        if re.search(r"metric|مؤشر|أخطاء|error|fail", text + ar):
+        if re.search(r"metric|مؤشر|أخطاء|error|fail", text + ar) and not web_intent:
             add("metrics_snapshot")
             if "system_status" in allowed:
                 add("system_status")
@@ -60,22 +68,15 @@ class MockCommandProvider(ModelProvider):
             add("deployments_list")
         if re.search(r"recover|استرداد", text + ar):
             add("recovery_verify")
-        # Live web / internet — prefer web fabric tools over ledger research_verify
-        if re.search(
-            r"ابحث\s*في\s*(الويب|الانترنت|الإنترنت)|search\s*(the\s*)?web|web\s*search|"
-            r"web\s*research|بحث\s*ويب|من\s*الإنترنت|from\s*the\s*internet|look\s*up\s*online|"
-            r"fetch\s*url|افتح\s*الرابط|https?://",
-            text + ar,
-            re.I,
-        ):
+        # Live web — one primary tool path (avoid stacking research+search+coding)
+        if web_intent:
             add("web_status")
-            if re.search(r"fetch|url|رابط|https?://", text + ar, re.I):
+            if re.search(r"fetch|url|رابط|https?://", text + ar, re.I) and not re.search(r"ابحث|search|research", text + ar, re.I):
                 add("web_fetch")
+            elif re.search(r"web\s*status|حالة\s*الويب|internet\s*status", text + ar, re.I) and not re.search(r"ابحث|search|research", text + ar, re.I):
+                pass  # status only
             else:
                 add("web_research")
-                add("web_search")
-        elif re.search(r"web\s*status|حالة\s*الويب|internet\s*status", text + ar, re.I):
-            add("web_status")
         elif re.search(r"research_verify|ledger\s*research", text + ar, re.I):
             add("research_verify")
         if re.search(r"regression|انحدار", text + ar):
@@ -93,28 +94,30 @@ class MockCommandProvider(ModelProvider):
             add("system_status")
             add("continuous_status")
             add("web_status")
-        if re.search(r"علمني|teach|learn|مبتدئ|تمرين|python|javascript|مسار\s*تعليمي|أكاديمية", text + ar):
-            add("coding_teach")
-            add("coding_tracks")
-        if re.search(r"اختبر مستواي|assess|assessment", text + ar):
-            add("coding_assess")
-        if re.search(r"راجع.*كود|code review|review code", text + ar):
-            add("coding_review")
-        if re.search(r"مشروع|project", text + ar):
-            add("coding_projects")
-        if re.search(r"sandbox|نفذ الكود|run code", text + ar):
-            add("run_sandbox")
-        if re.search(r"تلميح|hint", text + ar, re.I):
-            add("coding_hint")
-        if re.search(r"أرسل الحل|submit (my )?(code|solution)|تحقق من حلي|submit_exercise", text + ar, re.I):
-            add("coding_exercise_submit")
-        if re.search(r"الدرس\s*التالي|next\s*lesson|تمرين\s*التالي", text + ar):
-            add("coding_next_lesson")
-            add("coding_progress")
-        if re.search(r"تقدمي|learner\s*snapshot|لوحة\s*التعلم|skill\s*profile|مهاراتي", text + ar):
-            add("learner_snapshot")
-            add("coding_progress")
-        if re.search(r"search knowledge|ابحث.*معرف|راجع.*بيانات|بيانات", text + ar):
+        # Coding academy — skip when this turn is a web/internet request
+        if not web_intent:
+            if re.search(r"علمني|teach|learn|مبتدئ|تمرين|python|javascript|مسار\s*تعليمي|أكاديمية", text + ar):
+                add("coding_teach")
+                add("coding_tracks")
+            if re.search(r"اختبر مستواي|assess|assessment", text + ar):
+                add("coding_assess")
+            if re.search(r"راجع.*كود|code review|review code", text + ar):
+                add("coding_review")
+            if re.search(r"مشروع|project", text + ar):
+                add("coding_projects")
+            if re.search(r"sandbox|نفذ الكود|run code", text + ar):
+                add("run_sandbox")
+            if re.search(r"تلميح|hint", text + ar, re.I):
+                add("coding_hint")
+            if re.search(r"أرسل الحل|submit (my )?(code|solution)|تحقق من حلي|submit_exercise", text + ar, re.I):
+                add("coding_exercise_submit")
+            if re.search(r"الدرس\s*التالي|next\s*lesson|تمرين\s*التالي", text + ar):
+                add("coding_next_lesson")
+                add("coding_progress")
+            if re.search(r"تقدمي|learner\s*snapshot|لوحة\s*التعلم|skill\s*profile|مهاراتي", text + ar):
+                add("learner_snapshot")
+                add("coding_progress")
+        if re.search(r"search knowledge|ابحث.*معرف|راجع.*بيانات|بيانات", text + ar) and not web_intent:
             add("knowledge_search")
             add("memory_search")
         if re.search(r"start continuous|شغ[لّ].*تعلم|تشغيل.*continuous|ابدأ\s*التعلم\s*المستمر", text + ar):

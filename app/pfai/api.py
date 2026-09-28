@@ -265,6 +265,25 @@ def _tool_web_status():
     from .elite.web_fabric import web_config_report
     return {'ok': True, **web_config_report()}
 
+def _run_with_timeout(fn, *, timeout_s: float = 20.0, label: str = 'web_tool'):
+    """Bound chat-facing network tools so one slow provider cannot stall the brain."""
+    from concurrent.futures import ThreadPoolExecutor, TimeoutError as FuturesTimeout
+    limit = max(0.05, float(timeout_s))
+    with ThreadPoolExecutor(max_workers=1) as pool:
+        fut = pool.submit(fn)
+        try:
+            return fut.result(timeout=limit)
+        except FuturesTimeout:
+            return {
+                'ok': False,
+                'error': f'{label}_timeout',
+                'timeout_seconds': limit,
+                'fabricated_results': False,
+                'results': [],
+                'citations': [],
+                'note': 'Timed out for chat responsiveness — retry or narrow the query',
+            }
+
 def _tool_web_search(query: str = '', q: str = '', limit: int = 5, approved: bool = True, actor: str = 'chat'):
     from .elite.web_fabric import web_config_report, WebResearchSession
     query = (query or q or '').strip()
@@ -281,9 +300,13 @@ def _tool_web_search(query: str = '', q: str = '', limit: int = 5, approved: boo
             'note': status.get('note') or 'Configure PFAI_WEB_ALLOW_NETWORK + search provider',
         }
     session = WebResearchSession()
-    return session.research(query, limit=int(limit or 5), approved=bool(approved), actor=str(actor or 'chat'))
+    return _run_with_timeout(
+        lambda: session.research(query, limit=min(5, int(limit or 5)), approved=bool(approved), actor=str(actor or 'chat')),
+        timeout_s=float(os.environ.get('PFAI_WEB_TIMEOUT', '20') or 20),
+        label='web_search',
+    )
 
-def _tool_web_fetch(url: str = '', max_bytes: int = 200000, approved: bool = True, actor: str = 'chat'):
+def _tool_web_fetch(url: str = '', max_bytes: int = 120000, approved: bool = True, actor: str = 'chat'):
     from .elite.web_fabric import WebPolicyGate, web_config_report, validate_url_for_fetch, WebInformationFabric
     url = (url or '').strip()
     if not url:
@@ -303,19 +326,28 @@ def _tool_web_fetch(url: str = '', max_bytes: int = 200000, approved: bool = Tru
     check = validate_url_for_fetch(url)
     if not check.get('ok'):
         return {'ok': False, 'error': check.get('error'), 'ssrf_blocked': True, 'fabricated_results': False}
-    return WebInformationFabric().fetch_provider.fetch(url, max_bytes=int(max_bytes or 200000))
+    return _run_with_timeout(
+        lambda: WebInformationFabric().fetch_provider.fetch(url, max_bytes=int(max_bytes or 120000)),
+        timeout_s=float(os.environ.get('PFAI_WEB_TIMEOUT', '20') or 20),
+        label='web_fetch',
+    )
 
 def _tool_web_research(query: str = '', q: str = '', question: str = '', limit: int = 5, approved: bool = True, actor: str = 'chat'):
     from .elite.web_research_pipeline import WebResearchPipeline
     query = (query or q or question or '').strip()
     if not query:
         return {'ok': False, 'error': 'query is required', 'fabricated_results': False, 'citations': []}
-    return WebResearchPipeline().run(
-        query,
-        limit=int(limit or 5),
-        fetch_top=min(3, int(limit or 5)),
-        approved=bool(approved),
-        actor=str(actor or 'chat'),
+    # Chat path: search-heavy, fetch at most 1 page for latency
+    return _run_with_timeout(
+        lambda: WebResearchPipeline().run(
+            query,
+            limit=min(5, int(limit or 5)),
+            fetch_top=1,
+            approved=bool(approved),
+            actor=str(actor or 'chat'),
+        ),
+        timeout_s=float(os.environ.get('PFAI_WEB_TIMEOUT', '25') or 25),
+        label='web_research',
     )
 
 def _tool_app_control_status():
@@ -588,8 +620,7 @@ def _pull_accepted_experience_rows() -> list:
 CONTINUOUS.bind_experience_ingest(_pull_accepted_experience_rows)
 
 
-@app.on_event('startup')
-def _pfai_startup_continuous():
+def _pfai_startup_continuous() -> None:
     """Auto-start real continuous worker when gate is enabled (no auto-promote)."""
     if not is_continuous_enabled():
         log.info('startup: continuous gate off — worker not started')
@@ -599,6 +630,19 @@ def _pfai_startup_continuous():
         log.info('startup: continuous worker started worker_alive=%s', st.get('worker_alive'))
     except Exception as exc:
         log.warning('startup: continuous worker failed: %s', exc)
+
+
+def _pfai_shutdown_continuous() -> None:
+    try:
+        if (CONTINUOUS.status().get('service') or {}).get('status') in {'running', 'cycle', 'paused'}:
+            CONTINUOUS.stop('app_shutdown')
+            log.info('shutdown: continuous worker stopped')
+    except Exception as exc:
+        log.warning('shutdown: continuous stop failed: %s', exc)
+
+
+app.router.add_event_handler('startup', _pfai_startup_continuous)
+app.router.add_event_handler('shutdown', _pfai_shutdown_continuous)
 
 # Migration runner: backup longevity learning DB before apply
 _LONGEVITY_BACKUP_SRC = Path('data/longevity/learning.sqlite3')

@@ -59,11 +59,17 @@ class TestMockWebAndCodingRouting(unittest.TestCase):
         m = MockCommandProvider()
         allowed = [
             "web_search", "web_research", "web_status", "web_fetch",
-            "research_verify", "system_status",
+            "research_verify", "system_status", "coding_teach", "coding_tracks",
         ]
-        tools = {t["tool"] for t in m.plan_tools("ابحث في الويب عن Python typing", allowed)}
-        self.assertTrue(tools.intersection({"web_search", "web_research", "web_status"}))
+        planned = m.plan_tools("ابحث في الويب عن Python typing", allowed)
+        tools = {t["tool"] for t in planned}
+        self.assertIn("web_research", tools)
+        self.assertIn("web_status", tools)
         self.assertNotIn("research_verify", tools)
+        # Must not stack coding tools on a web turn (was causing 80s stalls)
+        self.assertNotIn("coding_teach", tools)
+        self.assertNotIn("coding_tracks", tools)
+        self.assertNotIn("web_search", tools)  # research alone
 
     def test_master_control_routing(self):
         m = MockCommandProvider()
@@ -105,8 +111,8 @@ class TestChatMasterAPI(unittest.TestCase):
 
     def test_version_82(self):
         from pfai import __version__
-        self.assertEqual(__version__, "8.2.0")
-        self.assertEqual(self.client.get("/health").json().get("version"), "8.2.0")
+        self.assertEqual(__version__, "8.2.1")
+        self.assertEqual(self.client.get("/health").json().get("version"), "8.2.1")
 
     def test_tools_catalog_master(self):
         r = self.client.get("/chat/tools")

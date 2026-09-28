@@ -1,7 +1,7 @@
 services:
   pfai:
     build: .
-    image: pfai:8.2.0
+    image: pfai:8.2.1
     # Host networking required when docker bridge egress is unavailable in this runtime.
     network_mode: host
     # All production secrets/config come from the secret store (never committed).
@@ -24,7 +24,7 @@ services:
   pfai-continuous:
     profiles: ["continuous"]
     build: .
-    image: pfai:8.2.0
+    image: pfai:8.2.1
     command: ["python", "run_continuous.py"]
     env_file:
       - ../runtime/production.env
