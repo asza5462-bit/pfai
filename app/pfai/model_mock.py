@@ -258,6 +258,12 @@ class MockCommandProvider(ModelProvider):
                 elif re.search(r"أصلح|heal|improve|صلح", message or "", re.I):
                     act = "improve"
                 args = {"action": act, "message": message, "include_action": act != "status"}
+            if name in {"quantum_pulse", "quantum_hot_route", "iot_understand"}:
+                args = {"message": message, "language": "ar" if re.search(r"[\u0600-\u06FF]", message or "") else "en"}
+                if name != "iot_understand":
+                    args.pop("language", None)
+            if name == "evolution_tick":
+                args = {"kind": "minute"}
             tools.append({"tool": name, "args": args})
         return tools
 

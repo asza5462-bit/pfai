@@ -149,6 +149,15 @@ class TestQuantumAPI(unittest.TestCase):
             tools.intersection({"quantum_pulse", "iot_understand", "evolution_status", "quantum_status"}),
             tools,
         )
+        # Message must be forwarded into IoT/quantum tools
+        for t in body.get("tools") or []:
+            if t.get("tool") == "iot_understand" and t.get("ok"):
+                res = t.get("result") or {}
+                self.assertTrue((res.get("detection") or {}).get("is_iot") or res.get("grounded"))
+            if t.get("tool") == "quantum_pulse" and t.get("ok"):
+                res = t.get("result") or {}
+                self.assertFalse(res.get("quantum_hardware"))
+                self.assertIn("timing", res)
 
 
 if __name__ == "__main__":
