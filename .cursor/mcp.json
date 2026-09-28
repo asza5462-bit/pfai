@@ -1,0 +1,10 @@
+{
+  "mcpServers": {
+    "render": {
+      "url": "https://mcp.render.com/mcp",
+      "auth": {
+        "CLIENT_ID": "cursor"
+      }
+    }
+  }
+}
