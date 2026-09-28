@@ -12,9 +12,12 @@ from pfai.elite.types import new_id
 class TaskState(str, Enum):
     CREATED = "CREATED"
     PLANNING = "PLANNING"
+    PLANNED = "PLANNED"
     READY = "READY"
     RUNNING = "RUNNING"
     WAITING = "WAITING"
+    BLOCKED = "BLOCKED"
+    RETRYING = "RETRYING"
     VALIDATING = "VALIDATING"
     RECOVERING = "RECOVERING"
     COMPLETED = "COMPLETED"
@@ -25,12 +28,15 @@ class TaskState(str, Enum):
 
 # Valid directed transitions
 _TRANSITIONS: dict[TaskState, frozenset[TaskState]] = {
-    TaskState.CREATED: frozenset({TaskState.PLANNING, TaskState.CANCELLED}),
-    TaskState.PLANNING: frozenset({TaskState.READY, TaskState.FAILED, TaskState.CANCELLED}),
-    TaskState.READY: frozenset({TaskState.RUNNING, TaskState.WAITING, TaskState.CANCELLED}),
+    TaskState.CREATED: frozenset({TaskState.PLANNING, TaskState.PLANNED, TaskState.CANCELLED}),
+    TaskState.PLANNING: frozenset({TaskState.PLANNED, TaskState.READY, TaskState.FAILED, TaskState.CANCELLED}),
+    TaskState.PLANNED: frozenset({TaskState.READY, TaskState.FAILED, TaskState.CANCELLED}),
+    TaskState.READY: frozenset({TaskState.RUNNING, TaskState.WAITING, TaskState.BLOCKED, TaskState.CANCELLED}),
     TaskState.RUNNING: frozenset(
         {
             TaskState.WAITING,
+            TaskState.BLOCKED,
+            TaskState.RETRYING,
             TaskState.VALIDATING,
             TaskState.RECOVERING,
             TaskState.FAILED,
@@ -38,12 +44,14 @@ _TRANSITIONS: dict[TaskState, frozenset[TaskState]] = {
             TaskState.COMPLETED,
         }
     ),
-    TaskState.WAITING: frozenset({TaskState.READY, TaskState.RUNNING, TaskState.CANCELLED, TaskState.FAILED}),
+    TaskState.WAITING: frozenset({TaskState.READY, TaskState.RUNNING, TaskState.BLOCKED, TaskState.CANCELLED, TaskState.FAILED}),
+    TaskState.BLOCKED: frozenset({TaskState.READY, TaskState.RUNNING, TaskState.FAILED, TaskState.CANCELLED}),
+    TaskState.RETRYING: frozenset({TaskState.RUNNING, TaskState.FAILED, TaskState.RECOVERING, TaskState.CANCELLED}),
     TaskState.VALIDATING: frozenset(
-        {TaskState.COMPLETED, TaskState.RECOVERING, TaskState.FAILED, TaskState.ROLLED_BACK}
+        {TaskState.COMPLETED, TaskState.RECOVERING, TaskState.FAILED, TaskState.ROLLED_BACK, TaskState.RETRYING}
     ),
     TaskState.RECOVERING: frozenset(
-        {TaskState.READY, TaskState.RUNNING, TaskState.VALIDATING, TaskState.FAILED, TaskState.ROLLED_BACK}
+        {TaskState.READY, TaskState.RUNNING, TaskState.VALIDATING, TaskState.FAILED, TaskState.ROLLED_BACK, TaskState.RETRYING}
     ),
     TaskState.COMPLETED: frozenset(),
     TaskState.FAILED: frozenset({TaskState.ROLLED_BACK}),

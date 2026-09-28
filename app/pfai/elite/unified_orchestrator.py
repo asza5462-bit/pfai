@@ -78,6 +78,7 @@ class EliteOrchestrator:
             "phase19": None,
             "phase20": None,
             "phase21": None,
+            "phase22": None,
         }
         if bootstrap_skills:
             from pfai.engineering.phase14_skills import register_phase14_skills
@@ -87,6 +88,7 @@ class EliteOrchestrator:
             from pfai.elite.phase19_skills import register_phase19_skills
             from pfai.elite.phase20_skills import register_phase20_skills
             from pfai.elite.phase21_skills import register_phase21_skills
+            from pfai.elite.phase22_skills import register_phase22_skills
 
             self._boot["skills"] = register_elite_skills(self.skills, activate=True)
             self._boot["phase14"] = register_phase14_skills(self.skills, activate=True)
@@ -96,16 +98,22 @@ class EliteOrchestrator:
             self._boot["phase19"] = register_phase19_skills(self.skills, activate=True)
             self._boot["phase20"] = register_phase20_skills(self.skills, activate=True)
             self._boot["phase21"] = register_phase21_skills(self.skills, activate=True)
+            self._boot["phase22"] = register_phase22_skills(self.skills, activate=True)
             self._boot["tools"] = self.tools.bootstrap_safe_tools()
             self._boot["security_tools"] = self.tools.bootstrap_security_tools()
         from pfai.elite.unified_intelligence_loop import UnifiedIntelligenceLoop
         from pfai.elite.performance_engine import PerformanceReliabilityEngine
+        from pfai.elite.production_runtime import ProductionRuntime
 
         self.intelligence = UnifiedIntelligenceLoop(self)
         self.performance = PerformanceReliabilityEngine(
             self,
             root=str(Path(self.root) / "phase21"),
             max_workers=4,
+        )
+        self.production = ProductionRuntime(
+            self,
+            audit_path=str(Path(self.root) / "production_runtime_audit.jsonl"),
         )
 
     def _audit(self, event: str, **detail: Any) -> None:
@@ -710,6 +718,7 @@ class EliteOrchestrator:
         from pfai.elite.phase19_gates import phase19_status
         from pfai.elite.phase20_gates import phase20_status
         from pfai.elite.phase21_gates import phase21_status
+        from pfai.elite.phase22_gates import phase22_status
 
         p14 = phase14_status()
         p15 = phase15_status()
@@ -719,8 +728,9 @@ class EliteOrchestrator:
         p19 = phase19_status()
         p20 = phase20_status()
         p21 = phase21_status()
+        p22 = phase22_status()
         return {
-            "phase": 21,
+            "phase": 22,
             "skills": self.skills.health(),
             "tools": {
                 "count": len(self.tools.catalog()),
@@ -743,7 +753,9 @@ class EliteOrchestrator:
             "phase19": p19,
             "phase20": p20,
             "phase21": p21,
+            "phase22": p22,
             "scheduler": self.performance.scheduler_status() if getattr(self, "performance", None) else None,
+            "runtime": self.production.diagnostics() if getattr(self, "production", None) else None,
             "PHASE_14_ALLOWED": bool(p14.get("PHASE_14_ALLOWED")),
             "PHASE_15_ALLOWED": bool(p15.get("PHASE_15_ALLOWED")),
             "PHASE_16_ALLOWED": bool(p16.get("PHASE_16_ALLOWED")),
@@ -752,12 +764,14 @@ class EliteOrchestrator:
             "PHASE_19_ALLOWED": bool(p19.get("PHASE_19_ALLOWED")),
             "PHASE_20_ALLOWED": bool(p20.get("PHASE_20_ALLOWED")),
             "PHASE_21_ALLOWED": bool(p21.get("PHASE_21_ALLOWED")),
-            "PHASE_22_ALLOWED": False,
+            "PHASE_22_ALLOWED": bool(p22.get("PHASE_22_ALLOWED")),
+            "PHASE_23_ALLOWED": False,
             "skill_metrics": self.skill_metrics.summary(),
             "unified_intelligence_loop": True,
             "unified_ai_core": True,
             "agent_execution_engine": True,
             "performance_reliability_engine": True,
+            "production_runtime": True,
         }
 
     def chat(

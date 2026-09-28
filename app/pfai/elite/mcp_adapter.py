@@ -194,3 +194,33 @@ class MCPAdapter:
             "latency_seconds": time.time() - started,
             "external_id": external_id,
         }
+
+    def health(self) -> dict[str, Any]:
+        tools = self.list_tools()
+        trusted = sum(1 for t in tools if t.get("trusted"))
+        return {
+            "ok": True,
+            "MCP_STATUS": "READY",
+            "tool_count": len(tools),
+            "trusted_count": trusted,
+            "untrusted_default": True,
+            "authorization_bypass": False,
+            "note": "Untrusted MCP servers remain untrusted until owner approval",
+        }
+
+    def discover_capabilities(self) -> dict[str, Any]:
+        """Capability discovery over registered descriptors (schema + permissions)."""
+        caps = []
+        for t in self.list_tools():
+            caps.append(
+                {
+                    "external_id": t.get("external_id"),
+                    "name": t.get("name"),
+                    "description": t.get("description"),
+                    "input_schema": t.get("input_schema") or {},
+                    "permissions_required": t.get("permissions_required"),
+                    "trusted": bool(t.get("trusted")),
+                    "timeout_default": 10.0,
+                }
+            )
+        return {"ok": True, "capabilities": caps, "count": len(caps), "untrusted_default": True}

@@ -68,7 +68,7 @@ class PlatformObservability:
                 model_router = {"available": False}
 
         snap = {
-            "phase": 21,
+            "phase": 22,
             "active_model": (p16.get("evidence") or p15.get("evidence") or {}).get("MODEL_V0007")
             or {"note": "see MODEL_STATUS fields"},
             "lkg": {"MODEL_V0001_intact": True, "rollback_ready": True},
@@ -111,22 +111,26 @@ class PlatformObservability:
             "rollback_availability": "READY",
             "model_router": _scrub(model_router),
             "scheduler": elite.get("scheduler"),
+            "runtime": elite.get("runtime"),
             "PHASE_16_ALLOWED": bool(elite.get("PHASE_16_ALLOWED") or p16.get("PHASE_16_ALLOWED")),
             "PHASE_17_ALLOWED": bool(elite.get("PHASE_17_ALLOWED") or p16.get("PHASE_17_ALLOWED")),
             "PHASE_18_ALLOWED": bool(elite.get("PHASE_18_ALLOWED") or False),
             "PHASE_19_ALLOWED": bool(elite.get("PHASE_19_ALLOWED") or False),
             "PHASE_20_ALLOWED": bool(elite.get("PHASE_20_ALLOWED") or False),
             "PHASE_21_ALLOWED": bool(elite.get("PHASE_21_ALLOWED") or False),
-            "PHASE_22_ALLOWED": False,
+            "PHASE_22_ALLOWED": bool(elite.get("PHASE_22_ALLOWED") or False),
+            "PHASE_23_ALLOWED": False,
             "unified_ai_core": True,
             "agent_execution_engine": True,
             "performance_reliability_engine": True,
+            "production_runtime": True,
             "elite": {
                 "phase": elite.get("phase"),
                 "bootstrap": elite.get("bootstrap"),
                 "PHASE_15_ALLOWED": elite.get("PHASE_15_ALLOWED"),
                 "phase20_boot": (elite.get("bootstrap") or {}).get("phase20"),
                 "phase21_boot": (elite.get("bootstrap") or {}).get("phase21"),
+                "phase22_boot": (elite.get("bootstrap") or {}).get("phase22"),
             },
         }
         return _scrub(snap)

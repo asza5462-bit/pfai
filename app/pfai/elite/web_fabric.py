@@ -947,4 +947,118 @@ class WebResearchExecutor:
 WebProvider = WebInformationFabric
 SearchProvider = WebSearchProvider
 FetchProvider = WebFetchProvider
+
+# PHASE 22 explicit interface aliases / policy wrappers (provider-independent).
+WebPageParser = SourceParser
+WebContentExtractor = SourceParser
+WebCitationProvider = SourceVerifier
+
+
+class WebPolicyGate:
+    """Authorize web operations — SSRF, schemes, budgets, domain policy. Never secrets in URLs."""
+
+    VERSION = "22.0.0"
+
+    def __init__(
+        self,
+        *,
+        allowed_domains: list[str] | None = None,
+        denied_domains: list[str] | None = None,
+        max_requests: int = 20,
+        allow_private: bool = False,
+    ) -> None:
+        self.allowed_domains = {d.lower() for d in (allowed_domains or [])}
+        self.denied_domains = {d.lower() for d in (denied_domains or [])}
+        self.max_requests = int(max_requests)
+        self.allow_private = bool(allow_private)
+        self._count = 0
+        self._audit: list[dict[str, Any]] = []
+
+    def authorize_url(self, url: str, *, approved: bool = False, actor: str = "") -> dict[str, Any]:
+        self._count += 1
+        if self._count > self.max_requests:
+            row = {"ok": False, "error": "request_budget_exceeded", "url": url}
+            self._audit.append(row)
+            return row
+        # Credentials must never appear in URLs
+        if "@" in (urllib.parse.urlparse(url).netloc or "") and ":" in (urllib.parse.urlparse(url).netloc or ""):
+            # user:pass@host pattern
+            if urllib.parse.urlparse(url).username or urllib.parse.urlparse(url).password:
+                row = {"ok": False, "error": "credentials_in_url_forbidden", "url": "[REDACTED]"}
+                self._audit.append(row)
+                return row
+        check = validate_url_for_fetch(url, allow_private=self.allow_private)
+        if not check.get("ok"):
+            self._audit.append({"ok": False, "error": check.get("error"), "actor": actor})
+            return {"ok": False, "error": check.get("error"), "ssrf_blocked": True}
+        host = str(check.get("host") or "").lower()
+        if self.denied_domains and any(host == d or host.endswith("." + d) for d in self.denied_domains):
+            return {"ok": False, "error": "domain_denied", "host": host}
+        if self.allowed_domains and not any(host == d or host.endswith("." + d) for d in self.allowed_domains):
+            return {"ok": False, "error": "domain_not_allowlisted", "host": host}
+        # External network still requires provider configuration + optional approval for high-risk
+        return {
+            "ok": True,
+            "url": check.get("url"),
+            "host": host,
+            "approved": bool(approved),
+            "actor": actor,
+            "version": self.VERSION,
+        }
+
+    def audit(self) -> list[dict[str, Any]]:
+        return list(self._audit)
+
+
+class WebResearchSession:
+    """Session-scoped research with budgets, provenance, and honest NOT_CONFIGURED behavior."""
+
+    VERSION = "22.0.0"
+
+    def __init__(
+        self,
+        fabric: WebInformationFabric | None = None,
+        *,
+        policy: WebPolicyGate | None = None,
+        session_id: str = "",
+    ) -> None:
+        self.fabric = fabric or WebInformationFabric()
+        self.policy = policy or WebPolicyGate()
+        self.session_id = session_id or hashlib.sha256(str(time.time()).encode()).hexdigest()[:16]
+        self.history: list[dict[str, Any]] = []
+
+    def status(self) -> dict[str, Any]:
+        st = self.fabric.status()
+        return {**st, "session_id": self.session_id, "version": self.VERSION}
+
+    def research(self, query: str, *, limit: int = 5, fetch_top: int = 1, approved: bool = False, actor: str = "") -> dict[str, Any]:
+        status = self.fabric.status()
+        if status.get("WEB_FABRIC_STATUS") != "READY":
+            out = {
+                "ok": False,
+                "WEB_FABRIC_STATUS": status.get("WEB_FABRIC_STATUS") or "NOT_CONFIGURED",
+                "fabricated_citations": False,
+                "fabricated_urls": False,
+                "citations": [],
+                "answer": f"Web research unavailable: WEB_FABRIC_STATUS={status.get('WEB_FABRIC_STATUS')}",
+                "session_id": self.session_id,
+            }
+            self.history.append({"query": query, "ok": False, "status": out["WEB_FABRIC_STATUS"]})
+            return out
+        result = self.fabric.research(query, limit=limit, fetch_top=fetch_top)
+        # Policy-check citation URLs (no auto-fetch of denied domains)
+        safe_cites = []
+        for c in result.citations:
+            auth = self.policy.authorize_url(c.url, approved=approved, actor=actor) if c.url else {"ok": True}
+            if auth.get("ok"):
+                safe_cites.append(c.to_dict())
+        out = result.to_dict()
+        out["citations"] = safe_cites
+        out["WEB_FABRIC_STATUS"] = status.get("WEB_FABRIC_STATUS")
+        out["session_id"] = self.session_id
+        out["fabricated_citations"] = False
+        out["policy_audit"] = self.policy.audit()[-5:]
+        self.history.append({"query": query, "ok": out.get("ok"), "citations": len(safe_cites)})
+        return out
+
 MockWebProvider = MockWebSearchProvider

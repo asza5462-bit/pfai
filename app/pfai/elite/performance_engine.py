@@ -126,7 +126,8 @@ class PerformanceReliabilityEngine:
             },
         )
         if not sub.get("ok"):
-            return {**sub, "latency": lat.summary(), "PHASE_22_ALLOWED": False}
+            return {**sub, "latency": lat.summary(), "PHASE_22_ALLOWED": False,
+            "PHASE_23_ALLOWED": False}
 
         self.checkpoints.save(
             task_id=task_id,
@@ -155,6 +156,7 @@ class PerformanceReliabilityEngine:
             "latency": lat.summary(),
             "phase": 21,
             "PHASE_22_ALLOWED": False,
+            "PHASE_23_ALLOWED": False,
         }
 
     def task_status(self, task_id: str) -> dict[str, Any]:
@@ -276,6 +278,7 @@ class PerformanceReliabilityEngine:
             "governor": self.governor.snapshot(),
             "phase": 21,
             "PHASE_22_ALLOWED": False,
+            "PHASE_23_ALLOWED": False,
             "version": self.VERSION,
         }
 

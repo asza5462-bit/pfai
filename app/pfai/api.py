@@ -1103,10 +1103,10 @@ class EliteMCPTrustBody(BaseModel):
 
 @app.post('/chat')
 def elite_unified_chat(x: EliteChatBody, owner: str = Depends(require_owner)):
-    """Unified PFAI AI chat contract (PHASE 12). Does not replace existing ask routes."""
+    """Unified PFAI AI chat — PHASE 22 ProductionRuntime over existing fabrics."""
     if not (x.message or '').strip():
         raise HTTPException(400, 'message is required')
-    result = ELITE.handle(
+    result = ELITE.production.handle(
         x.message,
         conversation_id=x.conversation_id,
         context=x.context,
@@ -1114,9 +1114,63 @@ def elite_unified_chat(x: EliteChatBody, owner: str = Depends(require_owner)):
         requested_mode=x.requested_mode,
         approved=bool(x.approved),
         actor=owner,
+        authenticated=True,
     )
-    OWNER.authorize('ELITE_CHAT', f'{owner} elite chat mode={result.get("mode")} ok={result.get("ok")}')
+    OWNER.authorize('ELITE_CHAT', f'{owner} production chat kind={result.get("response_kind")} ok={result.get("ok")}')
     return result
+
+
+def _should_use_production_runtime(message: str) -> bool:
+    """Route multi-capability / agent-style turns through ProductionRuntime; keep CommandAgent for ops tools."""
+    from .command_agent import _looks_like_coding_intent
+
+    text = (message or '').strip()
+    if not text:
+        return False
+    lowered = text.lower()
+    operational = (
+        'health check', 'health_check', 'فحص الصحة', 'system status', 'حالة النظام',
+        'continuous_start', 'continuous_stop', 'metrics', 'deploy', 'rollback model',
+        'حلل حالة النظام', 'افحص الأخطاء', 'راجع البيانات',
+    )
+    if any(o in lowered for o in operational):
+        return False
+    from .elite.capability_router import CapabilityRouter
+
+    caps = CapabilityRouter().route(text).get('capabilities') or []
+    markers = (
+        'analyze this', 'find the bug', 'find the problem', 'fix it', 'run the tests',
+        'run tests', 'implement', 'and then', 'optimize', 'explain the result',
+        'remember the verified', 'write a fix',
+    )
+    agent_like = len(caps) >= 2 or sum(1 for m in markers if m in lowered) >= 2
+    if agent_like:
+        return True
+    # Coding Academy teaching intents stay on CommandAgent when not multi-capability agent work
+    if _looks_like_coding_intent(text):
+        return False
+    return False
+
+
+def _progress_timeline_for_chat(progress: dict | None) -> list:
+    """Map ProductionRuntime progress labels to Command Chat timeline statuses (no secrets)."""
+    status_map = {
+        'Understanding': 'thinking',
+        'Planning': 'planning',
+        'Selecting capabilities': 'calling_tool',
+        'Executing': 'executing',
+        'Testing': 'executing',
+        'Validating': 'executing',
+        'Completed': 'completed',
+        'Failed': 'failed',
+    }
+    out = []
+    for item in (progress or {}).get('timeline') or []:
+        if not item.get('reached'):
+            continue
+        label = item.get('label') or ''
+        out.append({'status': status_map.get(label, 'executing'), 'detail': label})
+    return out
 
 @app.get('/platform/elite/status')
 def elite_status(owner: str = Depends(require_owner)):
@@ -1245,6 +1299,74 @@ def phase21_platform_status(owner: str = Depends(require_owner)):
     st['scheduler'] = ELITE.performance.scheduler_status() if getattr(ELITE, 'performance', None) else None
     st['PHASE_22_ALLOWED'] = False
     return {'ok': True, **st}
+
+@app.get('/platform/phase22/status')
+def phase22_platform_status(owner: str = Depends(require_owner)):
+    from .elite.phase22_gates import phase22_status
+    st = phase22_status()
+    st['elite'] = {
+        'skill_count': ELITE.skills.health().get('count'),
+        'phase22_boot': (ELITE._boot or {}).get('phase22'),
+        'phase21_boot': (ELITE._boot or {}).get('phase21'),
+        'unified_ai_core': True,
+        'agent_execution_engine': True,
+        'performance_reliability_engine': True,
+        'production_runtime': True,
+    }
+    st['runtime'] = ELITE.production.diagnostics() if getattr(ELITE, 'production', None) else None
+    st['PHASE_23_ALLOWED'] = False
+    return {'ok': True, **st}
+
+@app.get('/runtime/status')
+def runtime_status(owner: str = Depends(require_owner)):
+    _ = owner
+    return {'ok': True, **ELITE.production.diagnostics()}
+
+@app.get('/runtime/capabilities')
+def runtime_capabilities(owner: str = Depends(require_owner)):
+    _ = owner
+    diag = ELITE.production.diagnostics()
+    return {
+        'ok': True,
+        'phase': 22,
+        'pipeline': diag.get('pipeline'),
+        'WEB_FABRIC_STATUS': diag.get('WEB_FABRIC_STATUS'),
+        'EMAIL_DELIVERY_STATUS': diag.get('EMAIL_DELIVERY_STATUS'),
+        'SANDBOX_STATUS': diag.get('SANDBOX_STATUS'),
+        'MODEL_STATUS': diag.get('MODEL_STATUS'),
+        'LKG_STATUS': diag.get('LKG_STATUS'),
+        'ROLLBACK_STATUS': diag.get('ROLLBACK_STATUS'),
+        'SKILL_FABRIC_STATUS': diag.get('SKILL_FABRIC_STATUS'),
+        'TOOL_FABRIC_STATUS': diag.get('TOOL_FABRIC_STATUS'),
+        'MCP_STATUS': diag.get('MCP_STATUS'),
+        'OWNER_AUTH_STATUS': diag.get('OWNER_AUTH_STATUS'),
+        'PHASE_23_ALLOWED': False,
+        'capability_surface_only': True,
+        'raw_environment_included': False,
+    }
+
+@app.get('/runtime/health')
+def runtime_health(owner: str = Depends(require_owner)):
+    _ = owner
+    diag = ELITE.production.diagnostics()
+    return {
+        'ok': True,
+        'healthy': True,
+        'phase': 22,
+        'production_runtime': True,
+        'WEB_FABRIC_STATUS': diag.get('WEB_FABRIC_STATUS'),
+        'EMAIL_DELIVERY_STATUS': diag.get('EMAIL_DELIVERY_STATUS'),
+        'SANDBOX_STATUS': diag.get('SANDBOX_STATUS'),
+        'MODEL_STATUS': diag.get('MODEL_STATUS'),
+        'ROLLBACK_STATUS': diag.get('ROLLBACK_STATUS'),
+        'PHASE_23_ALLOWED': False,
+    }
+
+@app.get('/system/status')
+def system_status_safe(owner: str = Depends(require_owner)):
+    """Safe capability diagnostics — never env/secrets/filesystem dumps."""
+    _ = owner
+    return {'ok': True, **ELITE.production.diagnostics()}
 
 class PerfTaskBody(BaseModel):
     message: str
@@ -2908,7 +3030,52 @@ def chat_conversation(conversation_id: str, owner: str = Depends(require_owner))
 def chat_message(x: ChatMessage, owner: str = Depends(require_owner)):
     if not x.message.strip():
         raise HTTPException(400, 'message is required')
-    result = COMMAND_AGENT.handle(x.message.strip(), owner=owner, conversation_id=x.conversation_id, language=x.language)
+    msg = x.message.strip()
+    if _should_use_production_runtime(msg):
+        prod = ELITE.production.handle(
+            msg,
+            conversation_id=x.conversation_id or '',
+            actor=owner,
+            authenticated=True,
+            approved=False,
+        )
+        cid = COMMAND_MEMORY.ensure_conversation(x.conversation_id)
+        COMMAND_MEMORY.add_message(cid, 'user', msg, status='completed')
+        progress = prod.get('progress') or {}
+        timeline = _progress_timeline_for_chat(progress)
+        reply = str(prod.get('answer') or prod.get('reply') or '')
+        status = 'completed' if prod.get('ok') else 'failed'
+        if not timeline:
+            timeline = [{'status': status, 'detail': progress.get('label') or status}]
+        COMMAND_MEMORY.add_message(
+            cid,
+            'assistant',
+            reply,
+            status=status,
+            meta={
+                'timeline': timeline,
+                'progress': progress,
+                'production_runtime': True,
+                'response_kind': prod.get('response_kind'),
+                'provider': 'production_runtime',
+            },
+        )
+        OWNER.authorize('CHAT_COMMAND', f'{owner} production chat status={status}')
+        return {
+            'ok': bool(prod.get('ok')),
+            'conversation_id': cid,
+            'reply': reply,
+            'timeline': timeline,
+            'progress': progress,
+            'response_kind': prod.get('response_kind'),
+            'provider': 'production_runtime',
+            'status': status,
+            'phase': 22,
+            'WEB_FABRIC_STATUS': prod.get('WEB_FABRIC_STATUS'),
+            'EMAIL_DELIVERY_STATUS': prod.get('EMAIL_DELIVERY_STATUS'),
+            'PHASE_23_ALLOWED': False,
+        }
+    result = COMMAND_AGENT.handle(msg, owner=owner, conversation_id=x.conversation_id, language=x.language)
     OWNER.authorize('CHAT_COMMAND', f'{owner} chat turn status={result.get("status")}')
     return result
 

@@ -130,6 +130,7 @@ class AgentExecutionEngine:
                 "phase": 20,
                 "PHASE_21_ALLOWED": False,
                 "PHASE_22_ALLOWED": False,
+            "PHASE_23_ALLOWED": False,
                 "agent_execution_engine": True,
                 "unified_ai_core": True,
             }
@@ -813,6 +814,7 @@ class AgentExecutionEngine:
             "phase": 20,
             "PHASE_21_ALLOWED": False,
             "PHASE_22_ALLOWED": False,
+            "PHASE_23_ALLOWED": False,
             "agent_execution_engine": True,
             "version": self.VERSION,
             "unified_ai_core": True,

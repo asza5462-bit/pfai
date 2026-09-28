@@ -4,14 +4,25 @@
   let busy = false;
 
   const STATUS_LABEL = {
-    thinking: { ar: 'تفكير', en: 'Thinking' },
+    thinking: { ar: 'فهم الطلب', en: 'Understanding' },
     planning: { ar: 'تخطيط', en: 'Planning' },
-    calling_tool: { ar: 'استدعاء أداة', en: 'Calling tool' },
+    calling_tool: { ar: 'اختيار القدرات', en: 'Selecting capabilities' },
     executing: { ar: 'تنفيذ', en: 'Executing' },
     waiting_for_approval: { ar: 'بانتظار الموافقة', en: 'Waiting for approval' },
     completed: { ar: 'اكتمل', en: 'Completed' },
     failed: { ar: 'فشل', en: 'Failed' },
     rejected: { ar: 'مرفوض', en: 'Rejected' },
+  };
+
+  const PROGRESS_LABEL = {
+    Understanding: { ar: 'فهم الطلب', en: 'Understanding' },
+    Planning: { ar: 'تخطيط', en: 'Planning' },
+    'Selecting capabilities': { ar: 'اختيار القدرات', en: 'Selecting capabilities' },
+    Executing: { ar: 'تنفيذ', en: 'Executing' },
+    Testing: { ar: 'اختبار', en: 'Testing' },
+    Validating: { ar: 'تحقق', en: 'Validating' },
+    Completed: { ar: 'اكتمل', en: 'Completed' },
+    Failed: { ar: 'فشل', en: 'Failed' },
   };
 
   function langOf(text) {
@@ -31,6 +42,24 @@
     ).join('')}</div>`;
   }
 
+  function renderProgress(progress, lang) {
+    if (!progress || !progress.timeline) return '';
+    const pct = Number(progress.progress_percent || 0);
+    const cur = progress.label || '';
+    const L = PROGRESS_LABEL[cur] || { ar: cur, en: cur };
+    const label = lang === 'en' ? L.en : L.ar;
+    const steps = (progress.timeline || []).map(s => {
+      const pl = PROGRESS_LABEL[s.label] || { ar: s.label, en: s.label };
+      const name = lang === 'en' ? pl.en : pl.ar;
+      return `<span class="chat-progress-step${s.reached ? ' reached' : ''}">${esc(name)}</span>`;
+    }).join('');
+    return `<div class="chat-progress" aria-label="execution progress">
+      <div class="chat-progress-bar"><i style="width:${Math.max(0, Math.min(100, pct))}%"></i></div>
+      <div class="chat-progress-label">${esc(label)} · ${pct}%</div>
+      <div class="chat-progress-steps">${steps}</div>
+    </div>`;
+  }
+
   function appendBubble(role, content, meta) {
     const box = $('chatLog');
     if (!box) return;
@@ -45,11 +74,14 @@
         <button class="btn danger" data-reject="${esc(pending.pending_id)}">رفض / Reject</button>
       </div>`;
     }
+    const kind = meta && meta.response_kind ? `<div class="chat-meta muted">kind: ${esc(meta.response_kind)}</div>` : '';
     div.innerHTML = `
       <div class="chat-role">${role === 'user' ? 'المالك / Owner' : 'عقل PFAI / Brain'}</div>
       <div class="chat-text">${esc(content)}</div>
+      ${renderProgress(meta && meta.progress, lang)}
       ${renderTimeline(meta && meta.timeline, lang)}
       ${actions}
+      ${kind}
       ${meta && meta.provider ? `<div class="chat-meta muted">provider: ${esc(meta.provider)} · status: ${esc(meta.status || '')}</div>` : ''}
     `;
     box.appendChild(div);
@@ -90,9 +122,11 @@
       localStorage.setItem('pfai_chat_conversation', conversationId);
       appendBubble('assistant', r.reply || '', {
         timeline: r.timeline,
+        progress: r.progress,
         pending: r.pending,
         provider: r.provider,
         status: r.status,
+        response_kind: r.response_kind,
       });
       if (r.status === 'failed') toast('الأمر فشل / Command failed', true);
       else if (r.status === 'waiting_for_approval') toast('بانتظار موافقتك / Waiting for approval');
@@ -144,8 +178,10 @@
       (r.messages || []).forEach(m => {
         appendBubble(m.role === 'user' ? 'user' : 'assistant', m.content, {
           timeline: (m.meta || {}).timeline,
+          progress: (m.meta || {}).progress,
           pending: (m.meta || {}).pending,
           provider: (m.meta || {}).provider,
+          response_kind: (m.meta || {}).response_kind,
           status: m.status,
         });
       });

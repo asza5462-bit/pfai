@@ -149,8 +149,8 @@ def evaluate_phase19_gates(*, full_tests: dict[str, Any] | None = None) -> dict[
         out = orch.chat("What is 2+2?", actor="gate")
         evidence["simple_chat_ok"] = out.get("ok")
         evidence["simple_chat_phase"] = out.get("phase")
-        if out.get("phase") not in (19, 20, 21):
-            blockers.append(f"chat_phase_not_19_to_21:{out.get('phase')}")
+        if out.get("phase") not in (19, 20, 21, 22):
+            blockers.append(f"chat_phase_not_19_to_22:{out.get('phase')}")
         # Web not configured honesty
         if out.get("WEB_FABRIC_STATUS") not in ("NOT_CONFIGURED", "READY", None):
             blockers.append(f"web_status_unexpected:{out.get('WEB_FABRIC_STATUS')}")
