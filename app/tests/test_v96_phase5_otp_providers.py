@@ -228,6 +228,9 @@ class TestPhase5APISecurity(unittest.TestCase):
         os.environ["PFAI_OWNER_EMAIL"] = "test-owner@example.invalid"
         os.environ["PFAI_OWNER_SECRET_HASH"] = hashlib.sha256(b"test-secret").hexdigest()
         os.environ.pop("ANTHROPIC_API_KEY", None)
+        # TestClient is HTTP — production Secure cookies would not be stored.
+        os.environ["PFAI_ENV"] = "test"
+        os.environ["PFAI_COOKIE_SECURE"] = "false"
         from pfai.api import app, OWNER_AUTH
 
         cls.client = TestClient(app)

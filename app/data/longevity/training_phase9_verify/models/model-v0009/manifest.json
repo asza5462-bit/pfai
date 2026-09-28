@@ -1,0 +1,220 @@
+{
+  "model_id": "model-v0009",
+  "base_model": "local",
+  "base_model_hash": "",
+  "base_model_revision": "",
+  "dataset_version": "dataset-v0008",
+  "training_config": {
+    "method": "lora",
+    "base_model": "local",
+    "epochs": 1.0,
+    "learning_rate": 2e-05,
+    "batch_size": 1,
+    "max_runtime_seconds": 3600,
+    "max_dataset_size": 50000,
+    "checkpoint_every_steps": 50,
+    "require_gpu": false,
+    "max_retries": 2,
+    "allow_mock_backend": true,
+    "extra": {}
+  },
+  "training_code_version": "phase11-v1",
+  "training_backend": "mock",
+  "checkpoint_ref": "data/longevity/training_phase9_verify/artifacts/job-979b1cf13968/checkpoint-final",
+  "tokenizer_version": "",
+  "evaluation": {
+    "ok": false,
+    "candidate_id": "model-v0009",
+    "candidate_scores": {
+      "smoke": 1.0,
+      "longevity": 1.0,
+      "coding": 0.05,
+      "reasoning": 0.05,
+      "knowledge": 0.05,
+      "regression": 1.0,
+      "security": 0.05,
+      "tools": 0.05,
+      "validity": 0.05
+    },
+    "active_scores": {
+      "smoke": 0.93,
+      "longevity": 0.93,
+      "coding": 0.93,
+      "reasoning": 0.93,
+      "knowledge": 0.93,
+      "regression": 0.93,
+      "security": 0.93,
+      "tools": 0.93,
+      "validity": 0.93
+    },
+    "lkg_scores": {
+      "smoke": 0.93,
+      "longevity": 0.93,
+      "coding": 0.93,
+      "reasoning": 0.93,
+      "knowledge": 0.93,
+      "regression": 0.93,
+      "security": 0.93,
+      "tools": 0.93,
+      "validity": 0.93
+    },
+    "overall_candidate": 0.36666666666666664,
+    "overall_active": 0.9300000000000002,
+    "overall_lkg": 0.9300000000000002,
+    "regression": 0.5633333333333335,
+    "suites": {
+      "smoke": {
+        "ok": true,
+        "score": 1.0,
+        "suite": "smoke",
+        "detail": {
+          "ok": true,
+          "score": 1.0,
+          "passed": 1,
+          "failed": 0,
+          "suite": "smoke"
+        }
+      },
+      "longevity": {
+        "ok": true,
+        "score": 1.0,
+        "suite": "longevity",
+        "detail": {
+          "ok": true,
+          "score": 1.0,
+          "passed": 3,
+          "failed": 0,
+          "suite": "longevity"
+        }
+      },
+      "coding": {
+        "ok": false,
+        "score": 0.05,
+        "suite": "coding",
+        "detail": {
+          "ok": false,
+          "score": 0.0,
+          "passed": 0,
+          "failed": 1,
+          "suite": "coding"
+        }
+      },
+      "reasoning": {
+        "ok": false,
+        "score": 0.05,
+        "suite": "reasoning",
+        "detail": {
+          "ok": false,
+          "score": 0.0,
+          "passed": 0,
+          "failed": 1,
+          "suite": "reasoning"
+        }
+      },
+      "knowledge": {
+        "ok": false,
+        "score": 0.05,
+        "suite": "knowledge",
+        "detail": {
+          "ok": false,
+          "score": 0.0,
+          "passed": 0,
+          "failed": 1,
+          "suite": "knowledge"
+        }
+      },
+      "regression": {
+        "ok": true,
+        "score": 1.0,
+        "suite": "regression",
+        "detail": {
+          "ok": true,
+          "score": 1.0,
+          "passed": 1,
+          "failed": 0,
+          "suite": "regression"
+        }
+      },
+      "security": {
+        "ok": false,
+        "score": 0.05,
+        "suite": "security",
+        "detail": {
+          "ok": false,
+          "score": 0.0,
+          "passed": 0,
+          "failed": 1,
+          "suite": "security"
+        }
+      },
+      "tools": {
+        "ok": false,
+        "score": 0.05,
+        "suite": "tools",
+        "detail": {
+          "ok": false,
+          "score": 0.0,
+          "passed": 0,
+          "failed": 1,
+          "suite": "tools"
+        }
+      },
+      "validity": {
+        "ok": false,
+        "score": 0.05,
+        "suite": "validity",
+        "detail": {
+          "ok": false,
+          "score": 0.0,
+          "passed": 0,
+          "failed": 1,
+          "suite": "validity"
+        }
+      }
+    },
+    "load_check": {
+      "ok": true,
+      "integrity": {
+        "ok": true,
+        "kind": "dir",
+        "path": "data/longevity/training_phase9_verify/artifacts/job-979b1cf13968/checkpoint-final",
+        "file_count": 1,
+        "has_adapter": true,
+        "has_base_config": false,
+        "inference_compatible": true
+      },
+      "reload_ok": true,
+      "reload_error": null,
+      "inference_compatible": true
+    },
+    "decision": "REJECT",
+    "gates": {
+      "min_overall_score": 0.55,
+      "max_regression": 0.15,
+      "require_security_pass": true,
+      "require_regression_pass": true,
+      "min_coding_score": 0.4,
+      "min_reasoning_score": 0.4,
+      "require_reload": true,
+      "require_inference_compatible": true
+    },
+    "compared_against": "lkg_or_active"
+  },
+  "metrics": {
+    "examples": 326,
+    "mock": true
+  },
+  "parent_model_id": "model-v0007",
+  "status": "REJECTED",
+  "created_at": 1790587228.3085036,
+  "meta": {
+    "job_id": "job-979b1cf13968",
+    "backend": "mock",
+    "is_mock": true,
+    "real_training": false,
+    "real_weight_update": false,
+    "model_revision": null,
+    "license": "unverified",
+    "hardware": {}
+  }
+}

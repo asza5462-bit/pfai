@@ -66,9 +66,12 @@ class TestUnifiedAICore(unittest.TestCase):
         self.assertFalse(out["PHASE_20_ALLOWED"])
 
     def test_web_not_configured_not_fabricated(self):
-        orch = _elite()
-        out = UnifiedAICore(orch).handle("Please web search for quantum computing papers", actor="t")
-        self.assertEqual(out.get("WEB_FABRIC_STATUS"), "NOT_CONFIGURED")
+        from tests._prod_env_isolation import isolated_unconfigured_env
+
+        with isolated_unconfigured_env():
+            orch = _elite()
+            out = UnifiedAICore(orch).handle("Please web search for quantum computing papers", actor="t")
+            self.assertEqual(out.get("WEB_FABRIC_STATUS"), "NOT_CONFIGURED")
 
     def test_model_unavailable_honest(self):
         orch = EliteOrchestrator(root=tempfile.mkdtemp(), model_router=None, bootstrap_skills=True)
@@ -189,12 +192,15 @@ class TestSkillsAndGates(unittest.TestCase):
         self.assertGreaterEqual(boot["count"], 2)
 
     def test_gate_with_suite(self):
-        g = evaluate_phase19_gates(full_tests={"ran": True, "failed": 0, "passed": 20, "skipped": 1, "total": 21})
-        self.assertFalse(g["PHASE_20_ALLOWED"])
-        self.assertEqual(g["WEB_FABRIC_STATUS"], "NOT_CONFIGURED")
-        self.assertEqual(g["EXACT_BLOCKERS"], [], g["EXACT_BLOCKERS"])
-        self.assertEqual(g["PHASE_19_STATUS"], "PASS")
-        self.assertEqual(g["UNIFIED_AI_CORE_STATUS"], "READY")
+        from tests._prod_env_isolation import isolated_unconfigured_env
+
+        with isolated_unconfigured_env():
+            g = evaluate_phase19_gates(full_tests={"ran": True, "failed": 0, "passed": 20, "skipped": 1, "total": 21})
+            self.assertFalse(g["PHASE_20_ALLOWED"])
+            self.assertEqual(g["WEB_FABRIC_STATUS"], "NOT_CONFIGURED")
+            self.assertEqual(g["EXACT_BLOCKERS"], [], g["EXACT_BLOCKERS"])
+            self.assertEqual(g["PHASE_19_STATUS"], "PASS")
+            self.assertEqual(g["UNIFIED_AI_CORE_STATUS"], "READY")
 
     def test_observability_phase19(self):
         snap = PlatformObservability(_elite(), email_status={"EMAIL_DELIVERY_STATUS": "REMOVED"}).snapshot()

@@ -235,11 +235,14 @@ class TestG_TrainingIntegration(unittest.TestCase):
 
 class TestResearchHonesty(unittest.TestCase):
     def test_web_not_configured(self):
-        res = ResearchWorkflow().run("What is photosynthesis?")
-        self.assertEqual(res.get("WEB_FABRIC_STATUS"), "NOT_CONFIGURED")
-        self.assertFalse(res.get("fabricated_citations"))
-        self.assertFalse(res.get("fabricated_urls"))
-        self.assertEqual(res.get("citations"), [])
+        from tests._prod_env_isolation import isolated_unconfigured_env
+
+        with isolated_unconfigured_env():
+            res = ResearchWorkflow().run("What is photosynthesis?")
+            self.assertEqual(res.get("WEB_FABRIC_STATUS"), "NOT_CONFIGURED")
+            self.assertFalse(res.get("fabricated_citations"))
+            self.assertFalse(res.get("fabricated_urls"))
+            self.assertEqual(res.get("citations"), [])
 
 
 class TestSkillsGatesObservability(unittest.TestCase):
@@ -253,14 +256,17 @@ class TestSkillsGatesObservability(unittest.TestCase):
         self.assertGreaterEqual(int(((orch._boot or {}).get("phase20") or {}).get("count") or 0), 3)
 
     def test_gate_with_suite(self):
-        g = evaluate_phase20_gates(
-            full_tests={"ran": True, "failed": 0, "passed": 20, "skipped": 1, "total": 21}
-        )
-        self.assertFalse(g["PHASE_21_ALLOWED"])
-        self.assertEqual(g["WEB_FABRIC_STATUS"], "NOT_CONFIGURED")
-        self.assertEqual(g["EXACT_BLOCKERS"], [], g["EXACT_BLOCKERS"])
-        self.assertEqual(g["PHASE_20_STATUS"], "PASS")
-        self.assertEqual(g["AGENT_EXECUTION_ENGINE_STATUS"], "READY")
+        from tests._prod_env_isolation import isolated_unconfigured_env
+
+        with isolated_unconfigured_env():
+            g = evaluate_phase20_gates(
+                full_tests={"ran": True, "failed": 0, "passed": 20, "skipped": 1, "total": 21}
+            )
+            self.assertFalse(g["PHASE_21_ALLOWED"])
+            self.assertEqual(g["WEB_FABRIC_STATUS"], "NOT_CONFIGURED")
+            self.assertEqual(g["EXACT_BLOCKERS"], [], g["EXACT_BLOCKERS"])
+            self.assertEqual(g["PHASE_20_STATUS"], "PASS")
+            self.assertEqual(g["AGENT_EXECUTION_ENGINE_STATUS"], "READY")
 
     def test_observability(self):
         snap = PlatformObservability(_elite(), email_status={"EMAIL_DELIVERY_STATUS": "REMOVED"}).snapshot()

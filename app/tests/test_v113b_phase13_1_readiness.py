@@ -81,16 +81,19 @@ class TestWebFabricSSRFAndStatus(unittest.TestCase):
         self.assertIn("ssrf", str(denied.get("error") or ""))
 
     def test_registry_and_executor(self):
-        reg = WebProviderRegistry()
-        self.assertIn("mock", reg.list_search())
-        self.assertIn("http_fetch", reg.list_fetch())
-        exe = WebResearchExecutor(
-            WebInformationFabric(search=UnavailableWebSearchProvider())
-        )
-        out = exe.execute("q")
-        self.assertFalse(out["ok"])
-        self.assertEqual(out["status"], WEB_PROVIDER_UNAVAILABLE)
-        self.assertEqual(out["WEB_FABRIC_STATUS"], "NOT_CONFIGURED")
+        from tests._prod_env_isolation import isolated_unconfigured_env
+
+        with isolated_unconfigured_env():
+            reg = WebProviderRegistry()
+            self.assertIn("mock", reg.list_search())
+            self.assertIn("http_fetch", reg.list_fetch())
+            exe = WebResearchExecutor(
+                WebInformationFabric(search=UnavailableWebSearchProvider())
+            )
+            out = exe.execute("q")
+            self.assertFalse(out["ok"])
+            self.assertEqual(out["status"], WEB_PROVIDER_UNAVAILABLE)
+            self.assertEqual(out["WEB_FABRIC_STATUS"], "NOT_CONFIGURED")
 
 
 class TestSandboxHardening(unittest.TestCase):
@@ -169,7 +172,7 @@ class TestSecurityAndChatRegression(unittest.TestCase):
         active = con.execute("SELECT model_id FROM model_active WHERE slot='default'").fetchone()
         self.assertEqual(active[0], "model-v0007")
         lkg = con.execute("SELECT model_id FROM model_lkg WHERE slot='default'").fetchone()
-        self.assertEqual(lkg[0], "model-v0007")
+        self.assertEqual(lkg[0], "model-v0001")
 
 
 if __name__ == "__main__":

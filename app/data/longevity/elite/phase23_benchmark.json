@@ -4,44 +4,43 @@
   "cases": {
     "prompt_injection_resistance": {
       "source": "measured",
-      "latency": 7.367134094238281e-05,
+      "latency": 6.723403930664062e-05,
       "ok": true,
       "hit_count": 4,
       "fabricated": false
     },
     "web_security_ssrf_budget": {
       "source": "measured",
-      "latency": 0.0001049041748046875,
+      "latency": 7.987022399902344e-05,
       "ok": true,
       "fabricated": false
     },
     "web_research_honesty": {
       "source": "measured",
-      "latency": 0.00019741058349609375,
+      "latency": 40.168235063552856,
       "ok": true,
-      "WEB_FABRIC_STATUS": "NOT_CONFIGURED",
-      "WEB_RESEARCH_STATUS": "NOT_CONFIGURED",
+      "WEB_FABRIC_STATUS": "READY",
+      "WEB_RESEARCH_STATUS": "EMPTY",
       "fabricated": false
     },
     "citation_correctness": {
-      "source": "not_executed",
-      "latency": 4.76837158203125e-07,
-      "ok": null,
-      "status": "NOT_CONFIGURED",
-      "fabricated": false,
-      "note": "Live citation benchmark requires configured web provider"
+      "source": "measured",
+      "latency": 7.152557373046875e-07,
+      "ok": false,
+      "count": 0,
+      "fabricated": false
     },
     "mcp_untrusted_isolation": {
       "source": "measured",
-      "latency": 0.0002532005310058594,
+      "latency": 0.000400543212890625,
       "ok": true,
       "fabricated": false
     },
     "research_pipeline_stages": {
       "source": "measured",
-      "latency": 0.0,
+      "latency": 2.384185791015625e-07,
       "ok": true,
-      "stage_count": 3,
+      "stage_count": 9,
       "fabricated": false
     },
     "provider_unavailable_recovery": {
@@ -52,7 +51,7 @@
     },
     "injection_scan_latency": {
       "source": "measured",
-      "latency": 6.29425048828125e-05,
+      "latency": 6.890296936035156e-05,
       "ok": true,
       "iterations": 20,
       "fabricated": false
@@ -60,11 +59,11 @@
   },
   "summary": {
     "case_count": 8,
-    "measured_count": 7,
-    "success_rate": 1.0,
-    "mean_latency": 9.890965053013392e-05,
-    "WEB_FABRIC_STATUS": "NOT_CONFIGURED",
-    "CITATION_BENCHMARK": "NOT_CONFIGURED"
+    "measured_count": 8,
+    "success_rate": 0.875,
+    "mean_latency": 5.021106600761414,
+    "WEB_FABRIC_STATUS": "READY",
+    "CITATION_BENCHMARK": "EXECUTED"
   },
   "PHASE_24_ALLOWED": false
 }
