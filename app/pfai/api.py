@@ -23,6 +23,9 @@ from .research_gate import ResearchGate
 from .config import Config
 from .continuous_gate import continuous_gate_status, is_continuous_enabled
 from .open_execution import auto_accept_learning, auto_safe_heal, open_execution_status
+from .quantum_core import QuantumInspiredCore, quantum_core_enabled
+from .iot_mind import IoTMind
+from .evolution_cadence import EvolutionCadence, evolution_enabled
 from .logging_setup import setup_logging
 from .command_audit import CommandAuditLog
 from .command_memory import CommandMemoryService
@@ -815,6 +818,95 @@ def _pfai_shutdown_continuous() -> None:
 app.router.add_event_handler('startup', _pfai_startup_continuous)
 app.router.add_event_handler('shutdown', _pfai_shutdown_continuous)
 
+# --- Quantum-inspired ultra-fast core + IoT mind + evolution cadence -------
+IOT_MIND = IoTMind()
+QUANTUM = QuantumInspiredCore(
+    iot_fn=lambda m: IOT_MIND.understand(m),
+    continuous_status_fn=lambda: CONTINUOUS.status(),
+    evolve_status_fn=None,
+)
+
+def _evolve_minute_tick() -> dict:
+    q = QUANTUM.pulse('minute evolution', include_iot=False)
+    cont = {'ok': False, 'skipped': True}
+    if is_continuous_enabled():
+        try:
+            cont = CONTINUOUS.tick_once()
+        except Exception as exc:
+            cont = {'ok': False, 'error': str(exc)[:160]}
+    return {
+        'ok': True,
+        'quantum_us': ((q.get('timing') or {}).get('elapsed_us')),
+        'quantum_band': ((q.get('timing') or {}).get('target_band')),
+        'continuous_ok': bool((cont or {}).get('ok')),
+        'weight_promotion': 'never_auto',
+    }
+
+def _evolve_hour_tick() -> dict:
+    return AUTONOMY.run_cycle(include_continuous_tick=True)
+
+def _evolve_day_tick() -> dict:
+    return ADVANCED.autonomous_cycle(force=True, include_continuous_tick=True)
+
+EVOLUTION = EvolutionCadence(
+    minute_fn=_evolve_minute_tick,
+    hour_fn=_evolve_hour_tick,
+    day_fn=_evolve_day_tick,
+    minute_seconds=int(os.environ.get('PFAI_EVOLVE_MINUTE_SECONDS') or 60),
+    hour_seconds=int(os.environ.get('PFAI_EVOLVE_HOUR_SECONDS') or 3600),
+    day_seconds=int(os.environ.get('PFAI_EVOLVE_DAY_SECONDS') or 86400),
+)
+# Rebind evolve status now that EVOLUTION exists
+QUANTUM.evolve_status_fn = lambda: EVOLUTION.status()
+
+def _pfai_startup_quantum_iot_evolve() -> None:
+    try:
+        seeds = IOT_MIND.training_seeds()
+        reg = CONTINUOUS.register_batch(seeds)
+        log.info('startup: iot seeds accepted=%s', reg.get('accepted'))
+    except Exception as exc:
+        log.warning('startup: iot seed failed: %s', exc)
+    try:
+        st = EVOLUTION.start()
+        log.info('startup: evolution cadence alive=%s', st.get('alive'))
+    except Exception as exc:
+        log.warning('startup: evolution failed: %s', exc)
+
+def _pfai_shutdown_evolution() -> None:
+    try:
+        EVOLUTION.stop('app_shutdown')
+    except Exception as exc:
+        log.warning('shutdown: evolution stop failed: %s', exc)
+
+app.router.add_event_handler('startup', _pfai_startup_quantum_iot_evolve)
+app.router.add_event_handler('shutdown', _pfai_shutdown_evolution)
+
+def _tool_quantum_pulse(message: str = ''):
+    return QUANTUM.pulse(message or 'quantum pulse')
+
+def _tool_quantum_status():
+    return QUANTUM.status()
+
+def _tool_quantum_hot_route(message: str = ''):
+    return QUANTUM.hot_route(message or '')
+
+def _tool_iot_understand(message: str = '', language: str = 'ar'):
+    return IOT_MIND.answer(message or '', language=language or 'ar')
+
+def _tool_iot_status():
+    return IOT_MIND.status()
+
+def _tool_evolution_status():
+    return EVOLUTION.status()
+
+def _tool_evolution_tick(kind: str = 'minute'):
+    k = (kind or 'minute').strip().lower()
+    if k == 'hour':
+        return {'ok': True, 'kind': 'hour', 'result': EVOLUTION.tick_hour(), 'weight_promotion': 'never_auto'}
+    if k == 'day':
+        return {'ok': True, 'kind': 'day', 'result': EVOLUTION.tick_day(), 'weight_promotion': 'never_auto'}
+    return {'ok': True, 'kind': 'minute', 'result': EVOLUTION.tick_minute(), 'weight_promotion': 'never_auto'}
+
 # Migration runner: backup longevity learning DB before apply
 _LONGEVITY_BACKUP_SRC = Path('data/longevity/learning.sqlite3')
 _LONGEVITY_BACKUP_SRC.parent.mkdir(parents=True, exist_ok=True)
@@ -1129,13 +1221,33 @@ for _spec in (
     TOOL_ROUTER.specs[_spec.name] = _spec
 TOOL_ROUTER.handlers['unified_brain_pulse'] = _tool_unified_brain_pulse
 TOOL_ROUTER.handlers['unified_brain_status'] = _tool_unified_brain_status
+
+for _spec in (
+    ToolSpec('quantum_pulse', 'Ultra-fast quantum-inspired parallel hypothesis pulse (classical, measured μs)', 'read', False, {'message': 'string?'}),
+    ToolSpec('quantum_status', 'Quantum-inspired core status (honest: no fake qubits)', 'read', False, {}),
+    ToolSpec('quantum_hot_route', 'Microsecond-oriented local router', 'read', False, {'message': 'string?'}),
+    ToolSpec('iot_understand', 'Deep IoT comprehension (MQTT/Zigbee/Matter/… grounded)', 'read', False, {'message': 'string', 'language': 'string?'}),
+    ToolSpec('iot_status', 'IoT mind status', 'read', False, {}),
+    ToolSpec('evolution_status', 'Minute/hour/day evolution cadence status', 'read', False, {}),
+    ToolSpec('evolution_tick', 'Run one evolution tick (minute|hour|day)', 'write', False, {'kind': 'string?'}),
+):
+    TOOL_ROUTER.specs[_spec.name] = _spec
+TOOL_ROUTER.handlers['quantum_pulse'] = _tool_quantum_pulse
+TOOL_ROUTER.handlers['quantum_status'] = _tool_quantum_status
+TOOL_ROUTER.handlers['quantum_hot_route'] = _tool_quantum_hot_route
+TOOL_ROUTER.handlers['iot_understand'] = _tool_iot_understand
+TOOL_ROUTER.handlers['iot_status'] = _tool_iot_status
+TOOL_ROUTER.handlers['evolution_status'] = _tool_evolution_status
+TOOL_ROUTER.handlers['evolution_tick'] = _tool_evolution_tick
 log.info(
-    'autonomy ready open=%s auto_learn=%s auto_heal=%s advanced_stage=%s unified=%s',
+    'autonomy ready open=%s auto_learn=%s auto_heal=%s advanced_stage=%s unified=%s quantum=%s evolve=%s',
     open_execution_status().get('open_chat_tools'),
     auto_accept_learning(),
     auto_safe_heal(),
     (ADVANCED.maturity() or {}).get('stage'),
     unified_brain_enabled(),
+    quantum_core_enabled(),
+    evolution_enabled(),
 )
 ELITE = EliteOrchestrator(
     root='data/longevity/elite',

@@ -1,6 +1,6 @@
 # PFAI Project Memory
 
-Last updated: 2026-09-28 (PFAI 8.7.0 — smart continuous high-precision loop)
+Last updated: 2026-09-28 (PFAI 8.8.0 — quantum-inspired speed + IoT + evolution cadence)
 
 ## Snapshot
 
@@ -39,6 +39,14 @@ Last updated: 2026-09-28 (PFAI 8.7.0 — smart continuous high-precision loop)
 - Deep comprehension before plan/compose
 - Legendary memory: facts + digests + ranked recall + desire ingest
 - Elite replies: فهمتك → memory → live → next step
+
+## Quantum-inspired + IoT + evolution (8.8)
+
+- Classical parallel hypothesis core with measured ns/μs — **not** quantum hardware
+- IoT mind: MQTT/Zigbee/Matter/CoAP/Modbus/OPC-UA/edge/security grounded cards
+- Evolution cadence: minute (quantum+continuous), hour (autonomy), day (advanced develop)
+- Chat tools: quantum_pulse/status, iot_understand, evolution_status/tick
+- Still never auto-promotes weights; no fabricated sensor telemetry
 
 ## Smart continuous training (8.7)
 

@@ -29,7 +29,23 @@ def comprehend(
     strategy = "direct_answer"
 
     # Intent taxonomy
-    if re.search(r"عقل\s*واحد|unified|سلاسة|سرعة", text, re.I):
+    if re.search(
+        r"كم[يّ]|quantum|جزء\s*من\s*مليون|microsecond|μs|\bus\b|سرعة\s*فائق|"
+        r"إنترنت\s*الأشياء|انترنت\s*الاشياء|\biot\b|mqtt|zigbee|matter",
+        text,
+        re.I,
+    ):
+        intent = "quantum_iot_speed"
+        goals.append("ultra_fast_local_core")
+        goals.append("iot_comprehension")
+        goals.append("continuous_evolution")
+        strategy = "quantum_iot_evolve"
+        latent = (
+            "نواة سرعة حقيقية + فهم IoT + تطوّر كل دقيقة دون ادّعاء حاسوب كمّي زائف"
+            if ar else
+            "real ultra-fast core + IoT understanding + per-minute evolution without fake quantum hardware claims"
+        )
+    elif re.search(r"عقل\s*واحد|unified|سلاسة|سرعة", text, re.I):
         intent = "unify_system"
         goals.append("coherent_fast_system")
         strategy = "unified_pulse"
@@ -82,6 +98,8 @@ def comprehend(
         (r"شات|chat", "chat"),
         (r"تدريب|training", "training"),
         (r"ذاكرة|memory", "memory"),
+        (r"iot|أشياء|اشياء|mqtt", "iot"),
+        (r"كم[يّ]|quantum", "quantum_inspired"),
     ]:
         if re.search(pat, text, re.I):
             entities.append(label)
@@ -120,6 +138,10 @@ def _default_latent(intent: str, lang: str) -> str:
     ar = lang.startswith("ar")
     mapping = {
         "unify_system": ("منظومة متماسكة سريعة بلا تشتيت", "coherent fast system without fragmentation"),
+        "quantum_iot_speed": (
+            "سرعة محلية مقاسة + IoT حقيقي + تطوّر مستمر (بدون كمّ زائف)",
+            "measured local speed + real IoT + continuous evolution (no fake quantum)",
+        ),
         "self_evolve": ("ذكاء يطوّر نفسه بتحقق حقيقي", "self-improving intelligence with real verification"),
         "teach": ("تعلّم فعّال بخطوات واضحة", "effective learning with clear steps"),
         "research": ("حقائق موثوقة مع مصادر", "reliable facts with sources"),

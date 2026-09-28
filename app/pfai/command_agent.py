@@ -262,7 +262,8 @@ class CommandAgent:
         "training_control_status", "coding_tracks", "coding_progress", "coding_projects",
         "coding_knowledge", "coding_next_lesson", "web_status", "app_control_status",
         "autonomy_status", "advanced_status", "advanced_awareness", "self_check_run",
-        "unified_brain_status",
+        "unified_brain_status", "quantum_status", "quantum_pulse", "iot_status", "iot_understand",
+        "evolution_status",
     })
 
     def _execute_plan(
@@ -524,6 +525,7 @@ def _budget_plan(planned: list[dict], *, max_tools: int = 3) -> list[dict]:
         companion_ok = {
             "advanced_self_develop", "self_improve_tick", "app_control_status",
             "training_cycle_start", "continuous_tick", "continuous_start",
+            "quantum_pulse", "iot_understand", "evolution_tick",
         }
         # If the turn is ONLY pulse + redundant status mirrors, collapse to pulse
         non_mirror = [p for p in planned if p.get("tool") in companion_ok]

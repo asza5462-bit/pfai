@@ -1,5 +1,19 @@
 # Agent Context Changelog
 
+## 2026-09-28 — PFAI 8.8: Quantum-inspired ultra-fast + IoT + evolution
+
+### Implemented
+- `quantum_core.py`: classical parallel superposition/collapse with honest ns/μs timing
+- `iot_mind.py`: grounded IoT knowledge (MQTT, Zigbee, Matter, edge, security, …)
+- `evolution_cadence.py`: minute/hour/day hard-work ticks (curate → improve → develop)
+- Chat tools + Arabic planner/comprehension for كمّي / IoT / سرعة / تطوّر كل دقيقة
+- Tests: `test_v141_quantum_iot_evolve.py`
+
+### Honesty
+- `quantum_hardware: false` always — no fake qubits
+- Local hot path measured; LLM/network remain separate slower bands
+- No invented live sensor readings
+
 ## 2026-09-28 — PFAI 8.7: Smart continuous high-precision training
 
 ### Implemented

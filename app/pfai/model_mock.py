@@ -43,6 +43,17 @@ class MockCommandProvider(ModelProvider):
         ))
 
         if re.search(
+            r"كم[يّ]|quantum|جزء\s*من\s*مليون|microsecond|سرعة\s*فائق|"
+            r"إنترنت\s*الأشياء|انترنت\s*الاشياء|\biot\b|mqtt|zigbee|matter|"
+            r"يتطور\s*كل|تطور\s*كل\s*دقيقة|evolution\s*cadence",
+            text + ar,
+            re.I,
+        ):
+            add("quantum_pulse")
+            add("iot_understand")
+            add("evolution_status")
+            add("quantum_status")
+        if re.search(
             r"eligib|أهلية|حالة\s*التدريب|training\s*status|جاهزية\s*التدريب|"
             r"هل\s*(التدريب|النموذج)|next\s*training|can\s*we\s*train|متى\s*نتدرب",
             text + ar,
@@ -289,6 +300,23 @@ class MockCommandProvider(ModelProvider):
             elif name in {"web_search", "web_research"} and isinstance(res, dict):
                 n = len(res.get("results") or res.get("citations") or [])
                 insights.append(f"web hits={n} status={res.get('WEB_FABRIC_STATUS') or res.get('error')}")
+            elif name == "quantum_pulse" and isinstance(res, dict):
+                t = res.get("timing") or {}
+                insights.append(_brief({
+                    "collapsed": (res.get("collapsed") or {}).get("hypothesis"),
+                    "us": t.get("elapsed_us"), "band": t.get("target_band"),
+                    "quantum_hardware": res.get("quantum_hardware"),
+                }, 220))
+            elif name == "iot_understand" and isinstance(res, dict):
+                cards = res.get("cards") or []
+                insights.append(("IoT: " if en else "IoT: ") + (res.get("answer") or _brief({
+                    "confidence": res.get("confidence"), "cards": [c.get("title") for c in cards[:3]],
+                }, 260))[:260])
+            elif name == "evolution_status" and isinstance(res, dict):
+                insights.append(_brief({
+                    "alive": res.get("alive"), "minute": res.get("minute_ticks"),
+                    "hour": res.get("hour_ticks"), "day": res.get("day_ticks"),
+                }, 180))
             elif name in {"advanced_self_develop", "self_improve_tick"} and isinstance(res, dict):
                 insights.append(_brief({
                     "stage": res.get("stage") or (res.get("maturity") or {}).get("stage"),
@@ -315,6 +343,10 @@ class MockCommandProvider(ModelProvider):
         intent = u.get("intent") or "general"
         next_move = {
             "unify_system": ("اطلب نبضة عقل واحد أو راقب اللوحة الحية.", "Ask for a unified pulse or watch the live board."),
+            "quantum_iot_speed": (
+                "اطلب quantum_pulse أو سؤال MQTT/Zigbee — التطور يعمل كل دقيقة.",
+                "Ask for quantum_pulse or an MQTT/Zigbee question — evolution ticks every minute.",
+            ),
             "self_evolve": ("شغّل التطوير الذاتي المتقدم الآن.", "Run advanced self-develop now."),
             "teach": ("ابدأ درساً أو سلّم تمريناً للتحقق.", "Start a lesson or submit an exercise to verify."),
             "research": ("حدّد سؤالاً أدق للبحث الحي.", "Narrow the live research question."),
