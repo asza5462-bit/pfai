@@ -21,7 +21,7 @@
 
 ```bash
 # اضبط الأسرار في بيئتك فقط (لا تضعها في ملفات متعقّبة)
-export PFAI_OWNER_EMAIL='you@example.com'
+export PFAI_OWNER_USERNAME='your_username'
 export PFAI_OWNER_SECRET_HASH="$(python3 -c 'import hashlib; print(hashlib.sha256(b"CHANGE_THIS_SECRET").hexdigest())')"
 # export ANTHROPIC_API_KEY=...   # من أسرار المنصة/الصدفة فقط
 
