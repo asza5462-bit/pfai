@@ -1,0 +1,55 @@
+{
+  "job_id": "job-b3d365a10df7",
+  "backend": "transformers_lora",
+  "real_training": true,
+  "real_weight_update": true,
+  "is_mock": false,
+  "base_model": "data/models/distilgpt2",
+  "model_revision": null,
+  "license": "apache-2.0",
+  "provider": "local_open_weight",
+  "model_source": "local_path",
+  "method": "lora",
+  "target_modules": [
+    "c_attn"
+  ],
+  "max_steps": 180,
+  "max_seq_length": 96,
+  "seed": 31,
+  "examples": 309,
+  "train_loss": 4.037030427985721,
+  "global_step": 180,
+  "adapter_files": [
+    "adapter_model.safetensors"
+  ],
+  "hardware": {
+    "device": "cpu",
+    "cuda": false,
+    "torch": "2.5.1+cu124",
+    "ram_gb": 15.64,
+    "ram_available_gb": 4.38,
+    "cpu_count": 4
+  },
+  "created_at": 1790543313.66103,
+  "training_config": {
+    "method": "lora",
+    "base_model": "data/models/distilgpt2",
+    "epochs": 1.0,
+    "learning_rate": 0.0002,
+    "batch_size": 1,
+    "max_runtime_seconds": 1800,
+    "max_dataset_size": 50000,
+    "checkpoint_every_steps": 50,
+    "require_gpu": false,
+    "max_retries": 2,
+    "allow_mock_backend": false,
+    "extra": {
+      "max_steps": 180,
+      "max_seq_length": 96,
+      "seed": 31,
+      "license": "apache-2.0",
+      "lora_r": 8,
+      "lora_alpha": 16
+    }
+  }
+}

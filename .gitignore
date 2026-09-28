@@ -27,14 +27,50 @@ Thumbs.db
 .idea/
 .vscode/
 
-# Runtime data (keep structure via .gitkeep where needed)
+# Cursor local plugin/auth state (never push MCP OAuth or plugin caches)
+.cursor/
+
+# Runtime data default-deny; allow only production seed paths below
 app/data/**
 !app/data/.gitkeep
+
+# Production seed: MODEL_V0007 active + MODEL_V0001 LKG + registry/adapters
+!app/data/longevity/
+!app/data/longevity/training_phase9_verify/
+!app/data/longevity/training_phase9_verify/models/
+!app/data/longevity/training_phase9_verify/models/**
+!app/data/longevity/training_phase9_verify/artifacts/
+!app/data/longevity/training_phase9_verify/artifacts/job-b3d365a10df7/
+!app/data/longevity/training_phase9_verify/artifacts/job-b3d365a10df7/checkpoint-final/
+!app/data/longevity/training_phase9_verify/artifacts/job-b3d365a10df7/checkpoint-final/**
+!app/data/longevity/training_phase9_verify/artifacts/job-ed48fb2b07df/
+!app/data/longevity/training_phase9_verify/artifacts/job-ed48fb2b07df/checkpoint-final/
+!app/data/longevity/training_phase9_verify/artifacts/job-ed48fb2b07df/checkpoint-final/**
+!app/data/longevity/training_phase9_verify/active_runtime.json
+!app/data/longevity/training_phase9_verify/promotion_history.jsonl
+!app/data/longevity/training_phase9_verify/orchestrator_state.json
+!app/data/longevity/elite/
+!app/data/longevity/elite/web_live_verify.json
+!app/data/longevity/elite/production_autonomous_status.json
+!app/data/longevity/elite/phase23_benchmark.json
+!app/data/longevity/elite/phase22_suite_evidence.json
+!app/data/models/
+!app/data/models/distilgpt2/
+!app/data/models/distilgpt2/**
+
 app/TEST_RESULT.txt
 
-# Local model caches
-models/
+# Local model caches / binary artifacts (repo-root only; not app/data/.../models)
+/models/
 *.pt
 *.bin
 *.safetensors
+# Re-include production seed artifacts after binary denies
+!app/data/longevity/training_phase9_verify/models/**
+!app/data/models/distilgpt2/**
+!app/data/longevity/training_phase9_verify/artifacts/**/adapter_model.safetensors
+# Base weights exceed GitHub file limit; downloaded at Docker build time
+app/data/models/distilgpt2/model.safetensors
+
+# Host-only runtime secrets live outside this repo (/agent/pfai/runtime)
 runtime/

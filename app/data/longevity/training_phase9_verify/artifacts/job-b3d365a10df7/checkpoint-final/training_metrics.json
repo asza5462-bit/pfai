@@ -1,0 +1,11 @@
+{
+  "train_loss": 4.037030427985721,
+  "global_step": 180,
+  "metrics": {
+    "train_runtime": 12.5123,
+    "train_samples_per_second": 14.386,
+    "train_steps_per_second": 14.386,
+    "train_loss": 4.037030427985721,
+    "epoch": 0.5825242718446602
+  }
+}

@@ -1,0 +1,9 @@
+{
+  "ran": true,
+  "passed": 1,
+  "failed": 0,
+  "skipped": 0,
+  "total": 1,
+  "stamped_at": 1790562454.3562365,
+  "source": "pytest_full_suite"
+}

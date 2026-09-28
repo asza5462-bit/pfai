@@ -9,6 +9,22 @@ WORKDIR /app
 COPY app/requirements.txt /app/requirements.txt
 RUN pip install --no-cache-dir -r /app/requirements.txt
 COPY app/ /app/
+# Base open-weight (~328MB) is not stored in git (GitHub file limit). Fetch at build.
+RUN python - <<'PY'
+from pathlib import Path
+from urllib.request import urlretrieve
+import hashlib
+
+dest = Path("data/models/distilgpt2/model.safetensors")
+dest.parent.mkdir(parents=True, exist_ok=True)
+if dest.exists() and dest.stat().st_size > 100_000_000:
+    print("distilgpt2 weights already present")
+else:
+    url = "https://huggingface.co/distilbert/distilgpt2/resolve/main/model.safetensors"
+    print("downloading", url)
+    urlretrieve(url, dest)
+    print("downloaded_bytes", dest.stat().st_size)
+PY
 RUN useradd --create-home --uid 10001 pfai \
     && mkdir -p /app/data \
     && chown -R pfai:pfai /app

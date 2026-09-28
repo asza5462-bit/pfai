@@ -1,0 +1,196 @@
+{
+  "model_id": "model-v0005",
+  "base_model": "data/models/distilgpt2",
+  "base_model_hash": "",
+  "base_model_revision": "",
+  "dataset_version": "dataset-v0005",
+  "training_config": {
+    "method": "lora",
+    "base_model": "data/models/distilgpt2",
+    "epochs": 1.0,
+    "learning_rate": 0.0003,
+    "batch_size": 1,
+    "max_runtime_seconds": 1800,
+    "max_dataset_size": 50000,
+    "checkpoint_every_steps": 50,
+    "require_gpu": false,
+    "max_retries": 2,
+    "allow_mock_backend": false,
+    "extra": {
+      "max_steps": 200,
+      "max_seq_length": 96,
+      "seed": 17,
+      "license": "apache-2.0",
+      "lora_r": 8,
+      "lora_alpha": 16
+    }
+  },
+  "training_code_version": "phase11-v1",
+  "training_backend": "transformers_lora",
+  "checkpoint_ref": "data/longevity/training_phase9_verify/artifacts/job-6aee79610aa6/checkpoint-final",
+  "tokenizer_version": "",
+  "evaluation": {
+    "ok": true,
+    "candidate_id": "model-v0005",
+    "candidate_scores": {
+      "smoke": 0.8500000000000001,
+      "longevity": 0.75,
+      "coding": 0.7000000000000001,
+      "reasoning": 0.65,
+      "knowledge": 0.75,
+      "regression": 0.8,
+      "security": 0.9500000000000001,
+      "tools": 0.75,
+      "validity": 0.8500000000000001
+    },
+    "active_scores": {
+      "smoke": 0.93,
+      "longevity": 0.93,
+      "coding": 0.93,
+      "reasoning": 0.93,
+      "knowledge": 0.93,
+      "regression": 0.93,
+      "security": 0.93,
+      "tools": 0.93,
+      "validity": 0.93
+    },
+    "lkg_scores": {
+      "smoke": 0.93,
+      "longevity": 0.93,
+      "coding": 0.93,
+      "reasoning": 0.93,
+      "knowledge": 0.93,
+      "regression": 0.93,
+      "security": 0.93,
+      "tools": 0.93,
+      "validity": 0.93
+    },
+    "overall_candidate": 0.7833333333333334,
+    "overall_active": 0.9300000000000002,
+    "overall_lkg": 0.9300000000000002,
+    "regression": 0.14666666666666672,
+    "suites": {
+      "smoke": {
+        "ok": true,
+        "score": 0.8500000000000001,
+        "suite": "smoke",
+        "synthetic": true
+      },
+      "longevity": {
+        "ok": true,
+        "score": 0.75,
+        "suite": "longevity",
+        "synthetic": true
+      },
+      "coding": {
+        "ok": true,
+        "score": 0.7000000000000001,
+        "suite": "coding",
+        "synthetic": true
+      },
+      "reasoning": {
+        "ok": true,
+        "score": 0.65,
+        "suite": "reasoning",
+        "synthetic": true
+      },
+      "knowledge": {
+        "ok": true,
+        "score": 0.75,
+        "suite": "knowledge",
+        "synthetic": true
+      },
+      "regression": {
+        "ok": true,
+        "score": 0.8,
+        "suite": "regression",
+        "synthetic": true
+      },
+      "security": {
+        "ok": true,
+        "score": 0.9500000000000001,
+        "suite": "security",
+        "synthetic": true
+      },
+      "tools": {
+        "ok": true,
+        "score": 0.75,
+        "suite": "tools",
+        "synthetic": true
+      },
+      "validity": {
+        "ok": true,
+        "score": 0.8500000000000001,
+        "suite": "validity",
+        "synthetic": true
+      }
+    },
+    "load_check": {
+      "ok": true,
+      "integrity": {
+        "ok": true,
+        "kind": "dir",
+        "path": "data/longevity/training_phase9_verify/artifacts/job-6aee79610aa6/checkpoint-final",
+        "file_count": 11,
+        "has_adapter": true,
+        "has_base_config": false,
+        "inference_compatible": true
+      },
+      "reload_ok": true,
+      "reload_error": null,
+      "inference_compatible": true
+    },
+    "decision": "PASS",
+    "gates": {
+      "min_overall_score": 0.55,
+      "max_regression": 0.15,
+      "require_security_pass": true,
+      "require_regression_pass": true,
+      "min_coding_score": 0.4,
+      "min_reasoning_score": 0.4,
+      "require_reload": true,
+      "require_inference_compatible": true
+    },
+    "compared_against": "lkg_or_active"
+  },
+  "metrics": {
+    "train_loss": 4.039111870527267,
+    "global_step": 200,
+    "examples": 308,
+    "elapsed": 15.401213884353638,
+    "adapter_files": [
+      "adapter_model.safetensors"
+    ],
+    "reload_ok": true,
+    "reload_error": null,
+    "license": "apache-2.0",
+    "model_source": "local_path"
+  },
+  "parent_model_id": "model-v0004",
+  "status": "VALIDATED",
+  "created_at": 1790525492.712819,
+  "meta": {
+    "job_id": "job-6aee79610aa6",
+    "backend": "transformers_lora",
+    "is_mock": false,
+    "real_training": true,
+    "real_weight_update": true,
+    "model_revision": null,
+    "license": "apache-2.0",
+    "hardware": {
+      "device": "cpu",
+      "cuda": false,
+      "torch": "2.5.1+cu124",
+      "ram_gb": 15.64,
+      "ram_available_gb": 4.38,
+      "cpu_count": 4
+    },
+    "production_ready": false,
+    "serving_tier": "validated",
+    "production_ready_reason": "replaced_as_active",
+    "production_evaluation_run_id": "",
+    "production_ready_at": 1790543313.7043452
+  },
+  "production_ready": false,
+  "serving_tier": "validated"
+}
