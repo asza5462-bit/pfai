@@ -1317,6 +1317,107 @@ def phase22_platform_status(owner: str = Depends(require_owner)):
     st['PHASE_23_ALLOWED'] = False
     return {'ok': True, **st}
 
+@app.get('/platform/phase23/status')
+def phase23_platform_status(owner: str = Depends(require_owner)):
+    from .elite.phase23_gates import phase23_status
+    st = phase23_status()
+    st['elite'] = {
+        'skill_count': ELITE.skills.health().get('count'),
+        'phase23_boot': (ELITE._boot or {}).get('phase23'),
+        'phase22_boot': (ELITE._boot or {}).get('phase22'),
+        'web_tools': (ELITE._boot or {}).get('web_tools'),
+        'production_runtime': True,
+        'web_research_pipeline': True,
+    }
+    st['runtime'] = ELITE.production.diagnostics() if getattr(ELITE, 'production', None) else None
+    st['mcp_registry'] = ELITE.mcp_registry.health() if getattr(ELITE, 'mcp_registry', None) else None
+    st['PHASE_24_ALLOWED'] = False
+    return {'ok': True, **st}
+
+class WebQueryBody(BaseModel):
+    query: str = ''
+    url: str = ''
+    limit: int = 5
+    fetch_top: int = 1
+    approved: bool = False
+
+@app.get('/platform/web/providers')
+def web_providers_status(owner: str = Depends(require_owner)):
+    from .elite.web_fabric import web_config_report
+    _ = owner
+    return {'ok': True, **web_config_report()}
+
+@app.post('/platform/web/search')
+def web_search_api(body: WebQueryBody, owner: str = Depends(require_owner)):
+    from .elite.web_fabric import web_config_report
+    from .elite.web_research_pipeline import WebResearchPipeline
+    if not (body.query or '').strip():
+        raise HTTPException(400, 'query is required')
+    status = web_config_report()
+    if status.get('WEB_FABRIC_STATUS') != 'READY':
+        OWNER.authorize('WEB_SEARCH', f'{owner} search denied status={status.get("WEB_FABRIC_STATUS")}')
+        return {
+            'ok': False,
+            'WEB_FABRIC_STATUS': status.get('WEB_FABRIC_STATUS') or 'NOT_CONFIGURED',
+            'fabricated_results': False,
+            'results': [],
+            'error': 'web_provider_unavailable',
+            'PHASE_24_ALLOWED': False,
+        }
+    out = WebResearchPipeline().run(body.query.strip(), limit=int(body.limit or 5), approved=bool(body.approved), actor=owner)
+    OWNER.authorize('WEB_SEARCH', f'{owner} search ok={out.get("ok")}')
+    return out
+
+@app.post('/platform/web/fetch')
+def web_fetch_api(body: WebQueryBody, owner: str = Depends(require_owner)):
+    from .elite.web_fabric import WebPolicyGate, web_config_report, WebInformationFabric
+    if not (body.url or '').strip():
+        raise HTTPException(400, 'url is required')
+    auth = WebPolicyGate().authorize_url(body.url.strip(), approved=bool(body.approved), actor=owner)
+    if not auth.get('ok'):
+        OWNER.authorize('WEB_FETCH', f'{owner} fetch denied')
+        return {'ok': False, 'error': auth.get('error'), 'ssrf_blocked': True, 'PHASE_24_ALLOWED': False}
+    status = web_config_report()
+    if status.get('WEB_FABRIC_STATUS') != 'READY':
+        return {
+            'ok': False,
+            'WEB_FABRIC_STATUS': status.get('WEB_FABRIC_STATUS') or 'NOT_CONFIGURED',
+            'error': 'web_provider_unavailable',
+            'fabricated_results': False,
+            'PHASE_24_ALLOWED': False,
+        }
+    fetched = WebInformationFabric().fetch_provider.fetch(body.url.strip())
+    OWNER.authorize('WEB_FETCH', f'{owner} fetch ok={fetched.get("ok")}')
+    return {**fetched, 'PHASE_24_ALLOWED': False}
+
+@app.post('/platform/web/research')
+def web_research_api(body: WebQueryBody, owner: str = Depends(require_owner)):
+    from .elite.web_research_pipeline import WebResearchPipeline
+    if not (body.query or '').strip():
+        raise HTTPException(400, 'query is required')
+    out = WebResearchPipeline().run(
+        body.query.strip(),
+        limit=int(body.limit or 5),
+        fetch_top=int(body.fetch_top or 1),
+        approved=bool(body.approved),
+        actor=owner,
+    )
+    OWNER.authorize('WEB_RESEARCH', f'{owner} research status={out.get("WEB_RESEARCH_STATUS")}')
+    return out
+
+@app.get('/platform/mcp/status')
+def mcp_registry_status(owner: str = Depends(require_owner)):
+    _ = owner
+    return {'ok': True, **(ELITE.mcp_registry.health() if getattr(ELITE, 'mcp_registry', None) else {'MCP_STATUS': 'NOT_READY'})}
+
+@app.get('/platform/mcp/capabilities')
+def mcp_capabilities(owner: str = Depends(require_owner)):
+    _ = owner
+    reg = getattr(ELITE, 'mcp_registry', None)
+    if reg is None:
+        return {'ok': False, 'error': 'mcp_registry_unavailable'}
+    return reg.discover_capabilities()
+
 @app.get('/runtime/status')
 def runtime_status(owner: str = Depends(require_owner)):
     _ = owner
@@ -1328,10 +1429,14 @@ def runtime_capabilities(owner: str = Depends(require_owner)):
     diag = ELITE.production.diagnostics()
     return {
         'ok': True,
-        'phase': 22,
+        'phase': 23,
         'pipeline': diag.get('pipeline'),
         'WEB_FABRIC_STATUS': diag.get('WEB_FABRIC_STATUS'),
+        'WEB_PROVIDER_STATUS': diag.get('WEB_PROVIDER_STATUS'),
+        'WEB_RESEARCH_STATUS': diag.get('WEB_RESEARCH_STATUS'),
+        'CITATION_STATUS': diag.get('CITATION_STATUS'),
         'EMAIL_DELIVERY_STATUS': diag.get('EMAIL_DELIVERY_STATUS'),
+        'EMAIL_LIFECYCLE_STATUS': diag.get('EMAIL_LIFECYCLE_STATUS'),
         'SANDBOX_STATUS': diag.get('SANDBOX_STATUS'),
         'MODEL_STATUS': diag.get('MODEL_STATUS'),
         'LKG_STATUS': diag.get('LKG_STATUS'),
@@ -1340,7 +1445,7 @@ def runtime_capabilities(owner: str = Depends(require_owner)):
         'TOOL_FABRIC_STATUS': diag.get('TOOL_FABRIC_STATUS'),
         'MCP_STATUS': diag.get('MCP_STATUS'),
         'OWNER_AUTH_STATUS': diag.get('OWNER_AUTH_STATUS'),
-        'PHASE_23_ALLOWED': False,
+        'PHASE_24_ALLOWED': False,
         'capability_surface_only': True,
         'raw_environment_included': False,
     }
@@ -1352,14 +1457,15 @@ def runtime_health(owner: str = Depends(require_owner)):
     return {
         'ok': True,
         'healthy': True,
-        'phase': 22,
+        'phase': 23,
         'production_runtime': True,
+        'web_research_pipeline': True,
         'WEB_FABRIC_STATUS': diag.get('WEB_FABRIC_STATUS'),
         'EMAIL_DELIVERY_STATUS': diag.get('EMAIL_DELIVERY_STATUS'),
         'SANDBOX_STATUS': diag.get('SANDBOX_STATUS'),
         'MODEL_STATUS': diag.get('MODEL_STATUS'),
         'ROLLBACK_STATUS': diag.get('ROLLBACK_STATUS'),
-        'PHASE_23_ALLOWED': False,
+        'PHASE_24_ALLOWED': False,
     }
 
 @app.get('/system/status')
@@ -1384,6 +1490,7 @@ def phase21_submit_task(body: PerfTaskBody, owner: str = Depends(require_owner))
         context=dict(body.context or {}),
     )
     out['PHASE_22_ALLOWED'] = False
+    out['PHASE_24_ALLOWED'] = False
     return {'ok': bool(out.get('ok')), **out}
 
 @app.get('/platform/phase21/tasks/{task_id}')
@@ -3068,12 +3175,14 @@ def chat_message(x: ChatMessage, owner: str = Depends(require_owner)):
             'timeline': timeline,
             'progress': progress,
             'response_kind': prod.get('response_kind'),
+            'information_source': prod.get('information_source') or 'model_knowledge',
+            'citations': prod.get('citations') or [],
             'provider': 'production_runtime',
             'status': status,
-            'phase': 22,
+            'phase': 23,
             'WEB_FABRIC_STATUS': prod.get('WEB_FABRIC_STATUS'),
             'EMAIL_DELIVERY_STATUS': prod.get('EMAIL_DELIVERY_STATUS'),
-            'PHASE_23_ALLOWED': False,
+            'PHASE_24_ALLOWED': False,
         }
     result = COMMAND_AGENT.handle(msg, owner=owner, conversation_id=x.conversation_id, language=x.language)
     OWNER.authorize('CHAT_COMMAND', f'{owner} chat turn status={result.get("status")}')

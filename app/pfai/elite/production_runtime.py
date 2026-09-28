@@ -48,7 +48,7 @@ class ProductionRuntime:
       → Validation → Observability → Learning → Response
     """
 
-    VERSION = "22.0.0"
+    VERSION = "23.0.0"
 
     def __init__(self, orchestrator: Any, *, audit_path: str = "data/longevity/elite/production_runtime_audit.jsonl") -> None:
         self.orch = orchestrator
@@ -96,8 +96,8 @@ class ProductionRuntime:
                 "error": "authentication_required",
                 "answer": "Authentication required.",
                 "request_id": request_id,
-                "phase": 22,
-                "PHASE_23_ALLOWED": False,
+                "phase": 23,
+                "PHASE_24_ALLOWED": False,
                 "stages": stages,
                 "pipeline": list(PIPELINE_STAGES),
                 "progress": self._progress_from_stages(stages, terminal="FAILED"),
@@ -118,6 +118,41 @@ class ProductionRuntime:
         mark("tool_mcp_execution", note="AuthorizedExecutor gates")
         mark("sandbox", note="READY_BOUNDED when used")
 
+        # Research intents: run honest web research pipeline (may be NOT_CONFIGURED)
+        research_meta = None
+        lowered = (message or "").lower()
+        research_markers = (
+            "search the web",
+            "web search",
+            "look up",
+            "find sources",
+            "cite sources",
+            "research online",
+            "ابحث عن",
+            "قارن هذه المصادر",
+            "تحقق من صحة",
+            "حلل هذه الصفحة",
+            "بالمصادر",
+        )
+        if any(m in lowered for m in research_markers) or requested_mode in ("RESEARCH", "research"):
+            try:
+                from pfai.elite.web_research_pipeline import WebResearchPipeline
+
+                pipe = getattr(self.orch, "web_research", None) or WebResearchPipeline()
+                research_meta = pipe.run(message, approved=approved, actor=actor, request_id=request_id)
+                mark(
+                    "tool_mcp_execution",
+                    web_research=True,
+                    WEB_FABRIC_STATUS=research_meta.get("WEB_FABRIC_STATUS"),
+                )
+            except Exception as exc:  # noqa: BLE001
+                research_meta = {
+                    "ok": False,
+                    "error": type(exc).__name__,
+                    "WEB_FABRIC_STATUS": "NOT_CONFIGURED",
+                    "fabricated_citations": False,
+                }
+
         # Single brain: intelligence loop (agent engine or unified AI core)
         out = self.orch.chat(
             message,
@@ -130,6 +165,21 @@ class ProductionRuntime:
             allow_training_ops=allow_training_ops,
         )
         lat.mark("execution_completed")
+        if research_meta is not None:
+            out = dict(out)
+            out["web_research"] = research_meta
+            out["information_source"] = research_meta.get("information_source") or "unavailable"
+            out["WEB_FABRIC_STATUS"] = research_meta.get("WEB_FABRIC_STATUS")
+            out["citations"] = research_meta.get("citations") or []
+            out["fabricated_citations"] = False
+            if research_meta.get("WEB_FABRIC_STATUS") != "READY":
+                # Prefer explicit unavailability over pretending model knowledge is live web
+                ans = str(out.get("answer") or "")
+                note = research_meta.get("answer") or "Web research unavailable."
+                out["answer"] = f"{ans}\n\n[{note}]".strip() if ans else note
+                out["response_kind_hint"] = "research_unavailable"
+            else:
+                out["response_kind_hint"] = "research"
 
         mark(
             "result_validation",
@@ -143,7 +193,7 @@ class ProductionRuntime:
             training_activation=False,
         )
         lat.mark("response_started")
-        response_kind = self._classify_response_kind(out, message=message)
+        response_kind = out.get("response_kind_hint") or self._classify_response_kind(out, message=message)
         mark("final_response", response_kind=response_kind, ok=out.get("ok"))
         lat.mark("response_completed")
 
@@ -154,8 +204,8 @@ class ProductionRuntime:
             {
                 "ok": bool(out.get("ok")),
                 "request_id": request_id,
-                "phase": 22,
-                "PHASE_23_ALLOWED": False,
+                "phase": 23,
+                "PHASE_24_ALLOWED": False,
                 "production_runtime": True,
                 "version": self.VERSION,
                 "pipeline": list(PIPELINE_STAGES),
@@ -264,14 +314,24 @@ class ProductionRuntime:
         return sanitize_args(
             {
                 "ok": True,
-                "phase": 22,
+                "phase": 23,
                 "version": self.VERSION,
                 "production_runtime": True,
-                "PHASE_23_ALLOWED": False,
+                "PHASE_24_ALLOWED": False,
                 "WEB_FABRIC_STATUS": web.get("WEB_FABRIC_STATUS") or "NOT_CONFIGURED",
+                "WEB_PROVIDER_STATUS": web.get("WEB_FABRIC_STATUS") or "NOT_CONFIGURED",
+                "WEB_RESEARCH_STATUS": (
+                    "READY" if web.get("WEB_FABRIC_STATUS") == "READY" else "NOT_CONFIGURED"
+                ),
+                "CITATION_STATUS": (
+                    "READY" if web.get("WEB_FABRIC_STATUS") == "READY" else "NOT_CONFIGURED"
+                ),
                 "WEB_SEARCH_PROVIDER": web.get("WEB_SEARCH_PROVIDER"),
                 "WEB_FETCH_PROVIDER": web.get("WEB_FETCH_PROVIDER"),
                 "EMAIL_DELIVERY_STATUS": email.get("EMAIL_DELIVERY_STATUS") or "TEST_ONLY",
+                "EMAIL_LIFECYCLE_STATUS": email.get("EMAIL_LIFECYCLE_STATUS")
+                or email.get("EMAIL_DELIVERY_STATUS")
+                or "TEST_ONLY",
                 "SANDBOX_STATUS": sandbox.get("SANDBOX_STATUS") or "READY_BOUNDED",
                 "full_container_isolation": bool(sandbox.get("full_container_isolation")),
                 "MODEL_STATUS": "MODEL_V0007=ACTIVE+production_ready",
@@ -289,6 +349,7 @@ class ProductionRuntime:
                     "phase20": boot.get("phase20"),
                     "phase21": boot.get("phase21"),
                     "phase22": boot.get("phase22"),
+                    "phase23": boot.get("phase23"),
                 },
                 "pipeline": list(PIPELINE_STAGES),
                 "capability_surface_only": True,

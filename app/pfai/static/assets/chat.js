@@ -75,6 +75,21 @@
       </div>`;
     }
     const kind = meta && meta.response_kind ? `<div class="chat-meta muted">kind: ${esc(meta.response_kind)}</div>` : '';
+    const srcMap = {
+      live_web: { ar: 'معلومات ويب مباشرة', en: 'Live web information' },
+      unavailable: { ar: 'الويب غير متاح', en: 'Web unavailable' },
+      model_knowledge: { ar: 'معرفة النموذج', en: 'Model knowledge' },
+      external_tool: { ar: 'نتيجة أداة خارجية', en: 'External tool result' },
+      verified_knowledge: { ar: 'معرفة موثقة', en: 'Verified knowledge' },
+    };
+    let srcHtml = '';
+    if (meta && meta.information_source) {
+      const s = srcMap[meta.information_source] || { ar: meta.information_source, en: meta.information_source };
+      srcHtml = `<div class="chat-meta muted">source: ${esc(lang === 'en' ? s.en : s.ar)}</div>`;
+    }
+    const citeHtml = (meta && meta.citations && meta.citations.length)
+      ? `<div class="chat-meta muted">citations: ${meta.citations.length} (provenance retained; not fabricated)</div>`
+      : '';
     div.innerHTML = `
       <div class="chat-role">${role === 'user' ? 'المالك / Owner' : 'عقل PFAI / Brain'}</div>
       <div class="chat-text">${esc(content)}</div>
@@ -82,6 +97,8 @@
       ${renderTimeline(meta && meta.timeline, lang)}
       ${actions}
       ${kind}
+      ${srcHtml}
+      ${citeHtml}
       ${meta && meta.provider ? `<div class="chat-meta muted">provider: ${esc(meta.provider)} · status: ${esc(meta.status || '')}</div>` : ''}
     `;
     box.appendChild(div);
@@ -127,6 +144,8 @@
         provider: r.provider,
         status: r.status,
         response_kind: r.response_kind,
+        information_source: r.information_source,
+        citations: r.citations,
       });
       if (r.status === 'failed') toast('الأمر فشل / Command failed', true);
       else if (r.status === 'waiting_for_approval') toast('بانتظار موافقتك / Waiting for approval');

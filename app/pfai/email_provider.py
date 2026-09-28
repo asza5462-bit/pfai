@@ -301,16 +301,25 @@ def email_config_report(provider: EmailProvider | None = None) -> dict[str, Any]
     elif kind in ("FailClosedEmailProvider", "unconfigured"):
         kind = "unconfigured"
     production_ready = bool(ready.get("production_ready")) and kind in ("smtp", "api")
-    if production_ready:
-        delivery_status = "READY"
-    elif kind == "mock":
+    connected = bool(ready.get("connected"))
+    if kind == "mock":
         delivery_status = "TEST_ONLY"
+        lifecycle = "TEST_ONLY"
+    elif production_ready and connected:
+        delivery_status = "READY"
+        lifecycle = "READY"
+    elif production_ready:
+        # Configured but not send-verified in this process (connected=False until probe)
+        delivery_status = "READY"
+        lifecycle = "CONFIGURED"
     else:
         delivery_status = "NOT_CONFIGURED"
+        lifecycle = "NOT_CONFIGURED"
     return {
         "EMAIL_PROVIDER": kind,
         "EMAIL_PRODUCTION_READY": production_ready,
         "EMAIL_DELIVERY_STATUS": delivery_status,
+        "EMAIL_LIFECYCLE_STATUS": lifecycle,
         "EMAIL_REQUIRE_PRODUCTION": production_email_required(),
         "ok": bool(ready.get("ok")),
         "note": ready.get("note") or ready.get("error") or "",

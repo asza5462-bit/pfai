@@ -79,6 +79,8 @@ class EliteOrchestrator:
             "phase20": None,
             "phase21": None,
             "phase22": None,
+            "phase23": None,
+            "web_tools": None,
         }
         if bootstrap_skills:
             from pfai.engineering.phase14_skills import register_phase14_skills
@@ -89,6 +91,8 @@ class EliteOrchestrator:
             from pfai.elite.phase20_skills import register_phase20_skills
             from pfai.elite.phase21_skills import register_phase21_skills
             from pfai.elite.phase22_skills import register_phase22_skills
+            from pfai.elite.phase23_skills import register_phase23_skills
+            from pfai.elite.web_tool_bridge import register_web_tools
 
             self._boot["skills"] = register_elite_skills(self.skills, activate=True)
             self._boot["phase14"] = register_phase14_skills(self.skills, activate=True)
@@ -99,11 +103,14 @@ class EliteOrchestrator:
             self._boot["phase20"] = register_phase20_skills(self.skills, activate=True)
             self._boot["phase21"] = register_phase21_skills(self.skills, activate=True)
             self._boot["phase22"] = register_phase22_skills(self.skills, activate=True)
+            self._boot["phase23"] = register_phase23_skills(self.skills, activate=True)
             self._boot["tools"] = self.tools.bootstrap_safe_tools()
             self._boot["security_tools"] = self.tools.bootstrap_security_tools()
+            self._boot["web_tools"] = register_web_tools(self.tools, activate=True)
         from pfai.elite.unified_intelligence_loop import UnifiedIntelligenceLoop
         from pfai.elite.performance_engine import PerformanceReliabilityEngine
         from pfai.elite.production_runtime import ProductionRuntime
+        from pfai.elite.mcp_registry import MCPServerRegistry
 
         self.intelligence = UnifiedIntelligenceLoop(self)
         self.performance = PerformanceReliabilityEngine(
@@ -115,6 +122,19 @@ class EliteOrchestrator:
             self,
             audit_path=str(Path(self.root) / "production_runtime_audit.jsonl"),
         )
+        self.mcp_registry = MCPServerRegistry(
+            path=str(Path(self.root) / "mcp_servers.json"),
+            adapter=self.mcp,
+        )
+        self.web_research = None
+        try:
+            from pfai.elite.web_research_pipeline import WebResearchPipeline
+
+            self.web_research = WebResearchPipeline(
+                audit_path=str(Path(self.root) / "web_research_audit.jsonl"),
+            )
+        except Exception:
+            self.web_research = None
 
     def _audit(self, event: str, **detail: Any) -> None:
         row = {"ts": time.time(), "event": event, "detail": sanitize_args(detail)}
@@ -719,6 +739,7 @@ class EliteOrchestrator:
         from pfai.elite.phase20_gates import phase20_status
         from pfai.elite.phase21_gates import phase21_status
         from pfai.elite.phase22_gates import phase22_status
+        from pfai.elite.phase23_gates import phase23_status
 
         p14 = phase14_status()
         p15 = phase15_status()
@@ -729,8 +750,9 @@ class EliteOrchestrator:
         p20 = phase20_status()
         p21 = phase21_status()
         p22 = phase22_status()
+        p23 = phase23_status()
         return {
-            "phase": 22,
+            "phase": 23,
             "skills": self.skills.health(),
             "tools": {
                 "count": len(self.tools.catalog()),
@@ -754,8 +776,10 @@ class EliteOrchestrator:
             "phase20": p20,
             "phase21": p21,
             "phase22": p22,
+            "phase23": p23,
             "scheduler": self.performance.scheduler_status() if getattr(self, "performance", None) else None,
             "runtime": self.production.diagnostics() if getattr(self, "production", None) else None,
+            "mcp_registry": self.mcp_registry.health() if getattr(self, "mcp_registry", None) else None,
             "PHASE_14_ALLOWED": bool(p14.get("PHASE_14_ALLOWED")),
             "PHASE_15_ALLOWED": bool(p15.get("PHASE_15_ALLOWED")),
             "PHASE_16_ALLOWED": bool(p16.get("PHASE_16_ALLOWED")),
@@ -765,13 +789,15 @@ class EliteOrchestrator:
             "PHASE_20_ALLOWED": bool(p20.get("PHASE_20_ALLOWED")),
             "PHASE_21_ALLOWED": bool(p21.get("PHASE_21_ALLOWED")),
             "PHASE_22_ALLOWED": bool(p22.get("PHASE_22_ALLOWED")),
-            "PHASE_23_ALLOWED": False,
+            "PHASE_23_ALLOWED": bool(p23.get("PHASE_23_ALLOWED")),
+            "PHASE_24_ALLOWED": False,
             "skill_metrics": self.skill_metrics.summary(),
             "unified_intelligence_loop": True,
             "unified_ai_core": True,
             "agent_execution_engine": True,
             "performance_reliability_engine": True,
             "production_runtime": True,
+            "web_research_pipeline": True,
         }
 
     def chat(

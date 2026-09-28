@@ -203,7 +203,7 @@ class TestPerformanceEngine(unittest.TestCase):
         self.assertEqual(prog.get("progress_percent"), 100)
         self.assertFalse(prog.get("fabricated"))
         sched = eng.scheduler_status()
-        self.assertFalse(sched.get("PHASE_23_ALLOWED", True))
+        self.assertFalse(sched.get("PHASE_24_ALLOWED", True))
 
     def test_parallel_vs_sequential_tools(self):
         orch = _elite()
@@ -231,7 +231,7 @@ class TestPerformanceEngine(unittest.TestCase):
             context={"budget_tier": "FAST", "role": "admin"},
         )
         self.assertFalse(out.get("ok"))
-        self.assertFalse(out.get("PHASE_23_ALLOWED", True))
+        self.assertFalse(out.get("PHASE_24_ALLOWED", True))
 
 
 class TestModelRoutingPerf(unittest.TestCase):
@@ -249,7 +249,7 @@ class TestTrainingIsolation(unittest.TestCase):
         out = orch.chat("train a candidate model now", actor="owner", approved=True, allow_training_ops=True)
         self.assertTrue(out.get("lkg_preserved", True))
         self.assertFalse(out.get("training_started"))
-        self.assertFalse(out.get("PHASE_23_ALLOWED", True))
+        self.assertFalse(out.get("PHASE_24_ALLOWED", True))
 
 
 class TestSkillsGatesObservability(unittest.TestCase):
@@ -271,8 +271,8 @@ class TestSkillsGatesObservability(unittest.TestCase):
     def test_observability(self):
         orch = _elite()
         snap = PlatformObservability(orch, email_status={"EMAIL_DELIVERY_STATUS": "TEST_ONLY"}).snapshot()
-        self.assertIn(snap["phase"], (21, 22))
-        self.assertFalse(snap.get("PHASE_23_ALLOWED", True))
+        self.assertIn(snap["phase"], (21, 22, 23))
+        self.assertFalse(snap.get("PHASE_24_ALLOWED", True))
         self.assertTrue(snap.get("performance_reliability_engine"))
         orch.performance.shutdown()
 

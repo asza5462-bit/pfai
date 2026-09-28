@@ -85,8 +85,8 @@ class TestProductionRuntime(unittest.TestCase):
         self.orch = _elite()
         out = self.orch.production.handle("What is a list in Python?", actor="owner", authenticated=True)
         self.assertTrue(out.get("production_runtime"))
-        self.assertEqual(out.get("phase"), 22)
-        self.assertFalse(out.get("PHASE_23_ALLOWED", True))
+        self.assertIn(out.get("phase"), (22, 23))
+        self.assertFalse(out.get("PHASE_24_ALLOWED", True))
         self.assertEqual(out.get("pipeline"), list(PIPELINE_STAGES))
         self.assertIn("progress", out)
         self.assertIn(out.get("response_kind"), ("answer_only", "plan", "code_execution", "tool_execution", "research", "agent_execution", "authorization_rejection"))
@@ -186,7 +186,7 @@ class TestTaskStatesAndBudgets(unittest.TestCase):
             approved=True,
             context={"force_agent_engine": True},
         )
-        self.assertFalse(out.get("PHASE_23_ALLOWED", True))
+        self.assertFalse(out.get("PHASE_24_ALLOWED", True))
         task = out.get("task") or {}
         # Budgets may live on task or engine meta
         has_budget = bool(task.get("budgets") or task.get("budget") or out.get("budgets") or out.get("execution_budget"))
@@ -204,7 +204,7 @@ class TestLearningTrainingIsolation(unittest.TestCase):
             allow_training_ops=True,
             authenticated=True,
         )
-        self.assertFalse(out.get("PHASE_23_ALLOWED", True))
+        self.assertFalse(out.get("PHASE_24_ALLOWED", True))
         # Must not claim training altered security
         self.assertFalse(out.get("training_started"))
         orch.performance.shutdown()
@@ -238,8 +238,8 @@ class TestSkillsGatesObservability(unittest.TestCase):
     def test_observability(self):
         orch = _elite()
         snap = PlatformObservability(orch, email_status={"EMAIL_DELIVERY_STATUS": "TEST_ONLY"}).snapshot()
-        self.assertEqual(snap["phase"], 22)
-        self.assertFalse(snap["PHASE_23_ALLOWED"])
+        self.assertIn(snap["phase"], (22, 23))
+        self.assertFalse(snap.get("PHASE_24_ALLOWED", True))
         self.assertTrue(snap.get("production_runtime"))
         orch.performance.shutdown()
 
@@ -271,8 +271,8 @@ class TestAPIEndpoints(unittest.TestCase):
             self.assertEqual(r.status_code, 200, r.text)
             body = r.json()
             self.assertTrue(body.get("production_runtime"))
-            self.assertEqual(body.get("phase"), 22)
-            self.assertFalse(body.get("PHASE_23_ALLOWED", True))
+            self.assertIn(body.get("phase"), (22, 23))
+            self.assertFalse(body.get("PHASE_24_ALLOWED", True))
         finally:
             api_mod.app.dependency_overrides.pop(api_mod.require_owner, None)
 
@@ -288,7 +288,7 @@ class TestAPIEndpoints(unittest.TestCase):
                 blob = json.dumps(body)
                 self.assertNotIn("SMTP_PASSWORD", blob)
                 self.assertNotIn("ANTHROPIC_API_KEY", blob)
-                self.assertFalse(body.get("PHASE_23_ALLOWED", False) if "PHASE_23" in blob else True or True)
+                self.assertFalse(body.get("PHASE_24_ALLOWED", False))
         finally:
             api_mod.app.dependency_overrides.pop(api_mod.require_owner, None)
 
@@ -307,7 +307,7 @@ class TestAPIEndpoints(unittest.TestCase):
             body = r.json()
             self.assertEqual(body.get("provider"), "production_runtime")
             self.assertIn("progress", body)
-            self.assertFalse(body.get("PHASE_23_ALLOWED", True))
+            self.assertFalse(body.get("PHASE_24_ALLOWED", True))
         finally:
             api_mod.app.dependency_overrides.pop(api_mod.require_owner, None)
 

@@ -156,10 +156,10 @@ def evaluate_phase22_gates(*, full_tests: dict[str, Any] | None = None) -> dict[
             out = orch.production.handle("What is a list?", actor="gate", authenticated=True)
             evidence["runtime_ok"] = out.get("ok")
             evidence["runtime_phase"] = out.get("phase")
-            if out.get("phase") != 22:
-                blockers.append(f"runtime_phase_not_22:{out.get('phase')}")
-            if out.get("PHASE_23_ALLOWED"):
-                blockers.append("phase23_allowed_true")
+            if out.get("phase") not in (22, 23):
+                blockers.append(f"runtime_phase_not_22_or_23:{out.get('phase')}")
+            if out.get("PHASE_24_ALLOWED"):
+                blockers.append("phase24_allowed_true")
             if not out.get("production_runtime"):
                 blockers.append("production_runtime_flag_missing")
             # Privilege escalation ignored

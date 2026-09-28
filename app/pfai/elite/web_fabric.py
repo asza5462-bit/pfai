@@ -948,10 +948,11 @@ WebProvider = WebInformationFabric
 SearchProvider = WebSearchProvider
 FetchProvider = WebFetchProvider
 
-# PHASE 22 explicit interface aliases / policy wrappers (provider-independent).
+# PHASE 22/23 explicit interface aliases / policy wrappers (provider-independent).
 WebPageParser = SourceParser
 WebContentExtractor = SourceParser
 WebCitationProvider = SourceVerifier
+# WebResearchProvider is implemented in web_research_pipeline (imported lazily by callers).
 
 
 class WebPolicyGate:
