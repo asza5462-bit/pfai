@@ -234,7 +234,7 @@ def evaluate_phase23_gates(*, full_tests: dict[str, Any] | None = None) -> dict[
 
     warnings.extend(
         [
-            "email_delivery_TEST_ONLY_until_owner_config",
+            "email_otp_permanently_removed",
             "web_fabric_NOT_CONFIGURED_until_owner_config",
             "sandbox_READY_BOUNDED_not_full_container_isolation",
             "dependency_audit_manifest_inventory_unless_live_vuln_scan",
@@ -246,7 +246,7 @@ def evaluate_phase23_gates(*, full_tests: dict[str, Any] | None = None) -> dict[
     )
 
     web_status = evidence.get("web") or "NOT_CONFIGURED"
-    email_status = evidence.get("email") or "TEST_ONLY"
+    email_status = evidence.get("email") or "REMOVED"
     research_status = evidence.get("research_status") or (
         "NOT_CONFIGURED" if web_status != "READY" else "READY"
     )
@@ -267,7 +267,7 @@ def evaluate_phase23_gates(*, full_tests: dict[str, Any] | None = None) -> dict[
         "MODEL_ROUTING_STATUS": "READY",
         "LEARNING_STATUS": "READY",
         "AUTONOMOUS_TRAINING_STATUS": "READY",
-        "EMAIL_DELIVERY_STATUS": "READY" if email_status == "READY" else "TEST_ONLY",
+        "EMAIL_DELIVERY_STATUS": "REMOVED" if email_status in ("REMOVED", "removed") else ("READY" if email_status == "READY" else "REMOVED"),
         "SECURITY_STATUS": ready,
         "OBSERVABILITY_STATUS": "READY",
         "MODEL_STATUS": (

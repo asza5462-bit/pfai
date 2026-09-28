@@ -263,7 +263,7 @@ class TestSkillsGatesObservability(unittest.TestCase):
         self.assertEqual(g["AGENT_EXECUTION_ENGINE_STATUS"], "READY")
 
     def test_observability(self):
-        snap = PlatformObservability(_elite(), email_status={"EMAIL_DELIVERY_STATUS": "TEST_ONLY"}).snapshot()
+        snap = PlatformObservability(_elite(), email_status={"EMAIL_DELIVERY_STATUS": "REMOVED"}).snapshot()
         self.assertIn(snap["phase"], (20, 21, 22, 23))
         self.assertFalse(snap.get("PHASE_24_ALLOWED", True))
         self.assertTrue(snap.get("agent_execution_engine"))

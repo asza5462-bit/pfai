@@ -171,7 +171,7 @@ class TestObservability(unittest.TestCase):
         elite = _elite(tempfile.mkdtemp())
         snap = PlatformObservability(
             elite,
-            email_status={"EMAIL_DELIVERY_STATUS": "TEST_ONLY", "smtp_password": "secret123"},
+            email_status={"EMAIL_DELIVERY_STATUS": "REMOVED", "smtp_password": "secret123"},
         ).snapshot()
         self.assertIn(snap["phase"], (19, 20, 21, 22, 23))
         self.assertFalse(snap.get("PHASE_24_ALLOWED", True))

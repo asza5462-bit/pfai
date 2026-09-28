@@ -185,7 +185,7 @@ def evaluate_phase16_gates(*, full_tests: dict[str, Any] | None = None) -> dict[
 
     warnings.extend(
         [
-            "email_delivery_TEST_ONLY_until_owner_config",
+            "email_otp_permanently_removed",
             "web_fabric_may_be_NOT_CONFIGURED_until_owner_config",
             "sandbox_READY_BOUNDED_not_full_container_isolation",
             "autonomous_training_not_auto_started_from_chat",

@@ -253,7 +253,7 @@ def evaluate_phase21_gates(*, full_tests: dict[str, Any] | None = None) -> dict[
 
     warnings.extend(
         [
-            "email_delivery_TEST_ONLY_until_owner_config",
+            "email_otp_permanently_removed",
             "web_fabric_NOT_CONFIGURED_until_owner_config",
             "sandbox_READY_BOUNDED_not_full_container_isolation",
             "benchmark_timings_only_when_REAL_BENCHMARK_EXECUTED",
@@ -286,7 +286,7 @@ def evaluate_phase21_gates(*, full_tests: dict[str, Any] | None = None) -> dict[
         "BENCHMARK_STATUS": "READY",
         "WEB_FABRIC_STATUS": "CONFIGURED" if web_status == "READY" else "NOT_CONFIGURED",
         "SANDBOX_STATUS": "READY_BOUNDED",
-        "EMAIL_DELIVERY_STATUS": "TEST_ONLY",
+        "EMAIL_DELIVERY_STATUS": "REMOVED",
         "MODEL_STATUS": (
             "MODEL_V0007=ACTIVE"
             + ("+production_ready" if production_ready else "")

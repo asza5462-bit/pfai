@@ -238,7 +238,7 @@ def evaluate_phase22_gates(*, full_tests: dict[str, Any] | None = None) -> dict[
 
     warnings.extend(
         [
-            "email_delivery_TEST_ONLY_until_owner_config",
+            "email_otp_permanently_removed",
             "web_fabric_NOT_CONFIGURED_until_owner_config",
             "sandbox_READY_BOUNDED_not_full_container_isolation",
             "dependency_audit_manifest_inventory_unless_live_vuln_scan",
@@ -249,7 +249,7 @@ def evaluate_phase22_gates(*, full_tests: dict[str, Any] | None = None) -> dict[
     )
 
     web_status = evidence.get("web") or "NOT_CONFIGURED"
-    email_status = evidence.get("email") or "TEST_ONLY"
+    email_status = evidence.get("email") or "REMOVED"
     allowed = len(blockers) == 0
     ready = "READY" if allowed else "NOT_READY"
     return {
@@ -259,7 +259,7 @@ def evaluate_phase22_gates(*, full_tests: dict[str, Any] | None = None) -> dict[
         "PHASE_23_ALLOWED": False,
         "PRODUCTION_RUNTIME_STATUS": ready,
         "WEB_FABRIC_STATUS": "READY" if web_status == "READY" else "NOT_CONFIGURED",
-        "EMAIL_DELIVERY_STATUS": "READY" if email_status == "READY" else "TEST_ONLY",
+        "EMAIL_DELIVERY_STATUS": "REMOVED" if email_status in ("REMOVED", "removed") else ("READY" if email_status == "READY" else "REMOVED"),
         "AGENT_RUNTIME_STATUS": ready,
         "MODEL_ROUTING_STATUS": "READY",
         "SKILL_FABRIC_STATUS": "READY",

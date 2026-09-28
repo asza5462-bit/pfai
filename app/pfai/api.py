@@ -366,11 +366,10 @@ PLATFORM_SELF_CHECK = SelfCheck({
         'phase': 6,
         'runtime': detect_runtime_capabilities(probe_inference=False).get('status'),
     },
-    'email_otp_ready': lambda: {
-        'ok': 'email_otp' in OWNER_AUTH.public_status().get('auth_methods', []),
-        'provider': type(OWNER_AUTH.email_provider).__name__,
-        **{k: v for k, v in __import__('pfai.email_provider', fromlist=['email_config_report']).email_config_report(OWNER_AUTH.email_provider).items()
-           if k in ('EMAIL_PROVIDER', 'EMAIL_PRODUCTION_READY', 'EMAIL_REQUIRE_PRODUCTION')},
+    'owner_auth_ready': lambda: {
+        'ok': 'passcode' in OWNER_AUTH.public_status().get('auth_methods', []),
+        'email_otp': 'REMOVED',
+        'auth_methods': OWNER_AUTH.public_status().get('auth_methods', []),
     },
     'local_model_adapter': lambda: _local_model_adapter_check(),
 })
@@ -643,16 +642,6 @@ class OwnerLoginBody(BaseModel):
     passcode: str
 
 
-class OwnerOtpRequestBody(BaseModel):
-    email: str
-
-
-class OwnerOtpVerifyBody(BaseModel):
-    email: str
-    otp: str
-    challenge_id: str
-
-
 @app.post('/owner/setup')
 def owner_setup(x: OwnerSetupBody, request: Request, response: Response):
     """First-time owner initialization only. Permanently disabled after success."""
@@ -679,37 +668,6 @@ def owner_login(x: OwnerLoginBody, request: Request, response: Response):
     result = OWNER_AUTH.login(x.email, x.passcode, client_key=_client_key(request))
     if not result.get('ok'):
         # Uniform failure (no email/passcode distinction); 429 when locked out.
-        status = 429 if result.get('locked') else 401
-        raise HTTPException(status, AUTH_FAIL_MESSAGE)
-    response.set_cookie(COOKIE_NAME, result['token'], **_secure_cookie_flags(request))
-    return {
-        'ok': True,
-        'email': result['email'],
-        'expires_in': result['expires_in'],
-        'authenticated': True,
-    }
-
-
-@app.post('/owner/otp/request')
-def owner_otp_request(x: OwnerOtpRequestBody, request: Request):
-    """Request Email OTP. Uniform response (enumeration-resistant). Never returns OTP."""
-    result = OWNER_AUTH.request_otp(x.email, client_key=_client_key(request))
-    # Strip any accidental sensitive keys; never surface OTP/body.
-    return {
-        'ok': True,
-        'challenge_id': result.get('challenge_id'),
-        'expires_in': result.get('expires_in'),
-        'message': result.get('message') or 'If the email is authorized, a verification code was sent.',
-    }
-
-
-@app.post('/owner/otp/verify')
-def owner_otp_verify(x: OwnerOtpVerifyBody, request: Request, response: Response):
-    """Verify Email OTP and establish HttpOnly owner session. Never echoes OTP."""
-    result = OWNER_AUTH.verify_otp(
-        x.email, x.otp, x.challenge_id, client_key=_client_key(request)
-    )
-    if not result.get('ok'):
         status = 429 if result.get('locked') else 401
         raise HTTPException(status, AUTH_FAIL_MESSAGE)
     response.set_cookie(COOKIE_NAME, result['token'], **_secure_cookie_flags(request))
@@ -1180,7 +1138,7 @@ def elite_status(owner: str = Depends(require_owner)):
 @app.get('/platform/email/status')
 def email_status(owner: str = Depends(require_owner)):
     from .email_provider import email_config_report
-    return {'ok': True, **email_config_report(OWNER_AUTH.email_provider)}
+    return {'ok': True, **email_config_report()}
 
 @app.get('/platform/web/status')
 def web_status(owner: str = Depends(require_owner)):

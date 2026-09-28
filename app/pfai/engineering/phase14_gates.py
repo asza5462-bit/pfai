@@ -219,7 +219,7 @@ def evaluate_phase14_gates(*, full_tests: dict[str, Any] | None = None) -> dict[
             blockers.append(f"tests_failed:{suite.get('failed')}")
 
     # Configuration warnings (not code blockers)
-    warnings.append("email_delivery_TEST_ONLY_until_owner_config")
+    warnings.append("email_otp_permanently_removed")
     warnings.append("web_fabric_NOT_CONFIGURED_until_owner_config")
     warnings.append("sandbox_READY_BOUNDED_not_full_container_isolation")
 

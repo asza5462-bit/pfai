@@ -39,44 +39,11 @@ services:
         value: "20"
       - key: PFAI_WEB_ALLOW_PRIVATE
         value: "0"
-      - key: PFAI_SMTP_TLS
-        value: "true"
-      - key: PFAI_SMTP_TIMEOUT
-        value: "20"
-      - key: PFAI_OTP_TTL_SECONDS
-        value: "300"
-      - key: PFAI_OTP_MAX_ATTEMPTS
-        value: "5"
-      - key: PFAI_OTP_RESEND_COOLDOWN
-        value: "60"
-      - key: PFAI_OTP_MAX_REQUESTS_PER_HOUR
-        value: "10"
       - key: PFAI_COOKIE_SECURE
         value: "true"
-      - key: PFAI_EMAIL_REQUIRE_PRODUCTION
-        value: "0"
-      - key: PFAI_EMAIL_PROVIDER
-        value: mock
-      # --- secrets (Render Dashboard / MCP env update; never commit values) ---
       - key: PFAI_OWNER_EMAIL
         sync: false
       - key: PFAI_OWNER_SECRET_HASH
-        sync: false
-      - key: PFAI_SMTP_HOST
-        sync: false
-      - key: PFAI_SMTP_PORT
-        sync: false
-      - key: PFAI_SMTP_USER
-        sync: false
-      - key: PFAI_SMTP_PASSWORD
-        sync: false
-      - key: PFAI_SMTP_FROM
-        sync: false
-      - key: PFAI_EMAIL_API_ENDPOINT
-        sync: false
-      - key: PFAI_EMAIL_API_KEY
-        sync: false
-      - key: PFAI_EMAIL_FROM
         sync: false
       - key: ANTHROPIC_API_KEY
         sync: false

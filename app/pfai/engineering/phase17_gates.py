@@ -314,7 +314,7 @@ def evaluate_phase17_security_quality_gate(*, full_tests: dict[str, Any] | None 
 
     warnings.extend(
         [
-            "email_delivery_TEST_ONLY_until_owner_config",
+            "email_otp_permanently_removed",
             "web_fabric_NOT_CONFIGURED_until_owner_config",
             "sandbox_READY_BOUNDED_not_full_container_isolation",
             "dependency_audit_manifest_inventory_not_live_CVE",

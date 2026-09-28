@@ -270,7 +270,7 @@ class TestSkillsGatesObservability(unittest.TestCase):
 
     def test_observability(self):
         orch = _elite()
-        snap = PlatformObservability(orch, email_status={"EMAIL_DELIVERY_STATUS": "TEST_ONLY"}).snapshot()
+        snap = PlatformObservability(orch, email_status={"EMAIL_DELIVERY_STATUS": "REMOVED"}).snapshot()
         self.assertIn(snap["phase"], (21, 22, 23))
         self.assertFalse(snap.get("PHASE_24_ALLOWED", True))
         self.assertTrue(snap.get("performance_reliability_engine"))

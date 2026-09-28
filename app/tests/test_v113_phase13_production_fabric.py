@@ -10,14 +10,7 @@ from pathlib import Path
 from unittest import mock
 
 from pfai.authorized_execution import AuthorizedExecutor, PermissionGate
-from pfai.email_provider import (
-    APIEmailProvider,
-    FailClosedEmailProvider,
-    MockEmailProvider,
-    SMTPEmailProvider,
-    email_config_report,
-    email_provider_from_env,
-)
+from pfai.email_provider import email_config_report
 from pfai.elite.composer import SkillComposer
 from pfai.elite.discovery import SkillDiscoveryEngine
 from pfai.elite.elite_library import register_elite_skills, skill_web_search
@@ -40,105 +33,32 @@ from pfai.owner_control import OwnerControl
 
 
 class TestEmailProvidersPhase13(unittest.TestCase):
-    def test_mock_default_non_production(self):
-        with mock.patch.dict(os.environ, {"PFAI_ENV": "dev", "PFAI_EMAIL_PROVIDER": ""}, clear=False):
-            os.environ.pop("PFAI_EMAIL_REQUIRE_PRODUCTION", None)
-            p = email_provider_from_env()
-            self.assertIsInstance(p, MockEmailProvider)
-            report = email_config_report(p)
-            self.assertEqual(report["EMAIL_PROVIDER"], "mock")
-            self.assertFalse(report["EMAIL_PRODUCTION_READY"])
-
-    def test_production_forbids_silent_mock(self):
-        with mock.patch.dict(
-            os.environ,
-            {"PFAI_ENV": "production", "PFAI_EMAIL_PROVIDER": "mock"},
-            clear=False,
-        ):
-            p = email_provider_from_env()
-            self.assertIsInstance(p, FailClosedEmailProvider)
-            report = email_config_report(p)
-            self.assertIn(report["EMAIL_PROVIDER"], ("unconfigured", "mock"))
-            self.assertFalse(report["EMAIL_PRODUCTION_READY"])
-
-    def test_smtp_incomplete_fail_closed_in_prod(self):
-        with mock.patch.dict(
-            os.environ,
-            {
-                "PFAI_ENV": "production",
-                "PFAI_EMAIL_PROVIDER": "smtp",
-                "PFAI_SMTP_HOST": "",
-                "PFAI_SMTP_FROM": "",
-            },
-            clear=False,
-        ):
-            p = email_provider_from_env()
-            self.assertIsInstance(p, FailClosedEmailProvider)
-
-    def test_api_provider_readiness(self):
-        p = APIEmailProvider(endpoint="https://example.invalid/v1/send", api_key="k", from_addr="a@b.c")
-        self.assertTrue(p.readiness()["production_ready"])
-        report = email_config_report(p)
-        self.assertEqual(report["EMAIL_PROVIDER"], "api")
-        self.assertTrue(report["EMAIL_PRODUCTION_READY"])
-        # secrets never in report
-        blob = str(report)
-        self.assertNotIn("api_key", blob.lower().replace("api_key_configured", ""))
-
-    def test_smtp_env_aliases_without_secrets_in_report(self):
-        with mock.patch.dict(
-            os.environ,
-            {
-                "PFAI_ENV": "dev",
-                "PFAI_EMAIL_PROVIDER": "smtp",
-                "SMTP_HOST": "smtp.example.test",
-                "SMTP_PORT": "587",
-                "SMTP_USERNAME": "user",
-                "SMTP_PASSWORD": "do-not-leak",
-                "SMTP_FROM": "noreply@example.test",
-                "SMTP_TLS": "true",
-            },
-            clear=False,
-        ):
-            # Clear canonical names so aliases are exercised
-            for k in (
-                "PFAI_SMTP_HOST",
-                "PFAI_SMTP_PORT",
-                "PFAI_SMTP_USER",
-                "PFAI_SMTP_PASSWORD",
-                "PFAI_SMTP_FROM",
-            ):
-                os.environ.pop(k, None)
-            p = email_provider_from_env()
-            self.assertIsInstance(p, SMTPEmailProvider)
-            report = email_config_report(p)
-            self.assertEqual(report["EMAIL_DELIVERY_STATUS"], "READY")
-            self.assertNotIn("do-not-leak", str(report))
-
-    def test_mock_never_ready(self):
-        report = email_config_report(MockEmailProvider())
-        self.assertEqual(report["EMAIL_DELIVERY_STATUS"], "TEST_ONLY")
+    def test_email_otp_permanently_removed(self):
+        report = email_config_report()
+        self.assertEqual(report["EMAIL_PROVIDER"], "removed")
+        self.assertEqual(report["EMAIL_DELIVERY_STATUS"], "REMOVED")
+        self.assertEqual(report["EMAIL_OTP"], "REMOVED")
         self.assertFalse(report["EMAIL_PRODUCTION_READY"])
+        self.assertFalse(report["endpoint_configured"])
+        self.assertFalse(report["api_key_configured"])
 
-    def test_otp_not_in_api_response_shape(self):
+    def test_owner_auth_passcode_only_no_otp(self):
         tmp = tempfile.mkdtemp()
         owner = OwnerControl(email_env="PFAI_OWNER_EMAIL_T13", secret_env="PFAI_OWNER_SECRET_T13")
-        oa = OwnerAuthService(owner, root=tmp, email_provider=MockEmailProvider())
+        oa = OwnerAuthService(owner, root=tmp)
         os.environ["PFAI_OWNER_EMAIL_T13"] = "owner@example.com"
         digest = oa.hash_passcode("StrongPassw0rd!")
         os.environ["PFAI_OWNER_SECRET_T13"] = digest
         oa._write_credentials("owner@example.com", digest)
         oa._write_setup_lock("owner@example.com")
-        req = oa.request_otp("owner@example.com", client_key="t")
-        self.assertTrue(req["ok"])
-        self.assertNotIn("otp", {k.lower() for k in req.keys()})
-        self.assertNotIn("code", req)
-        blob = str(req).lower()
-        self.assertNotIn("otp=", blob)
+        self.assertFalse(hasattr(oa, "request_otp"))
         st = oa.public_status()
-        self.assertIn("email_config", st)
-        self.assertIn("EMAIL_PROVIDER", st["email_config"])
-        self.assertEqual(st["email_config"]["EMAIL_DELIVERY_STATUS"], "TEST_ONLY")
+        self.assertNotIn("email_otp", st["auth_methods"])
+        self.assertIn("passcode", st["auth_methods"])
+        self.assertEqual(st.get("email_otp"), "REMOVED")
+        self.assertNotIn("email_config", st)
+        login = oa.login("owner@example.com", "StrongPassw0rd!", client_key="t13")
+        self.assertTrue(login["ok"])
 
 
 class TestModelRouterPhase13(unittest.TestCase):

@@ -253,7 +253,7 @@ class TestPhase18Gate(unittest.TestCase):
         g = evaluate_phase18_gates(full_tests={"ran": True, "failed": 0, "passed": 10, "skipped": 0, "total": 10})
         self.assertFalse(g["PHASE_19_ALLOWED"])
         self.assertEqual(g["SANDBOX_STATUS"], "READY_BOUNDED")
-        self.assertEqual(g["EMAIL_DELIVERY_STATUS"], "TEST_ONLY")
+        self.assertEqual(g["EMAIL_DELIVERY_STATUS"], "REMOVED")
         self.assertIn(g["WEB_FABRIC_STATUS"], ("NOT_CONFIGURED", "READY"))
         if g["EXACT_BLOCKERS"]:
             # Allow only missing suite when not stamped — we provided fake suite

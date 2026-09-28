@@ -766,7 +766,7 @@ class EliteOrchestrator:
             "model_router": bool(self.model_router),
             "web": self.web.status(),
             "sandbox": Sandbox(timeout=1.0).metadata(),
-            "EMAIL_NOTE": "see /platform/email/status",
+            "EMAIL_NOTE": "Email OTP REMOVED; see /platform/email/status",
             "phase14": p14,
             "phase15": p15,
             "phase16": p16,

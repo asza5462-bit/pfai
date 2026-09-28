@@ -97,7 +97,7 @@ class TestProductionRuntime(unittest.TestCase):
             self.assertIn("progress", out)
             self.assertIn(out.get("response_kind"), ("answer_only", "plan", "code_execution", "tool_execution", "research", "agent_execution", "authorization_rejection"))
             self.assertEqual(out.get("WEB_FABRIC_STATUS"), "NOT_CONFIGURED")
-            self.assertEqual(out.get("EMAIL_DELIVERY_STATUS"), "TEST_ONLY")
+            self.assertEqual(out.get("EMAIL_DELIVERY_STATUS"), "REMOVED")
 
     def test_unauthenticated_rejected(self):
         self.orch = _elite()
@@ -127,7 +127,7 @@ class TestProductionRuntime(unittest.TestCase):
             self.assertNotIn("ANTHROPIC_API_KEY=", blob)
             self.assertNotIn("SMTP_PASSWORD=", blob)
             self.assertEqual(diag.get("WEB_FABRIC_STATUS"), "NOT_CONFIGURED")
-            self.assertEqual(diag.get("EMAIL_DELIVERY_STATUS"), "TEST_ONLY")
+            self.assertEqual(diag.get("EMAIL_DELIVERY_STATUS"), "REMOVED")
             self.assertEqual(diag.get("SANDBOX_STATUS"), "READY_BOUNDED")
 
 
@@ -244,12 +244,12 @@ class TestSkillsGatesObservability(unittest.TestCase):
             self.assertEqual(g["EXACT_BLOCKERS"], [], g["EXACT_BLOCKERS"])
             self.assertEqual(g["PHASE_22_STATUS"], "PASS")
             self.assertEqual(g["WEB_FABRIC_STATUS"], "NOT_CONFIGURED")
-            self.assertEqual(g["EMAIL_DELIVERY_STATUS"], "TEST_ONLY")
+            self.assertEqual(g["EMAIL_DELIVERY_STATUS"], "REMOVED")
             self.assertEqual(g["SANDBOX_STATUS"], "READY_BOUNDED")
 
     def test_observability(self):
         orch = _elite()
-        snap = PlatformObservability(orch, email_status={"EMAIL_DELIVERY_STATUS": "TEST_ONLY"}).snapshot()
+        snap = PlatformObservability(orch, email_status={"EMAIL_DELIVERY_STATUS": "REMOVED"}).snapshot()
         self.assertIn(snap["phase"], (22, 23))
         self.assertFalse(snap.get("PHASE_24_ALLOWED", True))
         self.assertTrue(snap.get("production_runtime"))

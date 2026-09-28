@@ -223,7 +223,8 @@ class TestPhase7API(unittest.TestCase):
         self.assertEqual(self.client.post("/platform/training/start", json={"role": "owner", "admin": True}).status_code, 401)
         st = self.client.get("/owner/status")
         self.assertEqual(st.status_code, 200)
-        self.assertIn("email_otp", st.json().get("auth_methods", []))
+        self.assertNotIn("email_otp", st.json().get("auth_methods", []))
+        self.assertIn("passcode", st.json().get("auth_methods", []))
         self.assertNotIn("otp_code", json.dumps(st.json()).lower())
 
     def test_schema_target_5(self):

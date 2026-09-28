@@ -71,7 +71,7 @@ python -m pytest tests/test_api_wiring.py tests/test_v81_continuous_enable_gate.
 - PHASE 2: `Orchestrator` + `ProviderRegistry`/`ModelRouter` wired; `/chat/*` preserved; `/orchestrate` additive
 - PHASE 3: deep LTM/Knowledge adapters, migration apply+backup, eval baselines, portable export (`/platform/ltm|eval|migrations|export*`)
 - PHASE 4: unified ToolPermission + AuthorizedExecutor, versioned skills, TaskPlanner, bounded heal; `/platform/plan|skills*|tools|heal*`
-- PHASE 5: Email OTP (`/owner/otp/*`) + EmailProvider; Local/OpenWeight adapters; migration audit/verify; schema target 3
+- PHASE 5: Owner passcode auth (Email OTP permanently removed); Local/OpenWeight adapters; migration audit/verify; schema target 3
 - PHASE 6: AutonomousTrainingOrchestrator
 - PHASE 7: TrainingRuntimeDetector + SkillPacks + Learning Control Center; schema target 5 + dataset/model registries; `/platform/training/*`; schema target 4; training isolated from authority
 - Constraints: additive only; no Anthropic force; no auto fine-tune; no external deploy unless asked

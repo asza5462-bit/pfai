@@ -2,11 +2,13 @@
 
 PFAI owner privileges are **server-side only**. The Dashboard never stores the owner passcode.
 
+**Email OTP was permanently removed.** Owner login is passcode + HttpOnly session only.
+
 ## Environment variables (required for production)
 
 | Variable | Purpose |
 |---|---|
-| `PFAI_OWNER_EMAIL` | Sole authorized owner identity (example for this deployment: `szz5462@gmail.com`) |
+| `PFAI_OWNER_EMAIL` | Sole authorized owner identity |
 | `PFAI_OWNER_SECRET_HASH` | Passcode hash only — **never** the plaintext passcode |
 | `PFAI_ENV` | Set to `production` (or `prod`) on real hosts |
 
@@ -19,6 +21,8 @@ Optional:
 | `PFAI_OWNER_MAX_FAILURES` | Failures before lockout (default `5`) |
 | `PFAI_OWNER_LOCKOUT_SECONDS` | Lockout cooldown (default `900`) |
 | `PFAI_COOKIE_SECURE` | Dev override: `true` forces Secure cookies; `false` allows HTTP cookies locally |
+
+Do **not** set `PFAI_EMAIL_*`, `PFAI_SMTP_*`, or `PFAI_OTP_*` for authentication — those paths are gone.
 
 ## Production HTTPS + Secure cookies (required)
 
@@ -36,7 +40,7 @@ Local development may use HTTP when `PFAI_ENV` is unset/non-production and (opti
 cd app
 python -m pfai.hash_owner_secret
 # enter passcode (hidden) → prints pbkdf2_sha256$... hash
-export PFAI_OWNER_EMAIL='szz5462@gmail.com'
+export PFAI_OWNER_EMAIL='owner@example.com'
 export PFAI_OWNER_SECRET_HASH='(paste hash here)'
 ```
 
@@ -61,38 +65,14 @@ Production hosts should still set `PFAI_OWNER_EMAIL` / `PFAI_OWNER_SECRET_HASH` 
 
 ## Login / logout / session
 
-### Email OTP (PHASE 5 preferred interactive path)
-
-1. `POST /owner/otp/request` `{ "email": "..." }` → uniform response with `challenge_id` (never includes OTP; enumeration-resistant)
-2. Server emails a short-lived single-use code via `EmailProvider` (`mock` or `smtp`)
-3. `POST /owner/otp/verify` `{ "email", "otp", "challenge_id" }` → HttpOnly `pfai_owner_session`
-
-OTP is stored only as PBKDF2 hash. Limits: TTL, max attempts, resend cooldown, hourly request cap, shared auth lockout.
-
-### Passcode (still supported)
-
-- `POST /owner/login` → HttpOnly session cookie `pfai_owner_session` (SameSite=Strict; Secure on HTTPS / always in production)
+- `POST /owner/login` `{ "email", "passcode" }` → HttpOnly session cookie `pfai_owner_session` (SameSite=Strict; Secure on HTTPS / always in production)
 - `POST /owner/logout` → clears session
-- `GET /owner/status` → public flags (`setup_required`, `authenticated`, `auth_methods`) — no secrets
+- `GET /owner/status` → public flags (`setup_required`, `authenticated`, `auth_methods`) — no secrets; `email_otp=REMOVED`
 - Owner APIs also accept legacy `X-Owner-Secret` for automation (verified server-side)
 
-Failed logins/OTP verifies use a **uniform** error and apply rate-limit lockout.
+Failed logins use a **uniform** error and apply rate-limit lockout.
 
-## Email provider configuration
-
-| Variable | Purpose |
-|---|---|
-| `PFAI_EMAIL_PROVIDER` | `mock` (default/dev/tests) or `smtp` |
-| `PFAI_SMTP_HOST` / `PFAI_SMTP_PORT` | SMTP server |
-| `PFAI_SMTP_USER` / `PFAI_SMTP_PASSWORD` | SMTP credentials (secrets — never commit) |
-| `PFAI_SMTP_FROM` | From address |
-| `PFAI_SMTP_TLS` | default `true` |
-| `PFAI_OTP_TTL_SECONDS` | default `300` |
-| `PFAI_OTP_RESEND_COOLDOWN` | default `60` |
-| `PFAI_OTP_MAX_ATTEMPTS` | default `5` |
-| `PFAI_OTP_MAX_REQUESTS_PER_HOUR` | default `10` |
-
-Do not put OTP values, SMTP passwords, or passcodes in Git, logs, frontend storage, or API responses.
+Routes `/owner/otp/request` and `/owner/otp/verify` are removed (404).
 
 ## Compromised development passcodes
 
@@ -110,5 +90,3 @@ Intentionally public (no secrets / no private content):
 Owner-gated (private knowledge, memory, code, privileged ops):
 
 - `/knowledge/search`, `/regression/pending`, and all mutate/ops routes
-
-Test-only note: Starlette's `TestClient` may emit a deprecation warning preferring `httpx2` over `httpx`. That warning is test-harness only and does not affect the running application; do not downgrade FastAPI/Starlette to hide it.

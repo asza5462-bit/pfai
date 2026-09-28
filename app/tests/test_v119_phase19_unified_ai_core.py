@@ -197,7 +197,7 @@ class TestSkillsAndGates(unittest.TestCase):
         self.assertEqual(g["UNIFIED_AI_CORE_STATUS"], "READY")
 
     def test_observability_phase19(self):
-        snap = PlatformObservability(_elite(), email_status={"EMAIL_DELIVERY_STATUS": "TEST_ONLY"}).snapshot()
+        snap = PlatformObservability(_elite(), email_status={"EMAIL_DELIVERY_STATUS": "REMOVED"}).snapshot()
         self.assertIn(snap["phase"], (19, 20, 21, 22, 23))
         self.assertFalse(snap.get("PHASE_24_ALLOWED", True))
 

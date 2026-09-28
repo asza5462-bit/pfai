@@ -31,7 +31,7 @@ def detect_production_config() -> dict[str, Any]:
         missing.append(
             {
                 "id": "OWNER_AUTH_SECRETS",
-                "why": "Owner login / OTP recipient and passcode hash are required for protected routes",
+                "why": "Owner login email identity and passcode hash are required for protected routes",
                 "where": "Deployment secret store / host environment (PFAI_OWNER_EMAIL, PFAI_OWNER_SECRET_HASH)",
                 "owner_action": "Set both variables from a private secret store; never commit values",
             }
@@ -57,19 +57,9 @@ def detect_production_config() -> dict[str, Any]:
             }
         )
 
-    # Email
-    email_status = email.get("EMAIL_DELIVERY_STATUS") or "TEST_ONLY"
-    if email_status == "READY":
-        completed.append("email_delivery_ready")
-    else:
-        missing.append(
-            {
-                "id": "EMAIL_DELIVERY",
-                "why": "Production OTP/email delivery requires owner SMTP or email API credentials",
-                "where": "Deployment secrets: PFAI_EMAIL_PROVIDER=smtp|api and SMTP_* / PFAI_EMAIL_API_*",
-                "owner_action": "Configure SMTP or HTTP email API credentials in the host secret store, then re-check /platform/email/status",
-            }
-        )
+    # Email OTP permanently removed — not an owner action / not a blocker
+    email_status = email.get("EMAIL_DELIVERY_STATUS") or "REMOVED"
+    completed.append("email_otp_removed")
 
     # Optional remote models — never required
     if _set("ANTHROPIC_API_KEY") or _set("OPENAI_API_KEY"):

@@ -214,7 +214,7 @@ class ProductionRuntime:
                 "response_kind": response_kind,
                 "latency": lat.summary(),
                 "WEB_FABRIC_STATUS": web.get("WEB_FABRIC_STATUS") or "NOT_CONFIGURED",
-                "EMAIL_DELIVERY_STATUS": email.get("EMAIL_DELIVERY_STATUS") or "TEST_ONLY",
+                "EMAIL_DELIVERY_STATUS": email.get("EMAIL_DELIVERY_STATUS") or "REMOVED",
                 "SANDBOX_STATUS": "READY_BOUNDED",
             }
         )
@@ -328,9 +328,10 @@ class ProductionRuntime:
                 ),
                 "WEB_SEARCH_PROVIDER": web.get("WEB_SEARCH_PROVIDER"),
                 "WEB_FETCH_PROVIDER": web.get("WEB_FETCH_PROVIDER"),
-                "EMAIL_DELIVERY_STATUS": email.get("EMAIL_DELIVERY_STATUS") or "TEST_ONLY",
+                "EMAIL_DELIVERY_STATUS": email.get("EMAIL_DELIVERY_STATUS") or "REMOVED",
                 "EMAIL_LIFECYCLE_STATUS": email.get("EMAIL_LIFECYCLE_STATUS")
                 or email.get("EMAIL_DELIVERY_STATUS")
+                or "REMOVED"
                 or "TEST_ONLY",
                 "SANDBOX_STATUS": sandbox.get("SANDBOX_STATUS") or "READY_BOUNDED",
                 "full_container_isolation": bool(sandbox.get("full_container_isolation")),

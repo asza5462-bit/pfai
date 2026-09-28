@@ -143,13 +143,14 @@ class TestSecurityRegression(unittest.TestCase):
 
 
 class TestEmailHonesty(unittest.TestCase):
-    def test_lifecycle_test_only(self):
+    def test_lifecycle_removed(self):
         from tests._prod_env_isolation import isolated_unconfigured_env
 
         with isolated_unconfigured_env():
             report = email_config_report()
-            self.assertEqual(report.get("EMAIL_DELIVERY_STATUS"), "TEST_ONLY")
-            self.assertEqual(report.get("EMAIL_LIFECYCLE_STATUS"), "TEST_ONLY")
+            self.assertEqual(report.get("EMAIL_DELIVERY_STATUS"), "REMOVED")
+            self.assertEqual(report.get("EMAIL_LIFECYCLE_STATUS"), "REMOVED")
+            self.assertEqual(report.get("EMAIL_OTP"), "REMOVED")
 
 
 class TestGatesObservabilityBenchmarks(unittest.TestCase):
@@ -164,11 +165,11 @@ class TestGatesObservabilityBenchmarks(unittest.TestCase):
             self.assertEqual(g["EXACT_BLOCKERS"], [], g["EXACT_BLOCKERS"])
             self.assertEqual(g["PHASE_23_STATUS"], "PASS")
             self.assertEqual(g["WEB_FABRIC_STATUS"], "NOT_CONFIGURED")
-            self.assertEqual(g["EMAIL_DELIVERY_STATUS"], "TEST_ONLY")
+            self.assertEqual(g["EMAIL_DELIVERY_STATUS"], "REMOVED")
 
     def test_observability(self):
         orch = _elite()
-        snap = PlatformObservability(orch, email_status={"EMAIL_DELIVERY_STATUS": "TEST_ONLY"}).snapshot()
+        snap = PlatformObservability(orch, email_status={"EMAIL_DELIVERY_STATUS": "REMOVED"}).snapshot()
         self.assertEqual(snap["phase"], 23)
         self.assertFalse(snap.get("PHASE_24_ALLOWED", True))
         self.assertTrue(snap.get("web_research_pipeline"))

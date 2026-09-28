@@ -316,7 +316,7 @@ def evaluate_phase18_gates(*, full_tests: dict[str, Any] | None = None) -> dict[
 
     warnings.extend(
         [
-            "email_delivery_TEST_ONLY_until_owner_config",
+            "email_otp_permanently_removed",
             "web_fabric_NOT_CONFIGURED_until_owner_config",
             "sandbox_READY_BOUNDED_not_full_container_isolation",
             "dependency_audit_manifest_inventory_not_live_CVE",
@@ -352,7 +352,7 @@ def evaluate_phase18_gates(*, full_tests: dict[str, Any] | None = None) -> dict[
         ),
         "ROLLBACK_STATUS": "READY",
         "OWNER_AUTH_STATUS": "READY",
-        "EMAIL_DELIVERY_STATUS": "TEST_ONLY",
+        "EMAIL_DELIVERY_STATUS": "REMOVED",
         "target_authorization_default": "DENY",
         "offensive_capabilities": False,
         "learning_cannot_grant_privileges": True,

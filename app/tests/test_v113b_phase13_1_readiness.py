@@ -7,14 +7,7 @@ import unittest
 from pathlib import Path
 from unittest import mock
 
-from pfai.email_provider import (
-    APIEmailProvider,
-    FailClosedEmailProvider,
-    MockEmailProvider,
-    SMTPEmailProvider,
-    email_config_report,
-    email_provider_from_env,
-)
+from pfai.email_provider import email_config_report
 from pfai.elite.sandbox import Sandbox
 from pfai.elite.unified_orchestrator import EliteOrchestrator
 from pfai.elite.web_fabric import (
@@ -33,39 +26,28 @@ from pfai.model_router import ModelRouter
 
 
 class TestEmailDeliveryStatus(unittest.TestCase):
-    def test_mock_is_test_only(self):
-        report = email_config_report(MockEmailProvider())
-        self.assertEqual(report["EMAIL_DELIVERY_STATUS"], "TEST_ONLY")
+    def test_email_otp_removed(self):
+        report = email_config_report()
+        self.assertEqual(report["EMAIL_DELIVERY_STATUS"], "REMOVED")
+        self.assertEqual(report["EMAIL_LIFECYCLE_STATUS"], "REMOVED")
+        self.assertEqual(report["EMAIL_OTP"], "REMOVED")
         self.assertFalse(report["EMAIL_PRODUCTION_READY"])
 
-    def test_smtp_ready_when_configured(self):
-        p = SMTPEmailProvider(host="smtp.example.test", from_addr="noreply@example.test")
-        report = email_config_report(p)
-        self.assertEqual(report["EMAIL_DELIVERY_STATUS"], "READY")
-        self.assertTrue(report["EMAIL_PRODUCTION_READY"])
-        self.assertNotIn("password", str(report).lower().replace("api_key_configured", ""))
-
-    def test_api_ready_when_configured(self):
-        p = APIEmailProvider(
-            endpoint="https://mail.example.test/v1/send",
-            api_key="secret-key-value",
-            from_addr="noreply@example.test",
-        )
-        report = email_config_report(p)
-        self.assertEqual(report["EMAIL_DELIVERY_STATUS"], "READY")
-        blob = str(report)
-        self.assertNotIn("secret-key-value", blob)
-
-    def test_production_incomplete_not_configured(self):
+    def test_removed_status_ignores_legacy_env(self):
         with mock.patch.dict(
             os.environ,
-            {"PFAI_ENV": "production", "PFAI_EMAIL_PROVIDER": "smtp", "PFAI_SMTP_HOST": "", "PFAI_SMTP_FROM": ""},
+            {
+                "PFAI_ENV": "production",
+                "PFAI_EMAIL_PROVIDER": "api",
+                "PFAI_EMAIL_API_ENDPOINT": "https://mail.example.test/v1/send",
+                "PFAI_EMAIL_API_KEY": "secret-key-value",
+                "PFAI_EMAIL_FROM": "noreply@example.test",
+            },
             clear=False,
         ):
-            p = email_provider_from_env()
-            self.assertIsInstance(p, FailClosedEmailProvider)
-            report = email_config_report(p)
-            self.assertEqual(report["EMAIL_DELIVERY_STATUS"], "NOT_CONFIGURED")
+            report = email_config_report()
+            self.assertEqual(report["EMAIL_DELIVERY_STATUS"], "REMOVED")
+            self.assertNotIn("secret-key-value", str(report))
 
 
 class TestWebFabricSSRFAndStatus(unittest.TestCase):
