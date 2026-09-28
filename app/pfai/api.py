@@ -656,10 +656,14 @@ def access_privileged(
     x_owner_secret: str | None = Header(default=None, alias='X-Owner-Secret'),
     pfai_owner_session: str | None = Cookie(default=None, alias=COOKIE_NAME),
 ) -> str:
-    """Privileged/destructive ops: blocked in Public Access Mode (no login challenge)."""
+    """Privileged/destructive ops.
+
+    In Public Access Mode these are open (no login). Outside public mode they
+    still require a verified owner session / X-Owner-Secret.
+    """
     _ = request.query_params.get('role') or request.query_params.get('admin') or request.query_params.get('owner')
     if public_access_mode():
-        raise HTTPException(403, 'privileged operation disabled in public access mode')
+        return 'public'
     return require_owner(request, x_owner_secret, pfai_owner_session)
 
 

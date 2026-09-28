@@ -354,7 +354,7 @@ class TestOwnerAuthAPI(unittest.TestCase):
                 owner_paths.append(path)
 
         self.assertGreaterEqual(len(owner_paths), 40)
-        # Privileged routes must reject unauthenticated public callers.
+        # With Public Access Mode off (suite default), unauthenticated callers are rejected.
         for method, path in [
             ("POST", "/platform/learning"),
             ("GET", "/owner/identity"),
@@ -366,7 +366,7 @@ class TestOwnerAuthAPI(unittest.TestCase):
                 r = self.client.get(path)
             else:
                 r = self.client.request(method, path, json={"goal": "x", "message": "x", "content": "x", "version": "x", "traffic": 0.1})
-            self.assertIn(r.status_code, (401, 403, 503, 422), msg=f"{method} {path} -> {r.status_code}")
+            self.assertIn(r.status_code, (401, 503, 422), msg=f"{method} {path} -> {r.status_code}")
 
     def test_privilege_escalation_ignored(self):
         self.client.cookies.clear()
