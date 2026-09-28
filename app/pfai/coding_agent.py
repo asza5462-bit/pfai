@@ -270,6 +270,6 @@ def build_learning_context(coding: dict[str, Any] | None) -> dict[str, Any]:
         "project_count": len(coding.get("projects") or []) or None,
         "next_lesson_id": (nxt.get("next") or {}).get("id") if isinstance(nxt, dict) else None,
         "training_auto": False,
-        "can_start_training_from_chat": False,
-        "note": "Education linked; model training never auto-starts from chat",
+        "can_start_training_from_chat": True,
+        "note": "Education linked; use training_cycle_start for weight cycles (no silent promote)",
     }

@@ -1,6 +1,6 @@
 # PFAI Project Memory
 
-Last updated: 2026-09-28 (Open Chat Tools + Advanced Brain)
+Last updated: 2026-09-28 (PFAI 8.1 — unrestricted superlearn)
 
 ## Snapshot
 

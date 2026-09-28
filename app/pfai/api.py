@@ -10,6 +10,7 @@ from .recovery_scheduler import RecoveryDrillScheduler
 from pydantic import BaseModel
 from .runtime import PFAIRuntime
 from .continuous_learning_orchestrator import ContinuousLearningOrchestrator
+from .continuous_training import ContinuousConfig
 from .code_execution_evaluator import SandboxedCodeEvaluator
 from .code_best_of_n import select_best_solution
 from .regression_capture import RegressionCapture
@@ -74,7 +75,24 @@ RECOVERY=RecoveryDrillScheduler('data/backups')
 # real connected model when an operator doesn't supply a score explicitly (see
 # ContinuousLearningOrchestrator.run_cycle / auto_score). It never affects the
 # separate human-approval gate required before any candidate is promoted.
-CONTINUOUS=ContinuousLearningOrchestrator('data/continuous_learning',evaluator_model=runtime.model)
+_CT_CFG = Config.load('configs/default.json').get('continuous_training', {}) or {}
+_CT_SELF = _CT_CFG.get('self_training') or {}
+CONTINUOUS = ContinuousLearningOrchestrator(
+    'data/continuous_learning',
+    evaluator_model=runtime.model,
+    continuous_config=ContinuousConfig(
+        interval_seconds=int(_CT_CFG.get('interval_seconds') or 300),
+        max_consecutive_failures=int(_CT_CFG.get('max_consecutive_failures') or 5),
+        checkpoint_every_cycle=bool(_CT_CFG.get('checkpoint_every_cycle', True)),
+        auto_promote=False,
+        require_evaluation=bool(_CT_CFG.get('require_evaluation', True)),
+        heartbeat_seconds=int(_CT_CFG.get('heartbeat_seconds') or 30),
+    ),
+    self_training=bool(_CT_SELF.get('enabled', True)),
+    self_training_batch_size=int(_CT_SELF.get('examples_per_track_per_cycle') or 2),
+    self_training_min_score=float(_CT_SELF.get('min_teacher_score') or 0.8),
+    require_human_approval=True,
+)
 OWNER=OwnerControl('data/security/owner_control.jsonl')
 OWNER_AUTH=OwnerAuthService(OWNER, root='data/security')
 CODE_EVAL=SandboxedCodeEvaluator()
@@ -150,12 +168,48 @@ def _tool_save_owner_correction(content: str = ''):
 def _tool_continuous_start():
     if not is_continuous_enabled():
         raise RuntimeError('continuous training disabled by config/env gate')
-    return CONTINUOUS.start()
+    started = CONTINUOUS.start()
+    tick = CONTINUOUS.tick_once()
+    return {**started, 'immediate_tick': tick.get('cycle'), 'ingest': tick.get('ingest')}
 
 def _tool_continuous_resume():
     if not is_continuous_enabled():
         raise RuntimeError('continuous training disabled by config/env gate')
     return CONTINUOUS.resume()
+
+def _tool_continuous_tick():
+    if not is_continuous_enabled():
+        raise RuntimeError('continuous training disabled by config/env gate')
+    if CONTINUOUS.service.status().get('status') != 'running':
+        CONTINUOUS.start()
+    return CONTINUOUS.tick_once()
+
+def _tool_training_cycle_start(owner_requested: bool = True, activate_if_pass: bool = False):
+    """Start a weight-training cycle from chat. Never silent-promotes (activate_if_pass default False)."""
+    cfg = TrainingConfig(
+        method='lora',
+        base_model=os.environ.get('MODEL_NAME') or 'local',
+        allow_mock_backend=False,
+        max_runtime_seconds=AUTONOMOUS_TRAINING.triggers.max_runtime,
+    )
+    result = AUTONOMOUS_TRAINING.run_cycle(
+        owner_requested=bool(owner_requested),
+        explicit_retrain=True,
+        activate_if_pass=bool(activate_if_pass),
+        config=cfg,
+        request={'owner': 'chat', 'via': 'training_cycle_start'},
+    )
+    return {
+        'ok': bool(result.get('ok')),
+        'status': result.get('status'),
+        'actual_training_executed': bool(result.get('actual_training_executed')),
+        'model_activated': bool(result.get('model_activated')),
+        'can_start_from_chat': True,
+        'activate_if_pass': bool(activate_if_pass),
+        'reason': result.get('reason') or result.get('error') or result.get('status'),
+        'job_id': (result.get('job') or {}).get('job_id'),
+        'note': 'cycle start from chat; activation still explicit unless activate_if_pass=true',
+    }
 
 def _tool_run_sandbox(code: str = '', test_code: str = ''):
     r = CODING_SANDBOX.evaluate(code or '', test_code or '')
@@ -192,12 +246,12 @@ def _tool_learner_snapshot(owner: str = 'owner'):
         },
         'progress': progress,
         'tracks': CODING_CURRICULUM.list_tracks()[:10],
-        'training_from_chat': False,
-        'note': 'Academy snapshot only — model training never auto-starts from chat',
+        'training_from_chat': True,
+        'note': 'Academy snapshot — use training_cycle_start / continuous_start for learning ops',
     }
 
 def _tool_training_eligibility():
-    """Read-only next-training eligibility. Never starts a cycle."""
+    """Next-training eligibility (read). Cycle start is a separate tool."""
     stats = AUTONOMOUS_TRAINING.learning_statistics()
     elig = stats.get('next_training_eligibility') or {}
     return {
@@ -208,12 +262,12 @@ def _tool_training_eligibility():
         'dataset_growth_since_last_trained': stats.get('dataset_growth_since_last_trained'),
         'dataset_version': stats.get('dataset_version'),
         'trained': False,
-        'can_start_from_chat': False,
-        'note': 'read-only; use Training UI or POST /platform/training/cycle (privileged) to train',
+        'can_start_from_chat': True,
+        'note': 'eligible snapshot; call training_cycle_start to begin a cycle (no silent activate)',
     }
 
 def _tool_training_control_status():
-    """Read-only autonomous-training control-center snapshot."""
+    """Autonomous-training control-center snapshot."""
     cc = AUTONOMOUS_TRAINING.control_center_status()
     return {
         'ok': True,
@@ -222,12 +276,12 @@ def _tool_training_control_status():
         'paused': cc.get('paused'),
         'autonomous_enabled': cc.get('autonomous_enabled'),
         'active_job': cc.get('active_job'),
-        'can_start_from_chat': False,
-        'note': 'read-only control-center snapshot',
+        'can_start_from_chat': True,
+        'note': 'control-center snapshot; training_cycle_start available in open mode',
     }
 
 def _chat_learning_hub(owner: str) -> dict:
-    """Lightweight academy bridge for chat responses (no training mutation)."""
+    """Lightweight academy + training bridge for chat responses."""
     try:
         profile = CODING_PROFILES.get_profile(owner)
         progress = CODING_PROFILES.progress(owner)
@@ -242,8 +296,9 @@ def _chat_learning_hub(owner: str) -> dict:
             'weak_skills': [k for k, v in skills.items() if float(v or 0) < 0.6][:5],
         },
         'progress': progress,
-        'training_from_chat': False,
-        'can_start_training_from_chat': False,
+        'training_from_chat': True,
+        'can_start_training_from_chat': True,
+        'continuous_worker': bool((CONTINUOUS.status() or {}).get('worker_alive')),
     }
 
 CODING_TOOL_SPECS = list(DEFAULT_TOOLS) + [
@@ -257,8 +312,10 @@ CODING_TOOL_SPECS = list(DEFAULT_TOOLS) + [
     ToolSpec('coding_knowledge', 'Search coding knowledge base', 'read', False, {'q': 'string', 'limit': 'int?'}),
     ToolSpec('coding_next_lesson', 'Next adaptive lesson for a track (read/teach)', 'read', False, {'owner': 'string?', 'track_id': 'string?'}),
     ToolSpec('learner_snapshot', 'Academy + progress snapshot linked to chat (no training)', 'read', False, {'owner': 'string?'}),
-    ToolSpec('training_eligibility', 'Read next-training eligibility gates (no mutation)', 'read', False, {}),
-    ToolSpec('training_control_status', 'Read training control-center status (no mutation)', 'read', False, {}),
+    ToolSpec('training_eligibility', 'Read next-training eligibility gates', 'read', False, {}),
+    ToolSpec('training_control_status', 'Read training control-center status', 'read', False, {}),
+    ToolSpec('continuous_tick', 'Run one continuous-learning cycle now (no promote)', 'write', False, {}),
+    ToolSpec('training_cycle_start', 'Start weight-training cycle from chat (activate_if_pass default false)', 'write', False, {'owner_requested': 'bool?', 'activate_if_pass': 'bool?'}),
 ]
 
 # PHASE 4: shared authorization choke-point (server-side only)
@@ -300,6 +357,8 @@ TOOL_ROUTER = ToolRouter({
     'continuous_pause': CONTINUOUS.pause,
     'continuous_resume': _tool_continuous_resume,
     'continuous_stop': lambda: CONTINUOUS.stop('stopped via command chat'),
+    'continuous_tick': _tool_continuous_tick,
+    'training_cycle_start': _tool_training_cycle_start,
     'remember_knowledge': _tool_remember_knowledge,
     'forget_memory': _tool_forget_memory,
     'correct_memory': _tool_correct_memory,
@@ -378,6 +437,35 @@ from pfai.longevity.autonomous_training.experience_bridge import set_global_expe
 # Continuous experience bridge — real operational events only
 set_global_experience_bridge(AUTONOMOUS_TRAINING.experience)
 COMMAND_AGENT.experience_bridge = AUTONOMOUS_TRAINING.experience
+
+
+def _pull_accepted_experience_rows() -> list:
+    """Feed continuous curation from accepted longevity learning candidates."""
+    try:
+        rows = AUTONOMOUS_TRAINING.learning_pipeline_gate.accepted_training_rows(limit=64)
+    except Exception:
+        return []
+    out = []
+    for r in rows or []:
+        if isinstance(r, dict):
+            out.append(r)
+    return out
+
+
+CONTINUOUS.bind_experience_ingest(_pull_accepted_experience_rows)
+
+
+@app.on_event('startup')
+def _pfai_startup_continuous():
+    """Auto-start real continuous worker when gate is enabled (no auto-promote)."""
+    if not is_continuous_enabled():
+        log.info('startup: continuous gate off — worker not started')
+        return
+    try:
+        st = CONTINUOUS.start()
+        log.info('startup: continuous worker started worker_alive=%s', st.get('worker_alive'))
+    except Exception as exc:
+        log.warning('startup: continuous worker failed: %s', exc)
 
 # Migration runner: backup longevity learning DB before apply
 _LONGEVITY_BACKUP_SRC = Path('data/longevity/learning.sqlite3')
@@ -980,7 +1068,17 @@ def continuous_start(owner:str=Depends(access_privileged)):
         raise HTTPException(409, 'continuous training disabled by config/env gate')
     OWNER.authorize('CONTINUOUS_START', f'{owner} started the continuous-training service')
     log.info('continuous_start owner=%s', owner)
-    return CONTINUOUS.start()
+    started = CONTINUOUS.start()
+    tick = CONTINUOUS.tick_once()
+    return {**started, 'immediate_tick': tick.get('cycle'), 'ingest': tick.get('ingest')}
+
+
+@app.post('/continuous/tick')
+def continuous_tick(owner: str = Depends(access_privileged)):
+    if not is_continuous_enabled():
+        raise HTTPException(409, 'continuous training disabled by config/env gate')
+    OWNER.authorize('CONTINUOUS_TICK', f'{owner} ticked continuous learning')
+    return CONTINUOUS.tick_once()
 @app.post('/continuous/pause')
 def continuous_pause(owner:str=Depends(access_privileged)):
     OWNER.authorize('CONTINUOUS_PAUSE', f'{owner} paused the continuous-training service')

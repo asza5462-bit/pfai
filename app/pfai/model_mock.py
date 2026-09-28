@@ -91,6 +91,17 @@ class MockCommandProvider(ModelProvider):
         if re.search(r"start continuous|شغ[لّ].*تعلم|تشغيل.*continuous|ابدأ\s*التعلم\s*المستمر", text + ar):
             add("continuous_start")
             add("continuous_status")
+            add("continuous_tick")
+        if re.search(r"tick continuous|دورة\s*تعلم|continuous\s*tick|نفّذ\s*دورة", text + ar):
+            add("continuous_tick")
+            add("continuous_status")
+        if re.search(
+            r"start\s*training\s*cycle|training_cycle|ابدأ\s*دورة\s*التدريب|شغّل\s*التدريب|run\s*training",
+            text + ar,
+            re.I,
+        ):
+            add("training_eligibility")
+            add("training_cycle_start")
         if re.search(r"stop continuous|أوقف.*تعلم|ايقاف.*تعلم", text + ar):
             add("continuous_stop")
         if re.search(r"resume continuous|استأنف.*تعلم", text + ar):

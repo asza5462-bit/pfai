@@ -41,8 +41,8 @@
   "continuous_training": {
     "enabled": true,
     "_enable_note": "Base switch is true. Force disable/enable at runtime with PFAI_CONTINUOUS_TRAINING_ENABLED. auto_promote is never honored from JSON — promotion stays owner-gated.",
-    "interval_seconds": 900,
-    "max_consecutive_failures": 3,
+    "interval_seconds": 300,
+    "max_consecutive_failures": 5,
     "checkpoint_every_cycle": true,
     "auto_promote": false,
     "require_evaluation": true,

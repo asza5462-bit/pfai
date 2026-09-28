@@ -30,7 +30,7 @@ class TestLearningContextHelper(unittest.TestCase):
         self.assertEqual(ctx["lesson_id"], "py-intro")
         self.assertTrue(ctx["has_exercise"])
         self.assertFalse(ctx["training_auto"])
-        self.assertFalse(ctx["can_start_training_from_chat"])
+        self.assertTrue(ctx["can_start_training_from_chat"])
 
 
 class TestMockTrainingRouting(unittest.TestCase):
@@ -68,7 +68,7 @@ class TestCodingAgentLearningContext(unittest.TestCase):
         self.assertTrue(r["ok"])
         self.assertIn("learning_context", r)
         self.assertEqual(r["learning_context"]["intent"], "teach")
-        self.assertFalse(r["learning_context"]["can_start_training_from_chat"])
+        self.assertTrue(r["learning_context"]["can_start_training_from_chat"])
 
     def test_exercise_includes_track_and_starter(self):
         r = self.agent.handle("أعطني تمرين", owner="learner@x")
@@ -110,8 +110,10 @@ class TestAdvancedChatAPI(unittest.TestCase):
             "coding_teach", "coding_progress",
         ):
             self.assertIn(n, names)
-        # Never expose cycle/activate as chat tools
-        for banned in ("training_cycle", "run_cycle", "activate_model", "platform_training_cycle"):
+        # Weight activation / promote must not be chat tools; cycle start is allowed
+        self.assertIn("training_cycle_start", names)
+        self.assertIn("continuous_tick", names)
+        for banned in ("activate_model", "platform_training_cycle", "training_promote"):
             self.assertNotIn(banned, names)
 
     def test_training_tools_are_read_only_no_approval(self):
@@ -127,9 +129,9 @@ class TestAdvancedChatAPI(unittest.TestCase):
         self.assertIn("coding", body)
         self.assertIn("learning_context", body)
         self.assertEqual(body["learning_context"]["intent"], "teach")
-        self.assertFalse(body["learning_context"]["can_start_training_from_chat"])
+        self.assertTrue(body["learning_context"]["can_start_training_from_chat"])
         self.assertIn("learning_hub", body)
-        self.assertFalse(body["learning_hub"]["training_from_chat"])
+        self.assertTrue(body["learning_hub"]["training_from_chat"])
 
     def test_chat_training_eligibility_readonly(self):
         r = self.client.post(
@@ -149,8 +151,8 @@ class TestAdvancedChatAPI(unittest.TestCase):
         for t in body.get("tools") or []:
             res = t.get("result") or {}
             if t.get("tool") in {"training_eligibility", "training_control_status"}:
-                self.assertFalse(res.get("can_start_from_chat", True) is True and res.get("trained") is True)
-                self.assertEqual(res.get("can_start_from_chat"), False)
+                self.assertTrue(res.get("can_start_from_chat"))
+                self.assertFalse(res.get("trained"))
 
     def test_exercise_submit_never_marks_trained(self):
         r = self.client.post(

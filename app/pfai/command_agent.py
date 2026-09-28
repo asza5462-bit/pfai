@@ -321,25 +321,47 @@ class CommandAgent:
         return type(self.model).__name__ not in {"EchoProvider", "MockCommandProvider"}
 
     def _handle_correction_capture(self, cid, owner, message, lang, timeline, mark) -> dict:
+        from .open_execution import open_chat_tools
         mark("thinking", "Owner correction flow")
-        # If message itself contains the correction after a prompt, save pending remember
         content = message
         for prefix in ("التصحيح:", "التصحيح :", "correction:", "Correction:"):
             if prefix.lower() in message.lower():
                 content = message.split(":", 1)[-1].strip()
                 break
-        # Ask for explicit content if this is only a complaint
         if re.search(r"غير صحيح|wrong|incorrect", message, re.I) and len(content) < 40:
-            mark("waiting_for_approval", "Awaiting correction text from owner")
             reply = (
-                "ما التصحيح الذي تريد حفظه؟ أرسل نص التصحيح بوضوح، ثم سأطلب موافقتك قبل تسجيله في ذاكرة PFAI."
+                "ما التصحيح الذي تريد حفظه؟ أرسل نص التصحيح بوضوح (مثال: التصحيح: ...)."
                 if lang == "ar"
-                else "What correction should I save? Send the corrected statement clearly; I will ask for your approval before writing it to PFAI memory."
+                else "What correction should I save? Send it clearly (example: correction: ...)."
             )
-            self.memory.add_message(cid, "assistant", reply, status="waiting_for_approval", meta={"timeline": timeline})
+            mark("completed", "Awaiting correction text")
+            self.memory.add_message(cid, "assistant", reply, status="completed", meta={"timeline": timeline})
             return {
                 "ok": True, "conversation_id": cid, "reply": reply, "timeline": timeline,
-                "status": "waiting_for_approval", "provider": self.provider_name(), "language": lang,
+                "status": "completed", "provider": self.provider_name(), "language": lang,
+            }
+        # Open mode: persist immediately without approval wait
+        if open_chat_tools() or not self.router.requires_approval("save_owner_correction"):
+            mark("executing", "Saving correction (open execution)")
+            result = self.router.execute("save_owner_correction", {"content": content}, approved=True, actor=owner)
+            status = "completed" if result.get("ok") else "failed"
+            mark(status, None if result.get("ok") else result.get("error"))
+            reply = (
+                f"تم حفظ التصحيح في الذاكرة. id={(result.get('result') or {}).get('memory_id')}"
+                if lang == "ar"
+                else f"Correction saved to memory. id={(result.get('result') or {}).get('memory_id')}"
+            )
+            if not result.get("ok"):
+                reply = result.get("error") or reply
+            self.audit.record(
+                actor=owner, command=message, tool="save_owner_correction", status=status,
+                required_approval=False, approved=True, conversation_id=cid,
+                result=result.get("result"), error=result.get("error"),
+            )
+            self.memory.add_message(cid, "assistant", reply, status=status, meta={"timeline": timeline, "tools": [result]})
+            return {
+                "ok": bool(result.get("ok")), "conversation_id": cid, "reply": reply, "timeline": timeline,
+                "tools": [result], "status": status, "provider": self.provider_name(), "language": lang,
             }
         pid = self.memory.create_pending(cid, "save_owner_correction", {"content": content}, reason="Save owner correction")
         mark("waiting_for_approval", "Owner approval required to persist correction", pending_id=pid)
