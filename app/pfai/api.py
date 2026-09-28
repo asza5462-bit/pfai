@@ -622,14 +622,72 @@ def require_owner(
     raise HTTPException(401, 'authentication required')
 
 
+
+
+def public_access_mode() -> bool:
+    """Public Access Mode: no login challenges for public product surfaces.
+
+    Default ON when PFAI_ENV=production|prod. Explicit PFAI_PUBLIC_ACCESS_MODE
+    overrides (1/true/on or 0/false/off). Tests leave production unset and keep
+    legacy owner gates unless they opt into public mode.
+    """
+    v = os.environ.get('PFAI_PUBLIC_ACCESS_MODE', '').strip().lower()
+    if v in ('0', 'false', 'no', 'off'):
+        return False
+    if v in ('1', 'true', 'yes', 'on'):
+        return True
+    return _is_production_env()
+
+
+def access_public(
+    request: Request,
+    x_owner_secret: str | None = Header(default=None, alias='X-Owner-Secret'),
+    pfai_owner_session: str | None = Cookie(default=None, alias=COOKIE_NAME),
+) -> str:
+    """Allow public product use without authentication in Public Access Mode."""
+    _ = request.query_params.get('role') or request.query_params.get('admin') or request.query_params.get('owner')
+    if public_access_mode():
+        return 'public'
+    return require_owner(request, x_owner_secret, pfai_owner_session)
+
+
+def access_privileged(
+    request: Request,
+    x_owner_secret: str | None = Header(default=None, alias='X-Owner-Secret'),
+    pfai_owner_session: str | None = Cookie(default=None, alias=COOKIE_NAME),
+) -> str:
+    """Privileged/destructive ops: blocked in Public Access Mode (no login challenge)."""
+    _ = request.query_params.get('role') or request.query_params.get('admin') or request.query_params.get('owner')
+    if public_access_mode():
+        raise HTTPException(403, 'privileged operation disabled in public access mode')
+    return require_owner(request, x_owner_secret, pfai_owner_session)
+
+
 @app.get('/owner/status')
 def owner_status(
     request: Request,
     pfai_owner_session: str | None = Cookie(default=None, alias=COOKIE_NAME),
 ):
-    """Public auth status — no secrets. Used by Dashboard to choose setup vs login."""
+    """Public auth/access status — no secrets."""
+    if public_access_mode():
+        return {
+            'public_access': True,
+            'authentication': 'DISABLED',
+            'login_required': False,
+            'authenticated': True,
+            'auth_methods': [],
+            'email_otp': 'REMOVED',
+            'email_auth': 'REMOVED',
+            'setup_required': False,
+            'setup_locked': True,
+            'owner_configured': True,
+            'username': '',
+            'note': 'Public Access Mode: no login, OTP, or owner session required for public surfaces.',
+        }
     username = OWNER_AUTH.resolve_session(pfai_owner_session) or ''
-    return OWNER_AUTH.public_status(authenticated=bool(username), username=username)
+    st = OWNER_AUTH.public_status(authenticated=bool(username), username=username)
+    st['public_access'] = False
+    return st
 
 
 class OwnerSetupBody(BaseModel):
@@ -646,6 +704,8 @@ class OwnerLoginBody(BaseModel):
 @app.post('/owner/setup')
 def owner_setup(x: OwnerSetupBody, request: Request, response: Response):
     """First-time owner initialization only. Permanently disabled after success."""
+    if public_access_mode():
+        raise HTTPException(410, 'owner setup disabled in public access mode')
     result = OWNER_AUTH.run_setup(x.username, x.password, x.password_confirm)
     # Never echo password fields back.
     if not result.get('ok'):
@@ -666,6 +726,8 @@ def owner_setup(x: OwnerSetupBody, request: Request, response: Response):
 
 @app.post('/owner/login')
 def owner_login(x: OwnerLoginBody, request: Request, response: Response):
+    if public_access_mode():
+        raise HTTPException(410, 'owner login disabled in public access mode')
     result = OWNER_AUTH.login(x.username, x.password, client_key=_client_key(request))
     if not result.get('ok'):
         # Uniform failure (no username/password distinction); 429 when locked out.
@@ -686,13 +748,16 @@ def owner_logout(
     response: Response,
     pfai_owner_session: str | None = Cookie(default=None, alias=COOKIE_NAME),
 ):
+    if public_access_mode():
+        response.delete_cookie(COOKIE_NAME, path='/')
+        return {'ok': True, 'authenticated': False, 'public_access': True}
     OWNER_AUTH.logout(pfai_owner_session)
     response.delete_cookie(COOKIE_NAME, path='/')
     return {'ok': True, 'authenticated': False}
 
 
 @app.get('/owner/identity')
-def owner_identity(owner: str = Depends(require_owner)):
+def owner_identity(owner: str = Depends(access_privileged)):
     """Non-sensitive: who the configured owner is and whether a secret has been set.
     Never returns the secret or its hash."""
     ident = OWNER.identity()
@@ -715,8 +780,10 @@ class RunCycle(BaseModel):
 @app.get('/health')
 def health():
     return runtime.health(extra={
-        'owner_configured': OWNER_AUTH.owner_configured(),
-        'owner_setup_required': OWNER_AUTH.setup_required(),
+        'public_access': public_access_mode(),
+        'authentication': 'DISABLED' if public_access_mode() else 'OWNER',
+        'owner_configured': True if public_access_mode() else OWNER_AUTH.owner_configured(),
+        'owner_setup_required': False if public_access_mode() else OWNER_AUTH.setup_required(),
         'continuous': continuous_gate_status(),
         'network_enabled': RESEARCH_GATE.policy.network,
         'platform': {
@@ -767,29 +834,29 @@ def modules():
 @app.get('/metrics')
 def metrics(): return runtime.metrics.snapshot()
 @app.post('/memory')
-def remember(x:Remember, owner: str = Depends(require_owner)): runtime.memory.add(x.kind,x.content,x.source,x.confidence); return {'ok':True}
+def remember(x:Remember, owner: str = Depends(access_public)): runtime.memory.add(x.kind,x.content,x.source,x.confidence); return {'ok':True}
 @app.post('/knowledge')
-def knowledge(x:Knowledge, owner: str = Depends(require_owner)): runtime.store.add(x.content,x.source,x.metadata); return {'ok':True}
+def knowledge(x:Knowledge, owner: str = Depends(access_public)): runtime.store.add(x.content,x.source,x.metadata); return {'ok':True}
 @app.get('/knowledge/search')
-def ksearch(q:str, limit:int=5, owner: str = Depends(require_owner)):
+def ksearch(q:str, limit:int=5, owner: str = Depends(access_public)):
     """Owner-gated: knowledge store may hold private curated content."""
     _ = owner
     return {'results': runtime.store.search(q, limit)}
 @app.post('/ask')
-def ask(x:Ask, owner: str = Depends(require_owner)):
+def ask(x:Ask, owner: str = Depends(access_public)):
     if not x.question.strip(): raise HTTPException(400,'question is required')
     return runtime.ask(x.question)
 @app.post('/deploy/canary')
-def canary(x:Canary, owner:str=Depends(require_owner)):
+def canary(x:Canary, owner:str=Depends(access_privileged)):
     OWNER.authorize('DEPLOY_CANARY', f'{owner} requested canary {x.version}@{x.traffic}')
     return runtime.deploy.canary(x.version,x.traffic)
 @app.post('/deploy/promote/{version}')
-def promote(version:str, owner:str=Depends(require_owner)):
+def promote(version:str, owner:str=Depends(access_privileged)):
     if not runtime.deploy.promote(version): raise HTTPException(404,'candidate/canary not found')
     OWNER.authorize('DEPLOY_PROMOTE', f'{owner} promoted {version}')
     return {'ok':True,'active':runtime.registry.active()}
 @app.post('/deploy/rollback/{version}')
-def rollback(version:str, owner:str=Depends(require_owner)):
+def rollback(version:str, owner:str=Depends(access_privileged)):
     if not runtime.deploy.rollback(version): raise HTTPException(404,'deployment not found')
     OWNER.authorize('DEPLOY_ROLLBACK', f'{owner} rolled back to {version}')
     return {'ok':True}
@@ -805,66 +872,66 @@ def continuous_status():
     return status
 
 @app.get('/continuous/auto_score')
-def continuous_auto_score(limit:int|None=None, owner: str = Depends(require_owner)): return CONTINUOUS.auto_score(limit)
+def continuous_auto_score(limit:int|None=None, owner: str = Depends(access_privileged)): return CONTINUOUS.auto_score(limit)
 
 @app.post('/continuous/ingest')
-def continuous_ingest(x: IngestBatch, owner: str = Depends(require_owner)):
+def continuous_ingest(x: IngestBatch, owner: str = Depends(access_privileged)):
     rows=[{'instruction':i.instruction,'response':i.response,'source':i.source,'track':i.track,'metadata':i.metadata} for i in x.items]
     return CONTINUOUS.register_batch(rows)
 
 @app.post('/continuous/cycle')
-def continuous_cycle(x: RunCycle, owner: str = Depends(require_owner)):
+def continuous_cycle(x: RunCycle, owner: str = Depends(access_privileged)):
     result=CONTINUOUS.run_cycle(x.version, x.score, x.notes)
     if not result.get('evaluated'):
         raise HTTPException(409, result.get('reason','cycle rejected'))
     return result
 
 @app.post('/continuous/start')
-def continuous_start(owner:str=Depends(require_owner)):
+def continuous_start(owner:str=Depends(access_privileged)):
     if not is_continuous_enabled():
         raise HTTPException(409, 'continuous training disabled by config/env gate')
     OWNER.authorize('CONTINUOUS_START', f'{owner} started the continuous-training service')
     log.info('continuous_start owner=%s', owner)
     return CONTINUOUS.start()
 @app.post('/continuous/pause')
-def continuous_pause(owner:str=Depends(require_owner)):
+def continuous_pause(owner:str=Depends(access_privileged)):
     OWNER.authorize('CONTINUOUS_PAUSE', f'{owner} paused the continuous-training service')
     log.info('continuous_pause owner=%s', owner)
     return CONTINUOUS.pause()
 @app.post('/continuous/resume')
-def continuous_resume(owner:str=Depends(require_owner)):
+def continuous_resume(owner:str=Depends(access_privileged)):
     if not is_continuous_enabled():
         raise HTTPException(409, 'continuous training disabled by config/env gate')
     OWNER.authorize('CONTINUOUS_RESUME', f'{owner} resumed the continuous-training service')
     log.info('continuous_resume owner=%s', owner)
     return CONTINUOUS.resume()
 @app.post('/continuous/stop')
-def continuous_stop(owner:str=Depends(require_owner)):
+def continuous_stop(owner:str=Depends(access_privileged)):
     OWNER.authorize('CONTINUOUS_STOP', f'{owner} stopped the continuous-training service')
     log.info('continuous_stop owner=%s', owner)
     # Public /continuous/status exposes last_error — do not embed owner email there.
     return CONTINUOUS.stop('stopped by owner')
 
 @app.post('/continuous/approve/{version}')
-def continuous_approve(version:str, owner:str=Depends(require_owner)):
+def continuous_approve(version:str, owner:str=Depends(access_privileged)):
     if not CONTINUOUS.approve(version): raise HTTPException(404,'no pending candidate with that version')
     OWNER.authorize('CONTINUOUS_APPROVE', f'{owner} approved candidate {version}')
     log.info('continuous_approve owner=%s version=%s', owner, version)
     return {'ok':True}
 @app.post('/continuous/reject/{version}')
-def continuous_reject(version:str, owner:str=Depends(require_owner)):
+def continuous_reject(version:str, owner:str=Depends(access_privileged)):
     if not CONTINUOUS.reject(version): raise HTTPException(404,'no pending candidate with that version')
     OWNER.authorize('CONTINUOUS_REJECT', f'{owner} rejected candidate {version}')
     log.info('continuous_reject owner=%s version=%s', owner, version)
     return {'ok':True}
 @app.post('/continuous/promote/{version}')
-def continuous_promote(version:str, owner:str=Depends(require_owner)):
+def continuous_promote(version:str, owner:str=Depends(access_privileged)):
     if not CONTINUOUS.promote(version): raise HTTPException(404,'candidate must be approved before promotion')
     OWNER.authorize('CONTINUOUS_PROMOTE', f'{owner} promoted candidate {version}')
     log.info('continuous_promote owner=%s version=%s', owner, version)
     return {'ok':True,'active':CONTINUOUS.loop.active()}
 @app.post('/continuous/rollback')
-def continuous_rollback(version:str|None=None, owner:str=Depends(require_owner)):
+def continuous_rollback(version:str|None=None, owner:str=Depends(access_privileged)):
     if not CONTINUOUS.rollback(version): raise HTTPException(404,'no accepted candidate to roll back to')
     OWNER.authorize('CONTINUOUS_ROLLBACK', f'{owner} rolled back continuous learning to {version or "previous"}')
     log.info('continuous_rollback owner=%s version=%s', owner, version)
@@ -872,7 +939,7 @@ def continuous_rollback(version:str|None=None, owner:str=Depends(require_owner))
 
 
 @app.post('/code/evaluate')
-def code_evaluate(x: CodeCheck, owner: str = Depends(require_owner)):
+def code_evaluate(x: CodeCheck, owner: str = Depends(access_public)):
     """Ground-truth sandboxed execution, not a heuristic guess -- see
     code_execution_evaluator.py. Read-only: never writes anything, so no owner
     gate is needed, same as /continuous/auto_score."""
@@ -880,7 +947,7 @@ def code_evaluate(x: CodeCheck, owner: str = Depends(require_owner)):
     return _asdict(CODE_EVAL.evaluate(x.code, x.test_code))
 
 @app.post('/code/best_of_n')
-def code_best_of_n(x: CodeBestOfN, owner: str = Depends(require_owner)):
+def code_best_of_n(x: CodeBestOfN, owner: str = Depends(access_public)):
     """Evaluate several candidate solutions in the sandbox and return the best
     passing one, if any. Read-only, same reasoning as /code/evaluate."""
     from dataclasses import asdict as _asdict
@@ -890,7 +957,7 @@ def code_best_of_n(x: CodeBestOfN, owner: str = Depends(require_owner)):
             'results': [_asdict(res) for res in r.results]}
 
 @app.post('/code/solve')
-def code_solve(x: CodeSolve, owner: str = Depends(require_owner)):
+def code_solve(x: CodeSolve, owner: str = Depends(access_public)):
     """Closes the full code-learning loop: the connected model proposes several
     candidate solutions, every one is ground-truth checked in the sandbox (never
     graded by how plausible it looks), and only a genuinely passing candidate is
@@ -930,14 +997,14 @@ def code_solve(x: CodeSolve, owner: str = Depends(require_owner)):
 
 
 @app.get('/regression/pending')
-def regression_pending(owner: str = Depends(require_owner)):
+def regression_pending(owner: str = Depends(access_privileged)):
     """Owner-gated: pending cases include broken/fixed source code."""
     _ = owner
     return {'items': REGRESSIONS.pending()}
 
 
 @app.post('/regression/capture')
-def regression_capture(x: RegressionCaptureRequest, owner: str = Depends(require_owner)):
+def regression_capture(x: RegressionCaptureRequest, owner: str = Depends(access_privileged)):
     """Queues a candidate regression test only after verifying it in the
     sandbox (broken really fails, fixed really passes). Read-only with
     respect to the live test suite -- it never touches tests/ itself."""
@@ -959,7 +1026,7 @@ def regression_capture(x: RegressionCaptureRequest, owner: str = Depends(require
     return result
 
 @app.post('/regression/materialize/{case_id}')
-def regression_materialize(case_id: str, owner: str = Depends(require_owner)):
+def regression_materialize(case_id: str, owner: str = Depends(access_privileged)):
     """Owner-gated: this is the one call in this module that writes into the
     tests/ directory that PFAI's own promotion gate runs against."""
     result = REGRESSIONS.materialize(case_id)
@@ -969,7 +1036,7 @@ def regression_materialize(case_id: str, owner: str = Depends(require_owner)):
     return result
 
 @app.post('/regression/reject/{case_id}')
-def regression_reject(case_id: str, owner: str = Depends(require_owner)):
+def regression_reject(case_id: str, owner: str = Depends(access_privileged)):
     OWNER.authorize('REGRESSION_REJECT', f'{owner} rejected regression case {case_id}')
     return REGRESSIONS.reject(case_id)
 
@@ -1003,7 +1070,7 @@ class RecoveryDrillRequest(BaseModel):
     expected_sha256: str | None = None
 
 @app.post('/recovery/drill')
-def recovery_drill(x: RecoveryDrillRequest, owner:str=Depends(require_owner)):
+def recovery_drill(x: RecoveryDrillRequest, owner:str=Depends(access_privileged)):
     if not x.snapshot.strip():
         raise HTTPException(400, 'snapshot is required')
     try:
@@ -1031,7 +1098,7 @@ class LearningBody(BaseModel):
     meta: dict = {}
 
 @app.get('/platform/status')
-def platform_status(owner: str = Depends(require_owner)):
+def platform_status(owner: str = Depends(access_public)):
     return ORCHESTRATOR.status()
 
 # --- PHASE 12 Elite Skills + Tool Fabric (owner-protected management) ---
@@ -1062,7 +1129,7 @@ class EliteMCPTrustBody(BaseModel):
     approved: bool = False
 
 @app.post('/chat')
-def elite_unified_chat(x: EliteChatBody, owner: str = Depends(require_owner)):
+def elite_unified_chat(x: EliteChatBody, owner: str = Depends(access_public)):
     """Unified PFAI AI chat — PHASE 22 ProductionRuntime over existing fabrics."""
     if not (x.message or '').strip():
         raise HTTPException(400, 'message is required')
@@ -1133,29 +1200,29 @@ def _progress_timeline_for_chat(progress: dict | None) -> list:
     return out
 
 @app.get('/platform/elite/status')
-def elite_status(owner: str = Depends(require_owner)):
+def elite_status(owner: str = Depends(access_public)):
     return ELITE.status()
 
 @app.get('/platform/email/status')
-def email_status(owner: str = Depends(require_owner)):
+def email_status(owner: str = Depends(access_privileged)):
     from .email_provider import email_config_report
     return {'ok': True, **email_config_report()}
 
 @app.get('/platform/web/status')
-def web_status(owner: str = Depends(require_owner)):
+def web_status(owner: str = Depends(access_public)):
     return {'ok': True, **ELITE.web.status()}
 
 @app.get('/platform/model-router/status')
-def model_router_status(owner: str = Depends(require_owner)):
+def model_router_status(owner: str = Depends(access_public)):
     return {'ok': True, **MODEL_ROUTER.describe()}
 
 @app.get('/platform/sandbox/status')
-def sandbox_status(owner: str = Depends(require_owner)):
+def sandbox_status(owner: str = Depends(access_public)):
     from .elite.sandbox import Sandbox
     return {'ok': True, **Sandbox(timeout=1.0).metadata()}
 
 @app.get('/platform/phase14/status')
-def phase14_platform_status(owner: str = Depends(require_owner)):
+def phase14_platform_status(owner: str = Depends(access_public)):
     from .engineering import phase14_status
     st = phase14_status()
     st['elite'] = {
@@ -1165,7 +1232,7 @@ def phase14_platform_status(owner: str = Depends(require_owner)):
     return {'ok': True, **st}
 
 @app.get('/platform/phase15/status')
-def phase15_platform_status(owner: str = Depends(require_owner)):
+def phase15_platform_status(owner: str = Depends(access_public)):
     from .engineering import phase15_status
     st = phase15_status()
     st['elite'] = {
@@ -1177,7 +1244,7 @@ def phase15_platform_status(owner: str = Depends(require_owner)):
     return {'ok': True, **st}
 
 @app.get('/platform/phase16/status')
-def phase16_platform_status(owner: str = Depends(require_owner)):
+def phase16_platform_status(owner: str = Depends(access_public)):
     from .engineering import phase16_status
     from .elite.platform_observability import PlatformObservability
     st = phase16_status()
@@ -1193,7 +1260,7 @@ def phase16_platform_status(owner: str = Depends(require_owner)):
     return {'ok': True, **st}
 
 @app.get('/platform/phase17/status')
-def phase17_platform_status(owner: str = Depends(require_owner)):
+def phase17_platform_status(owner: str = Depends(access_public)):
     from .engineering import phase17_status
     st = phase17_status()
     st['elite'] = {
@@ -1205,7 +1272,7 @@ def phase17_platform_status(owner: str = Depends(require_owner)):
     return {'ok': True, **st}
 
 @app.get('/platform/phase18/status')
-def phase18_platform_status(owner: str = Depends(require_owner)):
+def phase18_platform_status(owner: str = Depends(access_public)):
     from .engineering import phase18_status
     st = phase18_status()
     st['elite'] = {
@@ -1218,7 +1285,7 @@ def phase18_platform_status(owner: str = Depends(require_owner)):
     return {'ok': True, **st}
 
 @app.get('/platform/phase19/status')
-def phase19_platform_status(owner: str = Depends(require_owner)):
+def phase19_platform_status(owner: str = Depends(access_public)):
     from .elite.phase19_gates import phase19_status
     st = phase19_status()
     st['elite'] = {
@@ -1231,7 +1298,7 @@ def phase19_platform_status(owner: str = Depends(require_owner)):
     return {'ok': True, **st}
 
 @app.get('/platform/phase20/status')
-def phase20_platform_status(owner: str = Depends(require_owner)):
+def phase20_platform_status(owner: str = Depends(access_public)):
     from .elite.phase20_gates import phase20_status
     st = phase20_status()
     st['elite'] = {
@@ -1245,7 +1312,7 @@ def phase20_platform_status(owner: str = Depends(require_owner)):
     return {'ok': True, **st}
 
 @app.get('/platform/phase21/status')
-def phase21_platform_status(owner: str = Depends(require_owner)):
+def phase21_platform_status(owner: str = Depends(access_public)):
     from .elite.phase21_gates import phase21_status
     st = phase21_status()
     st['elite'] = {
@@ -1261,7 +1328,7 @@ def phase21_platform_status(owner: str = Depends(require_owner)):
     return {'ok': True, **st}
 
 @app.get('/platform/phase22/status')
-def phase22_platform_status(owner: str = Depends(require_owner)):
+def phase22_platform_status(owner: str = Depends(access_public)):
     from .elite.phase22_gates import phase22_status
     st = phase22_status()
     st['elite'] = {
@@ -1278,7 +1345,7 @@ def phase22_platform_status(owner: str = Depends(require_owner)):
     return {'ok': True, **st}
 
 @app.get('/platform/phase23/status')
-def phase23_platform_status(owner: str = Depends(require_owner)):
+def phase23_platform_status(owner: str = Depends(access_public)):
     from .elite.phase23_gates import phase23_status
     st = phase23_status()
     st['elite'] = {
@@ -1302,13 +1369,13 @@ class WebQueryBody(BaseModel):
     approved: bool = False
 
 @app.get('/platform/web/providers')
-def web_providers_status(owner: str = Depends(require_owner)):
+def web_providers_status(owner: str = Depends(access_public)):
     from .elite.web_fabric import web_config_report
     _ = owner
     return {'ok': True, **web_config_report()}
 
 @app.post('/platform/web/search')
-def web_search_api(body: WebQueryBody, owner: str = Depends(require_owner)):
+def web_search_api(body: WebQueryBody, owner: str = Depends(access_public)):
     from .elite.web_fabric import web_config_report
     from .elite.web_research_pipeline import WebResearchPipeline
     if not (body.query or '').strip():
@@ -1329,7 +1396,7 @@ def web_search_api(body: WebQueryBody, owner: str = Depends(require_owner)):
     return out
 
 @app.post('/platform/web/fetch')
-def web_fetch_api(body: WebQueryBody, owner: str = Depends(require_owner)):
+def web_fetch_api(body: WebQueryBody, owner: str = Depends(access_public)):
     from .elite.web_fabric import WebPolicyGate, web_config_report, WebInformationFabric
     if not (body.url or '').strip():
         raise HTTPException(400, 'url is required')
@@ -1351,7 +1418,7 @@ def web_fetch_api(body: WebQueryBody, owner: str = Depends(require_owner)):
     return {**fetched, 'PHASE_24_ALLOWED': False}
 
 @app.post('/platform/web/research')
-def web_research_api(body: WebQueryBody, owner: str = Depends(require_owner)):
+def web_research_api(body: WebQueryBody, owner: str = Depends(access_public)):
     from .elite.web_research_pipeline import WebResearchPipeline
     if not (body.query or '').strip():
         raise HTTPException(400, 'query is required')
@@ -1366,12 +1433,12 @@ def web_research_api(body: WebQueryBody, owner: str = Depends(require_owner)):
     return out
 
 @app.get('/platform/mcp/status')
-def mcp_registry_status(owner: str = Depends(require_owner)):
+def mcp_registry_status(owner: str = Depends(access_public)):
     _ = owner
     return {'ok': True, **(ELITE.mcp_registry.health() if getattr(ELITE, 'mcp_registry', None) else {'MCP_STATUS': 'NOT_READY'})}
 
 @app.get('/platform/mcp/capabilities')
-def mcp_capabilities(owner: str = Depends(require_owner)):
+def mcp_capabilities(owner: str = Depends(access_public)):
     _ = owner
     reg = getattr(ELITE, 'mcp_registry', None)
     if reg is None:
@@ -1379,19 +1446,19 @@ def mcp_capabilities(owner: str = Depends(require_owner)):
     return reg.discover_capabilities()
 
 @app.get('/platform/config/status')
-def production_config_status(owner: str = Depends(require_owner)):
+def production_config_status(owner: str = Depends(access_privileged)):
     """Capability + missing one-time owner actions — never secret values."""
     _ = owner
     from .elite.production_config import detect_production_config
     return detect_production_config()
 
 @app.get('/runtime/status')
-def runtime_status(owner: str = Depends(require_owner)):
+def runtime_status(owner: str = Depends(access_public)):
     _ = owner
     return {'ok': True, **ELITE.production.diagnostics()}
 
 @app.get('/runtime/capabilities')
-def runtime_capabilities(owner: str = Depends(require_owner)):
+def runtime_capabilities(owner: str = Depends(access_public)):
     _ = owner
     diag = ELITE.production.diagnostics()
     return {
@@ -1418,7 +1485,7 @@ def runtime_capabilities(owner: str = Depends(require_owner)):
     }
 
 @app.get('/runtime/health')
-def runtime_health(owner: str = Depends(require_owner)):
+def runtime_health(owner: str = Depends(access_public)):
     _ = owner
     diag = ELITE.production.diagnostics()
     return {
@@ -1436,7 +1503,7 @@ def runtime_health(owner: str = Depends(require_owner)):
     }
 
 @app.get('/system/status')
-def system_status_safe(owner: str = Depends(require_owner)):
+def system_status_safe(owner: str = Depends(access_public)):
     """Safe capability diagnostics — never env/secrets/filesystem dumps."""
     _ = owner
     return {'ok': True, **ELITE.production.diagnostics()}
@@ -1448,7 +1515,7 @@ class PerfTaskBody(BaseModel):
     context: dict = {}
 
 @app.post('/platform/phase21/tasks')
-def phase21_submit_task(body: PerfTaskBody, owner: str = Depends(require_owner)):
+def phase21_submit_task(body: PerfTaskBody, owner: str = Depends(access_privileged)):
     out = ELITE.performance.submit_task(
         body.message,
         priority=body.priority,
@@ -1461,28 +1528,28 @@ def phase21_submit_task(body: PerfTaskBody, owner: str = Depends(require_owner))
     return {'ok': bool(out.get('ok')), **out}
 
 @app.get('/platform/phase21/tasks/{task_id}')
-def phase21_task_status(task_id: str, owner: str = Depends(require_owner)):
+def phase21_task_status(task_id: str, owner: str = Depends(access_public)):
     return {'ok': True, **ELITE.performance.task_status(task_id)}
 
 @app.get('/platform/phase21/tasks/{task_id}/progress')
-def phase21_task_progress(task_id: str, owner: str = Depends(require_owner)):
+def phase21_task_progress(task_id: str, owner: str = Depends(access_public)):
     return ELITE.performance.task_progress(task_id)
 
 @app.post('/platform/phase21/tasks/{task_id}/cancel')
-def phase21_cancel_task(task_id: str, owner: str = Depends(require_owner)):
+def phase21_cancel_task(task_id: str, owner: str = Depends(access_privileged)):
     return ELITE.performance.cancel_task(task_id)
 
 @app.get('/platform/phase21/scheduler')
-def phase21_scheduler_status(owner: str = Depends(require_owner)):
+def phase21_scheduler_status(owner: str = Depends(access_public)):
     return {'ok': True, **ELITE.performance.scheduler_status()}
 
 @app.post('/platform/phase21/benchmarks/run')
-def phase21_run_benchmarks(owner: str = Depends(require_owner)):
+def phase21_run_benchmarks(owner: str = Depends(access_privileged)):
     from .elite.phase21_benchmarks import run_phase21_benchmarks
     return {'ok': True, **run_phase21_benchmarks(orchestrator=ELITE)}
 
 @app.get('/platform/observability')
-def platform_observability(owner: str = Depends(require_owner)):
+def platform_observability(owner: str = Depends(access_privileged)):
     from .elite.platform_observability import PlatformObservability
     return {'ok': True, **PlatformObservability(ELITE).snapshot()}
 
@@ -1523,7 +1590,7 @@ class Phase16ChatBody(BaseModel):
     auto_apply: bool = False
 
 @app.post('/platform/phase16/chat')
-def phase16_chat(x: Phase16ChatBody, owner: str = Depends(require_owner)):
+def phase16_chat(x: Phase16ChatBody, owner: str = Depends(access_public)):
     ctx = {}
     if x.project_path:
         ctx['project_path'] = x.project_path
@@ -1561,7 +1628,7 @@ class Phase17TargetBody(BaseModel):
     expiration: float = 0
 
 @app.post('/platform/phase17/targets')
-def phase17_register_target(x: Phase17TargetBody, owner: str = Depends(require_owner)):
+def phase17_register_target(x: Phase17TargetBody, owner: str = Depends(access_privileged)):
     from .engineering import TargetRegistry
     reg = TargetRegistry()
     result = reg.register(
@@ -1617,7 +1684,7 @@ class Phase18ChatBody(BaseModel):
     writers: dict[str, str] | None = None
 
 @app.post('/platform/phase18/targets')
-def phase18_register_target(x: Phase18TargetBody, owner: str = Depends(require_owner)):
+def phase18_register_target(x: Phase18TargetBody, owner: str = Depends(access_privileged)):
     from .engineering import TargetRegistry
     reg = TargetRegistry()
     result = reg.register(
@@ -1642,7 +1709,7 @@ def phase18_register_target(x: Phase18TargetBody, owner: str = Depends(require_o
     return result
 
 @app.post('/platform/phase18/build')
-def phase18_build(x: Phase18BuildBody, owner: str = Depends(require_owner)):
+def phase18_build(x: Phase18BuildBody, owner: str = Depends(access_privileged)):
     from .engineering import ApplicationEngineering
     eng = ApplicationEngineering(root='data/longevity/engineering/appeng')
     result = eng.build(
@@ -1656,7 +1723,7 @@ def phase18_build(x: Phase18BuildBody, owner: str = Depends(require_owner)):
     return result
 
 @app.post('/platform/phase18/chat')
-def phase18_chat(x: Phase18ChatBody, owner: str = Depends(require_owner)):
+def phase18_chat(x: Phase18ChatBody, owner: str = Depends(access_privileged)):
     from .engineering import Phase18ChatFabric
     ctx = {}
     if x.project_path:
@@ -1681,7 +1748,7 @@ def phase18_chat(x: Phase18ChatBody, owner: str = Depends(require_owner)):
     return result
 
 @app.post('/platform/phase17/sdlc')
-def phase17_sdlc(x: Phase15WorkflowBody, owner: str = Depends(require_owner)):
+def phase17_sdlc(x: Phase15WorkflowBody, owner: str = Depends(access_privileged)):
     from .engineering import SecurityDevelopmentLifecycle
     result = SecurityDevelopmentLifecycle().run_for_project(
         x.message,
@@ -1694,7 +1761,7 @@ def phase17_sdlc(x: Phase15WorkflowBody, owner: str = Depends(require_owner)):
     return result
 
 @app.post('/platform/phase14/build')
-def phase14_build(x: Phase14BuildBody, owner: str = Depends(require_owner)):
+def phase14_build(x: Phase14BuildBody, owner: str = Depends(access_privileged)):
     from .engineering import ApplicationBuilder
     builder = ApplicationBuilder(root='data/longevity/engineering/generated')
     result = builder.build(x.requirement, approved=bool(x.approved), actor=owner, run_tests=bool(x.run_tests))
@@ -1702,7 +1769,7 @@ def phase14_build(x: Phase14BuildBody, owner: str = Depends(require_owner)):
     return result
 
 @app.post('/platform/phase15/workflow')
-def phase15_workflow(x: Phase15WorkflowBody, owner: str = Depends(require_owner)):
+def phase15_workflow(x: Phase15WorkflowBody, owner: str = Depends(access_privileged)):
     from .engineering import UnifiedCodingWorkflow
     wf = UnifiedCodingWorkflow(root='data/longevity/engineering/coding_workflow')
     ctx = {}
@@ -1725,7 +1792,7 @@ def phase15_workflow(x: Phase15WorkflowBody, owner: str = Depends(require_owner)
     return result
 
 @app.post('/platform/phase14/security/analyze')
-def phase14_security_analyze(x: Phase14SecurityBody, owner: str = Depends(require_owner)):
+def phase14_security_analyze(x: Phase14SecurityBody, owner: str = Depends(access_privileged)):
     from .engineering import SecureCodeAnalyzer, AuthorizedSecurityTester
     if x.project_path:
         result = SecureCodeAnalyzer(x.project_path).analyze()
@@ -1742,7 +1809,7 @@ def phase14_security_analyze(x: Phase14SecurityBody, owner: str = Depends(requir
     return result
 
 @app.post('/platform/phase14/security/remediate')
-def phase14_security_remediate(x: Phase14SecurityBody, owner: str = Depends(require_owner)):
+def phase14_security_remediate(x: Phase14SecurityBody, owner: str = Depends(access_privileged)):
     from .engineering import ApplicationBuilder
     if not x.project_path:
         raise HTTPException(400, 'project_path required')
@@ -1753,12 +1820,12 @@ def phase14_security_remediate(x: Phase14SecurityBody, owner: str = Depends(requ
     return result
 
 @app.get('/platform/elite/skills')
-def elite_skills(owner: str = Depends(require_owner), category: str | None = None):
+def elite_skills(owner: str = Depends(access_public), category: str | None = None):
     skills = ELITE.skills.list_skills(category=category)
     return {'ok': True, 'skills': [s.to_dict() for s in skills], 'health': ELITE.skills.health()}
 
 @app.get('/platform/elite/skills/{skill_id}/versions')
-def elite_skill_versions(skill_id: str, owner: str = Depends(require_owner)):
+def elite_skill_versions(skill_id: str, owner: str = Depends(access_public)):
     return {
         'ok': True,
         'skill_id': skill_id,
@@ -1768,7 +1835,7 @@ def elite_skill_versions(skill_id: str, owner: str = Depends(require_owner)):
     }
 
 @app.post('/platform/elite/skills/activate')
-def elite_skill_activate(x: EliteSkillActivateBody, owner: str = Depends(require_owner)):
+def elite_skill_activate(x: EliteSkillActivateBody, owner: str = Depends(access_privileged)):
     result = ELITE.skills.activate(
         x.skill_id, x.version, approved=bool(x.approved), actor=owner, mark_lkg=bool(x.mark_lkg)
     )
@@ -1778,7 +1845,7 @@ def elite_skill_activate(x: EliteSkillActivateBody, owner: str = Depends(require
     return result
 
 @app.post('/platform/elite/skills/rollback')
-def elite_skill_rollback(x: EliteSkillRollbackBody, owner: str = Depends(require_owner)):
+def elite_skill_rollback(x: EliteSkillRollbackBody, owner: str = Depends(access_privileged)):
     result = ELITE.skills.rollback(
         x.skill_id, approved=bool(x.approved), actor=owner, to_version=x.to_version
     )
@@ -1788,15 +1855,15 @@ def elite_skill_rollback(x: EliteSkillRollbackBody, owner: str = Depends(require
     return result
 
 @app.get('/platform/elite/tools')
-def elite_tools(owner: str = Depends(require_owner)):
+def elite_tools(owner: str = Depends(access_public)):
     return {'ok': True, 'tools': ELITE.tools.catalog()}
 
 @app.get('/platform/elite/mcp/tools')
-def elite_mcp_tools(owner: str = Depends(require_owner)):
+def elite_mcp_tools(owner: str = Depends(access_public)):
     return {'ok': True, 'tools': ELITE.mcp.list_tools()}
 
 @app.post('/platform/elite/mcp/discover')
-def elite_mcp_discover(x: EliteMCPDiscoverBody, owner: str = Depends(require_owner)):
+def elite_mcp_discover(x: EliteMCPDiscoverBody, owner: str = Depends(access_privileged)):
     from .elite.mcp_adapter import ExternalToolDescriptor
     descs = []
     for row in x.tools or []:
@@ -1815,7 +1882,7 @@ def elite_mcp_discover(x: EliteMCPDiscoverBody, owner: str = Depends(require_own
     return result
 
 @app.post('/platform/elite/mcp/trust')
-def elite_mcp_trust(x: EliteMCPTrustBody, owner: str = Depends(require_owner)):
+def elite_mcp_trust(x: EliteMCPTrustBody, owner: str = Depends(access_privileged)):
     result = ELITE.mcp.approve_trust(x.external_id, approved=bool(x.approved), actor=owner)
     if result.get('needs_approval'):
         raise HTTPException(403, result.get('error') or 'owner approval required')
@@ -1823,7 +1890,7 @@ def elite_mcp_trust(x: EliteMCPTrustBody, owner: str = Depends(require_owner)):
     return result
 
 @app.get('/platform/elite/learning')
-def elite_learning(owner: str = Depends(require_owner)):
+def elite_learning(owner: str = Depends(access_public)):
     return {
         'ok': True,
         'eligible': ELITE.learning.eligible_training_candidates()[:50],
@@ -1831,13 +1898,13 @@ def elite_learning(owner: str = Depends(require_owner)):
     }
 
 @app.post('/platform/elite/learning/export-training')
-def elite_learning_export(owner: str = Depends(require_owner), limit: int = 20):
+def elite_learning_export(owner: str = Depends(access_privileged), limit: int = 20):
     result = ELITE.export_learning_to_training(limit=limit)
     OWNER.authorize('ELITE_LEARNING_EXPORT', f'{owner} export learning={result.get("exported")}')
     return result
 
 @app.post('/orchestrate')
-def orchestrate(x: OrchestrateBody, owner: str = Depends(require_owner)):
+def orchestrate(x: OrchestrateBody, owner: str = Depends(access_public)):
     if not x.goal.strip():
         raise HTTPException(400, 'goal is required')
     ctx = dict(x.context or {})
@@ -1863,7 +1930,7 @@ def orchestrate(x: OrchestrateBody, owner: str = Depends(require_owner)):
     }
 
 @app.post('/platform/learning')
-def platform_learning(x: LearningBody, owner: str = Depends(require_owner)):
+def platform_learning(x: LearningBody, owner: str = Depends(access_privileged)):
     """Controlled learning path — never mutates weights."""
     ctx = {
         'action': x.action,
@@ -1900,11 +1967,11 @@ def platform_learning(x: LearningBody, owner: str = Depends(require_owner)):
     return out
 
 @app.get('/platform/learning/audit')
-def platform_learning_audit(owner: str = Depends(require_owner), limit: int = 50):
+def platform_learning_audit(owner: str = Depends(access_privileged), limit: int = 50):
     return {'items': PLATFORM_LEARNING_AUDIT.recent(limit)}
 
 @app.get('/platform/providers')
-def platform_providers(owner: str = Depends(require_owner)):
+def platform_providers(owner: str = Depends(access_public)):
     """Catalog + honest local/open-weight readiness (never fakes a live runtime)."""
     local_ready = None
     try:
@@ -1992,7 +2059,7 @@ def platform_ltm_search(
     q: str = '',
     kind: str | None = None,
     limit: int = 20,
-    owner: str = Depends(require_owner),
+    owner: str = Depends(access_privileged),
 ):
     _ = owner
     rows = PLATFORM_LTM.query(kind=kind, query=q, limit=limit)
@@ -2013,7 +2080,7 @@ def platform_ltm_search(
 
 
 @app.post('/platform/ltm')
-def platform_ltm_store(x: LtmStoreBody, owner: str = Depends(require_owner)):
+def platform_ltm_store(x: LtmStoreBody, owner: str = Depends(access_privileged)):
     if not x.content.strip():
         raise HTTPException(400, 'content is required')
     rec = PLATFORM_LTM.store(
@@ -2036,7 +2103,7 @@ def platform_ltm_store(x: LtmStoreBody, owner: str = Depends(require_owner)):
 
 
 @app.get('/platform/ltm/{record_id}/history')
-def platform_ltm_history(record_id: str, owner: str = Depends(require_owner)):
+def platform_ltm_history(record_id: str, owner: str = Depends(access_privileged)):
     _ = owner
     return {
         'items': [
@@ -2054,7 +2121,7 @@ def platform_ltm_history(record_id: str, owner: str = Depends(require_owner)):
 
 
 @app.post('/platform/ltm/{record_id}/rollback')
-def platform_ltm_rollback(record_id: str, to_version: int | None = None, owner: str = Depends(require_owner)):
+def platform_ltm_rollback(record_id: str, to_version: int | None = None, owner: str = Depends(access_privileged)):
     try:
         rec = PLATFORM_LTM.rollback(record_id, to_version)
     except KeyError:
@@ -2064,7 +2131,7 @@ def platform_ltm_rollback(record_id: str, to_version: int | None = None, owner: 
 
 
 @app.get('/platform/knowledge/versions')
-def platform_knowledge_versions(knowledge_id: str, owner: str = Depends(require_owner)):
+def platform_knowledge_versions(knowledge_id: str, owner: str = Depends(access_privileged)):
     _ = owner
     hist = PLATFORM_KNOWLEDGE.history(knowledge_id)
     active = PLATFORM_KNOWLEDGE.active(knowledge_id)
@@ -2085,7 +2152,7 @@ def platform_knowledge_versions(knowledge_id: str, owner: str = Depends(require_
 
 
 @app.post('/platform/knowledge/versions')
-def platform_knowledge_publish(x: KnowledgePublishBody, owner: str = Depends(require_owner)):
+def platform_knowledge_publish(x: KnowledgePublishBody, owner: str = Depends(access_privileged)):
     if not x.knowledge_id.strip() or not x.content.strip():
         raise HTTPException(400, 'knowledge_id and content are required')
     kv = PLATFORM_KNOWLEDGE.publish(
@@ -2101,7 +2168,7 @@ def platform_knowledge_publish(x: KnowledgePublishBody, owner: str = Depends(req
 
 
 @app.post('/platform/knowledge/versions/rollback')
-def platform_knowledge_rollback(x: KnowledgeRollbackBody, owner: str = Depends(require_owner)):
+def platform_knowledge_rollback(x: KnowledgeRollbackBody, owner: str = Depends(access_privileged)):
     try:
         kv = PLATFORM_KNOWLEDGE.rollback(x.knowledge_id, x.to_version)
     except KeyError:
@@ -2111,13 +2178,13 @@ def platform_knowledge_rollback(x: KnowledgeRollbackBody, owner: str = Depends(r
 
 
 @app.get('/platform/eval/suites')
-def platform_eval_suites(owner: str = Depends(require_owner)):
+def platform_eval_suites(owner: str = Depends(access_privileged)):
     _ = owner
     return {'suites': PLATFORM_EVAL.list_suites()}
 
 
 @app.post('/platform/eval/run')
-def platform_eval_run(suite: str = 'longevity', owner: str = Depends(require_owner)):
+def platform_eval_run(suite: str = 'longevity', owner: str = Depends(access_privileged)):
     _ = owner
     report = PLATFORM_EVAL.run_suite(suite)
     learn = None
@@ -2151,7 +2218,7 @@ def platform_eval_run(suite: str = 'longevity', owner: str = Depends(require_own
 
 
 @app.post('/platform/eval/baseline')
-def platform_eval_baseline(x: EvalBaselineBody, owner: str = Depends(require_owner)):
+def platform_eval_baseline(x: EvalBaselineBody, owner: str = Depends(access_privileged)):
     report = PLATFORM_EVAL.run_suite(x.suite)
     PLATFORM_EVAL.record_baseline(x.baseline_id, report)
     OWNER.authorize('PLATFORM_EVAL_BASELINE', f'{owner} recorded baseline {x.baseline_id}')
@@ -2159,7 +2226,7 @@ def platform_eval_baseline(x: EvalBaselineBody, owner: str = Depends(require_own
 
 
 @app.post('/platform/eval/compare')
-def platform_eval_compare(x: EvalCompareBody, owner: str = Depends(require_owner)):
+def platform_eval_compare(x: EvalCompareBody, owner: str = Depends(access_privileged)):
     _ = owner
     cmp = PLATFORM_EVAL.compare(x.baseline_id, x.candidate_id, suite=x.suite)
     return {
@@ -2175,7 +2242,7 @@ def platform_eval_compare(x: EvalCompareBody, owner: str = Depends(require_owner
 
 
 @app.get('/platform/migrations')
-def platform_migrations(owner: str = Depends(require_owner)):
+def platform_migrations(owner: str = Depends(access_privileged)):
     _ = owner
     st = PLATFORM_MIGRATIONS_RUNNER.status()
     return {
@@ -2189,7 +2256,7 @@ def platform_migrations(owner: str = Depends(require_owner)):
 
 
 @app.post('/platform/migrations/run')
-def platform_migrations_run(x: MigrationRunBody, owner: str = Depends(require_owner)):
+def platform_migrations_run(x: MigrationRunBody, owner: str = Depends(access_privileged)):
     """Dry-run by default. Non-dry-run requires owner and always backs up first."""
     report = PLATFORM_MIGRATIONS_RUNNER.run(target=x.target, dry_run=bool(x.dry_run))
     if not x.dry_run:
@@ -2210,14 +2277,14 @@ def platform_migrations_run(x: MigrationRunBody, owner: str = Depends(require_ow
 
 
 @app.post('/platform/export')
-def platform_export(x: ExportBody, owner: str = Depends(require_owner)):
+def platform_export(x: ExportBody, owner: str = Depends(access_privileged)):
     manifest = PLATFORM_EXPORT.export_bundle(x.target_dir, include=x.include)
     OWNER.authorize('PLATFORM_EXPORT', f'{owner} exported bundle sections={manifest.get("sections")}')
     return {'ok': True, 'manifest': manifest, 'target_dir': x.target_dir}
 
 
 @app.post('/platform/export/import')
-def platform_export_import(x: ImportBody, owner: str = Depends(require_owner)):
+def platform_export_import(x: ImportBody, owner: str = Depends(access_privileged)):
     result = PLATFORM_EXPORT.import_bundle(x.source_dir, dry_run=bool(x.dry_run))
     if not result.get('ok'):
         raise HTTPException(400, result.get('error') or 'import failed')
@@ -2246,7 +2313,7 @@ class HealApplyBody(BaseModel):
 
 
 @app.post('/platform/plan')
-def platform_plan(x: PlanBody, owner: str = Depends(require_owner)):
+def platform_plan(x: PlanBody, owner: str = Depends(access_privileged)):
     if not x.goal.strip():
         raise HTTPException(400, 'goal is required')
     # Ignore any client-supplied role flags — owner comes from require_owner only.
@@ -2270,7 +2337,7 @@ def platform_plan(x: PlanBody, owner: str = Depends(require_owner)):
 
 
 @app.get('/platform/plan/{plan_id}')
-def platform_plan_get(plan_id: str, owner: str = Depends(require_owner)):
+def platform_plan_get(plan_id: str, owner: str = Depends(access_privileged)):
     _ = owner
     plan = PLATFORM_PLANNER.get(plan_id)
     if not plan:
@@ -2285,7 +2352,7 @@ def platform_plan_get(plan_id: str, owner: str = Depends(require_owner)):
 
 
 @app.get('/platform/skills')
-def platform_skills_list(owner: str = Depends(require_owner)):
+def platform_skills_list(owner: str = Depends(access_public)):
     _ = owner
     return {
         'skills': [
@@ -2302,7 +2369,7 @@ def platform_skills_list(owner: str = Depends(require_owner)):
 
 
 @app.get('/platform/skills/{name}/versions')
-def platform_skill_versions(name: str, owner: str = Depends(require_owner)):
+def platform_skill_versions(name: str, owner: str = Depends(access_public)):
     _ = owner
     return {
         'name': name,
@@ -2315,7 +2382,7 @@ def platform_skill_versions(name: str, owner: str = Depends(require_owner)):
 
 
 @app.post('/platform/skills/activate')
-def platform_skills_activate(x: SkillActivateBody, owner: str = Depends(require_owner)):
+def platform_skills_activate(x: SkillActivateBody, owner: str = Depends(access_privileged)):
     result = PLATFORM_SKILLS.activate(x.name, x.version, approved=True, actor=owner)
     if not result.get('ok'):
         raise HTTPException(404 if 'not found' in (result.get('error') or '') else 400, result.get('error') or 'activate failed')
@@ -2324,7 +2391,7 @@ def platform_skills_activate(x: SkillActivateBody, owner: str = Depends(require_
 
 
 @app.post('/platform/skills/rollback')
-def platform_skills_rollback(x: SkillActivateBody, owner: str = Depends(require_owner)):
+def platform_skills_rollback(x: SkillActivateBody, owner: str = Depends(access_privileged)):
     result = PLATFORM_SKILLS.rollback(x.name, x.version, approved=True, actor=owner)
     if not result.get('ok'):
         raise HTTPException(404 if 'not found' in (result.get('error') or '') else 400, result.get('error') or 'rollback failed')
@@ -2333,13 +2400,13 @@ def platform_skills_rollback(x: SkillActivateBody, owner: str = Depends(require_
 
 
 @app.get('/platform/tools')
-def platform_tools_catalog(owner: str = Depends(require_owner)):
+def platform_tools_catalog(owner: str = Depends(access_public)):
     _ = owner
     return {'tools': TOOL_ROUTER.catalog()}
 
 
 @app.post('/platform/heal/propose')
-def platform_heal_propose(owner: str = Depends(require_owner)):
+def platform_heal_propose(owner: str = Depends(access_privileged)):
     _ = owner
     report = PLATFORM_SELF_CHECK.run_checks()
     proposal = PLATFORM_SELF_HEAL.propose_fix(report)
@@ -2379,7 +2446,7 @@ def platform_heal_propose(owner: str = Depends(require_owner)):
 
 
 @app.post('/platform/heal/apply')
-def platform_heal_apply(x: HealApplyBody, owner: str = Depends(require_owner)):
+def platform_heal_apply(x: HealApplyBody, owner: str = Depends(access_privileged)):
     # Explicit approved flag required for high-risk heal; server ignores client role claims.
     approved = bool(x.approved)
     applied = PLATFORM_SELF_HEAL.apply_fix(x.proposal_id, approved=approved)
@@ -2397,20 +2464,20 @@ def platform_heal_apply(x: HealApplyBody, owner: str = Depends(require_owner)):
 
 
 @app.post('/platform/heal/rollback')
-def platform_heal_rollback(proposal_id: str, owner: str = Depends(require_owner)):
+def platform_heal_rollback(proposal_id: str, owner: str = Depends(access_privileged)):
     rolled = PLATFORM_SELF_HEAL.rollback_fix(proposal_id)
     OWNER.authorize('PLATFORM_HEAL_ROLLBACK', f'{owner} rolled back heal {proposal_id}')
     return {'ok': rolled.ok, 'message': rolled.message, 'meta': rolled.meta}
 
 
 @app.get('/platform/heal/audit')
-def platform_heal_audit(limit: int = 50, owner: str = Depends(require_owner)):
+def platform_heal_audit(limit: int = 50, owner: str = Depends(access_privileged)):
     _ = owner
     return {'items': PLATFORM_SELF_HEAL.recent_audit(limit)}
 
 
 @app.get('/platform/authz/audit')
-def platform_authz_audit(limit: int = 50, owner: str = Depends(require_owner)):
+def platform_authz_audit(limit: int = 50, owner: str = Depends(access_privileged)):
     _ = owner
     return {'items': PLATFORM_AUTHZ_AUDIT.recent(limit)}
 
@@ -2449,7 +2516,7 @@ class AutonomousToggleBody(BaseModel):
 
 
 @app.get('/platform/runtime/status')
-def platform_runtime_status(owner: str = Depends(require_owner)):
+def platform_runtime_status(owner: str = Depends(access_public)):
     _ = owner
     probe = TrainingRuntimeDetector().detect()
     from pfai.longevity.autonomous_training.open_weight_catalog import OpenWeightModelSelector
@@ -2469,7 +2536,7 @@ def platform_runtime_status(owner: str = Depends(require_owner)):
 
 
 @app.get('/platform/models/open-weight')
-def platform_open_weight_models(owner: str = Depends(require_owner), probe_load: bool = False):
+def platform_open_weight_models(owner: str = Depends(access_public), probe_load: bool = False):
     _ = owner
     from pfai.longevity.autonomous_training.open_weight_catalog import OpenWeightModelSelector
 
@@ -2477,13 +2544,13 @@ def platform_open_weight_models(owner: str = Depends(require_owner), probe_load:
 
 
 @app.get('/platform/training/runtime')
-def platform_training_runtime(owner: str = Depends(require_owner)):
+def platform_training_runtime(owner: str = Depends(access_public)):
     _ = owner
     return AUTONOMOUS_TRAINING.runtime_status()
 
 
 @app.get('/platform/training/status')
-def platform_training_status(owner: str = Depends(require_owner)):
+def platform_training_status(owner: str = Depends(access_public)):
     _ = owner
     st = AUTONOMOUS_TRAINING.status()
     cc = AUTONOMOUS_TRAINING.control_center_status()
@@ -2550,21 +2617,21 @@ def platform_training_status(owner: str = Depends(require_owner)):
 
 
 @app.get('/platform/learning/statistics')
-def platform_learning_statistics(owner: str = Depends(require_owner)):
+def platform_learning_statistics(owner: str = Depends(access_public)):
     """Owner-only learning/candidate/dataset observability (no secret payloads)."""
     _ = owner
     return AUTONOMOUS_TRAINING.learning_statistics()
 
 
 @app.get('/platform/learning/verification')
-def platform_learning_verification(owner: str = Depends(require_owner)):
+def platform_learning_verification(owner: str = Depends(access_public)):
     """Honest pipeline readiness — never invents eligibility or metrics."""
     _ = owner
     return AUTONOMOUS_TRAINING.pipeline_verification_status()
 
 
 @app.get('/platform/training/eligibility')
-def platform_training_eligibility(owner: str = Depends(require_owner)):
+def platform_training_eligibility(owner: str = Depends(access_public)):
     """Authoritative training eligibility with per-gate breakdown (owner-only)."""
     _ = owner
     stats = AUTONOMOUS_TRAINING.learning_statistics()
@@ -2588,7 +2655,7 @@ def platform_training_eligibility(owner: str = Depends(require_owner)):
 
 
 @app.get('/platform/learning/candidates')
-def platform_learning_candidates(owner: str = Depends(require_owner), limit: int = 50):
+def platform_learning_candidates(owner: str = Depends(access_public), limit: int = 50):
     """Owner-only candidate statistics — never returns private example text."""
     _ = owner
     store = AUTONOMOUS_TRAINING.learning_pipeline_gate.store
@@ -2603,13 +2670,13 @@ def platform_learning_candidates(owner: str = Depends(require_owner), limit: int
 
 
 @app.get('/platform/training/scheduler')
-def platform_training_scheduler(owner: str = Depends(require_owner)):
+def platform_training_scheduler(owner: str = Depends(access_public)):
     _ = owner
     return AUTONOMOUS_TRAINING.scheduler.status()
 
 
 @app.get('/platform/training/observability')
-def platform_training_observability(owner: str = Depends(require_owner)):
+def platform_training_observability(owner: str = Depends(access_public)):
     """Aggregated owner-only training observability (no secrets/private text)."""
     _ = owner
     ver = AUTONOMOUS_TRAINING.pipeline_verification_status()
@@ -2667,7 +2734,7 @@ def platform_training_observability(owner: str = Depends(require_owner)):
 
 
 @app.get('/platform/learning/dataset')
-def platform_learning_dataset(owner: str = Depends(require_owner), limit: int = 20):
+def platform_learning_dataset(owner: str = Depends(access_public), limit: int = 20):
     _ = owner
     datasets = AUTONOMOUS_TRAINING.datasets.list_versions(limit=limit)
     latest = datasets[0] if datasets else None
@@ -2689,7 +2756,7 @@ def platform_learning_dataset(owner: str = Depends(require_owner), limit: int = 
 
 
 @app.get('/platform/learning/models')
-def platform_learning_models(owner: str = Depends(require_owner), limit: int = 50):
+def platform_learning_models(owner: str = Depends(access_public), limit: int = 50):
     """Model registry observability: active, LKG, states — no weights/secrets."""
     _ = owner
     models = AUTONOMOUS_TRAINING.models.list_models(limit=limit)
@@ -2724,7 +2791,7 @@ def platform_learning_models(owner: str = Depends(require_owner), limit: int = 5
 
 
 @app.post('/platform/learning/candidates/collect')
-def platform_learning_candidates_collect(owner: str = Depends(require_owner)):
+def platform_learning_candidates_collect(owner: str = Depends(access_privileged)):
     """Run LearningCandidate pass only — does not train."""
     result = AUTONOMOUS_TRAINING.run_learning_candidate_pass()
     OWNER.authorize('PLATFORM_LEARNING_COLLECT', f'{owner} candidate pass observed={result.get("observed")}')
@@ -2749,7 +2816,7 @@ class LearningFeedbackBody(BaseModel):
 
 
 @app.post('/platform/learning/feedback')
-def platform_learning_feedback(x: LearningFeedbackBody, owner: str = Depends(require_owner)):
+def platform_learning_feedback(x: LearningFeedbackBody, owner: str = Depends(access_privileged)):
     """Queue owner-approved feedback as a learning candidate (not immediate training)."""
     result = AUTONOMOUS_TRAINING.submit_owner_feedback(
         {
@@ -2764,7 +2831,7 @@ def platform_learning_feedback(x: LearningFeedbackBody, owner: str = Depends(req
 
 
 @app.get('/platform/training/datasets')
-def platform_training_datasets(owner: str = Depends(require_owner), limit: int = 50):
+def platform_training_datasets(owner: str = Depends(access_public), limit: int = 50):
     _ = owner
     datasets = AUTONOMOUS_TRAINING.datasets.list_versions(limit=limit)
     stats = AUTONOMOUS_TRAINING.learning_pipeline_gate.store.statistics()
@@ -2783,13 +2850,13 @@ def platform_training_datasets(owner: str = Depends(require_owner), limit: int =
 
 
 @app.get('/platform/training/jobs')
-def platform_training_jobs(owner: str = Depends(require_owner), limit: int = 50):
+def platform_training_jobs(owner: str = Depends(access_public), limit: int = 50):
     _ = owner
     return {'jobs': AUTONOMOUS_TRAINING.list_jobs(limit=limit)}
 
 
 @app.get('/platform/training/jobs/{job_id}')
-def platform_training_job_get(job_id: str, owner: str = Depends(require_owner)):
+def platform_training_job_get(job_id: str, owner: str = Depends(access_public)):
     _ = owner
     job = AUTONOMOUS_TRAINING._read_job(job_id)
     if not job:
@@ -2798,19 +2865,19 @@ def platform_training_job_get(job_id: str, owner: str = Depends(require_owner)):
 
 
 @app.post('/platform/training/start')
-def platform_training_start(x: TrainingCycleBody, owner: str = Depends(require_owner)):
+def platform_training_start(x: TrainingCycleBody, owner: str = Depends(access_privileged)):
     return platform_training_cycle(x, owner)
 
 
 @app.post('/platform/training/pause')
-def platform_training_pause(owner: str = Depends(require_owner)):
+def platform_training_pause(owner: str = Depends(access_privileged)):
     result = AUTONOMOUS_TRAINING.pause_training()
     OWNER.authorize('PLATFORM_TRAINING_PAUSE', f'{owner} paused training')
     return result
 
 
 @app.post('/platform/training/cancel')
-def platform_training_cancel(job_id: str, owner: str = Depends(require_owner)):
+def platform_training_cancel(job_id: str, owner: str = Depends(access_privileged)):
     result = AUTONOMOUS_TRAINING.cancel_job(job_id)
     if not result.get('ok'):
         raise HTTPException(409, result.get('error') or 'cancel failed')
@@ -2819,14 +2886,14 @@ def platform_training_cancel(job_id: str, owner: str = Depends(require_owner)):
 
 
 @app.post('/platform/training/autonomous')
-def platform_training_autonomous(x: AutonomousToggleBody, owner: str = Depends(require_owner)):
+def platform_training_autonomous(x: AutonomousToggleBody, owner: str = Depends(access_privileged)):
     result = AUTONOMOUS_TRAINING.set_autonomous(x.enabled)
     OWNER.authorize('PLATFORM_TRAINING_AUTONOMOUS', f'{owner} autonomous={x.enabled}')
     return result
 
 
 @app.post('/platform/training/tick')
-def platform_training_tick(owner: str = Depends(require_owner)):
+def platform_training_tick(owner: str = Depends(access_privileged)):
     """Owner-triggered autonomous tick (dataset/schedule/growth triggers). Never chat-driven."""
     result = AUTONOMOUS_TRAINING.maybe_run_autonomous_tick()
     OWNER.authorize('PLATFORM_TRAINING_TICK', f"{owner} tick status={result.get('status')}")
@@ -2834,7 +2901,7 @@ def platform_training_tick(owner: str = Depends(require_owner)):
 
 
 @app.get('/platform/training/models')
-def platform_training_models(owner: str = Depends(require_owner), limit: int = 50):
+def platform_training_models(owner: str = Depends(access_public), limit: int = 50):
     _ = owner
     return {
         'models': AUTONOMOUS_TRAINING.models.list_models(limit=limit),
@@ -2844,7 +2911,7 @@ def platform_training_models(owner: str = Depends(require_owner), limit: int = 5
 
 
 @app.get('/platform/training/models/{model_id}')
-def platform_training_model_get(model_id: str, owner: str = Depends(require_owner)):
+def platform_training_model_get(model_id: str, owner: str = Depends(access_public)):
     _ = owner
     model = AUTONOMOUS_TRAINING.models.get(model_id)
     if not model:
@@ -2853,7 +2920,7 @@ def platform_training_model_get(model_id: str, owner: str = Depends(require_owne
 
 
 @app.post('/platform/training/models/{model_id}/activate')
-def platform_training_model_activate(model_id: str, owner: str = Depends(require_owner)):
+def platform_training_model_activate(model_id: str, owner: str = Depends(access_privileged)):
     result = AUTONOMOUS_TRAINING.activate_model(model_id)
     if not result.get('ok'):
         raise HTTPException(409, result.get('error') or 'activate failed')
@@ -2862,7 +2929,7 @@ def platform_training_model_activate(model_id: str, owner: str = Depends(require
 
 
 @app.post('/platform/training/models/{model_id}/rollback')
-def platform_training_model_rollback(model_id: str, owner: str = Depends(require_owner), reason: str = 'owner_requested'):
+def platform_training_model_rollback(model_id: str, owner: str = Depends(access_privileged), reason: str = 'owner_requested'):
     _ = model_id  # target is last-known-good; model_id retained for audit context
     result = AUTONOMOUS_TRAINING.rollback_mgr.rollback(reason=reason or f'owner_requested:{model_id}')
     if not result.get('ok'):
@@ -2872,7 +2939,7 @@ def platform_training_model_rollback(model_id: str, owner: str = Depends(require
 
 
 @app.get('/platform/training/evaluations')
-def platform_training_evaluations(owner: str = Depends(require_owner), limit: int = 20):
+def platform_training_evaluations(owner: str = Depends(access_public), limit: int = 20):
     _ = owner
     jobs = AUTONOMOUS_TRAINING.list_jobs(limit=limit)
     return {
@@ -2891,13 +2958,13 @@ def platform_training_evaluations(owner: str = Depends(require_owner), limit: in
 
 
 @app.get('/platform/training/checkpoints')
-def platform_training_checkpoints(owner: str = Depends(require_owner), limit: int = 50):
+def platform_training_checkpoints(owner: str = Depends(access_public), limit: int = 50):
     _ = owner
     return {'checkpoints': AUTONOMOUS_TRAINING.checkpoints.list_recent(limit=limit)}
 
 
 @app.post('/platform/training/cycle')
-def platform_training_cycle(x: TrainingCycleBody, owner: str = Depends(require_owner)):
+def platform_training_cycle(x: TrainingCycleBody, owner: str = Depends(access_privileged)):
     """Owner-triggered autonomous training cycle. Never mutates auth/authorization."""
     cfg = TrainingConfig(
         method=x.method or 'lora',
@@ -2950,7 +3017,7 @@ def platform_training_cycle(x: TrainingCycleBody, owner: str = Depends(require_o
 def platform_training_validate(
     apply_decision: bool = True,
     candidate_model_id: str | None = None,
-    owner: str = Depends(require_owner),
+    owner: str = Depends(access_privileged),
 ):
     """Owner-only real post-train validation of candidate vs LKG."""
     _ = owner
@@ -2964,7 +3031,7 @@ def platform_training_validate(
 def platform_training_production_validate(
     candidate_model_id: str | None = None,
     apply_rollback_on_failure: bool = False,
-    owner: str = Depends(require_owner),
+    owner: str = Depends(access_privileged),
 ):
     """Owner-only PHASE 11 production quality validation (never fabricates pass)."""
     _ = owner
@@ -2975,13 +3042,13 @@ def platform_training_production_validate(
 
 
 @app.get('/platform/training/production-validation')
-def platform_training_production_validation_status(owner: str = Depends(require_owner)):
+def platform_training_production_validation_status(owner: str = Depends(access_public)):
     _ = owner
     return AUTONOMOUS_TRAINING.production_validation_status()
 
 
 @app.post('/platform/training/rollback')
-def platform_training_rollback(x: TrainingRollbackBody, owner: str = Depends(require_owner)):
+def platform_training_rollback(x: TrainingRollbackBody, owner: str = Depends(access_privileged)):
     if x.force_regression:
         result = AUTONOMOUS_TRAINING.monitor_and_maybe_rollback(force_regression=True)
     else:
@@ -2993,7 +3060,7 @@ def platform_training_rollback(x: TrainingRollbackBody, owner: str = Depends(req
 
 
 @app.get('/platform/training/rollback')
-def platform_training_rollback_status(owner: str = Depends(require_owner)):
+def platform_training_rollback_status(owner: str = Depends(access_public)):
     _ = owner
     active = AUTONOMOUS_TRAINING.models.active()
     lkg = AUTONOMOUS_TRAINING.rollback_mgr.last_known_good()
@@ -3006,33 +3073,33 @@ def platform_training_rollback_status(owner: str = Depends(require_owner)):
 
 # PHASE 8 aliases — /platform/models* (same owner gate as /platform/training/models*)
 @app.get('/platform/models')
-def platform_models(owner: str = Depends(require_owner), limit: int = 50):
+def platform_models(owner: str = Depends(access_public), limit: int = 50):
     return platform_training_models(owner=owner, limit=limit)
 
 
 @app.get('/platform/models/{model_id}')
-def platform_model_get(model_id: str, owner: str = Depends(require_owner)):
+def platform_model_get(model_id: str, owner: str = Depends(access_public)):
     return platform_training_model_get(model_id=model_id, owner=owner)
 
 
 @app.post('/platform/models/{model_id}/activate')
-def platform_model_activate(model_id: str, owner: str = Depends(require_owner)):
+def platform_model_activate(model_id: str, owner: str = Depends(access_privileged)):
     return platform_training_model_activate(model_id=model_id, owner=owner)
 
 
 @app.post('/platform/models/{model_id}/rollback')
-def platform_model_rollback(model_id: str, owner: str = Depends(require_owner), reason: str = 'owner_requested'):
+def platform_model_rollback(model_id: str, owner: str = Depends(access_privileged), reason: str = 'owner_requested'):
     return platform_training_model_rollback(model_id=model_id, owner=owner, reason=reason)
 
 
 @app.get('/platform/skills/packs')
-def platform_skill_packs(owner: str = Depends(require_owner)):
+def platform_skill_packs(owner: str = Depends(access_public)):
     _ = owner
     return {'packs': PLATFORM_SKILL_PACKS.list_packs()}
 
 
 @app.get('/platform/skills/packs/{pack_id}')
-def platform_skill_pack_get(pack_id: str, owner: str = Depends(require_owner)):
+def platform_skill_pack_get(pack_id: str, owner: str = Depends(access_public)):
     _ = owner
     pack = PLATFORM_SKILL_PACKS.get(pack_id)
     if not pack:
@@ -3041,7 +3108,7 @@ def platform_skill_pack_get(pack_id: str, owner: str = Depends(require_owner)):
 
 
 @app.post('/platform/skills/packs/{pack_id}/activate')
-def platform_skill_pack_activate(pack_id: str, x: SkillPackActivateBody, owner: str = Depends(require_owner)):
+def platform_skill_pack_activate(pack_id: str, x: SkillPackActivateBody, owner: str = Depends(access_privileged)):
     result = PLATFORM_SKILL_PACKS.activate(
         pack_id or x.pack_id, x.version, approved=bool(x.approved), actor=owner, enable=bool(x.enable)
     )
@@ -3053,7 +3120,7 @@ def platform_skill_pack_activate(pack_id: str, x: SkillPackActivateBody, owner: 
 
 
 @app.post('/platform/skills/packs/{pack_id}/rollback')
-def platform_skill_pack_rollback(pack_id: str, owner: str = Depends(require_owner)):
+def platform_skill_pack_rollback(pack_id: str, owner: str = Depends(access_privileged)):
     result = PLATFORM_SKILL_PACKS.rollback(pack_id, approved=True, actor=owner)
     if not result.get('ok'):
         raise HTTPException(400, result.get('error') or 'rollback failed')
@@ -3062,7 +3129,7 @@ def platform_skill_pack_rollback(pack_id: str, owner: str = Depends(require_owne
 
 
 @app.post('/platform/skills/packs/{pack_id}/enable')
-def platform_skill_pack_enable(pack_id: str, x: SkillPackEnableBody, owner: str = Depends(require_owner)):
+def platform_skill_pack_enable(pack_id: str, x: SkillPackEnableBody, owner: str = Depends(access_privileged)):
     result = PLATFORM_SKILL_PACKS.set_enabled(pack_id, bool(x.enabled), approved=True, actor=owner)
     if not result.get('ok'):
         raise HTTPException(400, result.get('error') or 'enable failed')
@@ -3086,22 +3153,22 @@ class ChatMemoryCorrect(BaseModel):
     confidence: float = 0.9
 
 @app.get('/chat/tools')
-def chat_tools(owner: str = Depends(require_owner)):
+def chat_tools(owner: str = Depends(access_public)):
     return {'provider': COMMAND_AGENT.provider_name(), 'tools': TOOL_ROUTER.catalog()}
 
 @app.get('/chat/conversations')
-def chat_conversations(owner: str = Depends(require_owner), limit: int = 30):
+def chat_conversations(owner: str = Depends(access_public), limit: int = 30):
     return {'items': COMMAND_MEMORY.list_conversations(limit)}
 
 @app.get('/chat/conversations/{conversation_id}')
-def chat_conversation(conversation_id: str, owner: str = Depends(require_owner)):
+def chat_conversation(conversation_id: str, owner: str = Depends(access_public)):
     return {
         'conversation_id': conversation_id,
         'messages': COMMAND_MEMORY.get_messages(conversation_id),
     }
 
 @app.post('/chat/message')
-def chat_message(x: ChatMessage, owner: str = Depends(require_owner)):
+def chat_message(x: ChatMessage, owner: str = Depends(access_public)):
     if not x.message.strip():
         raise HTTPException(400, 'message is required')
     msg = x.message.strip()
@@ -3156,7 +3223,7 @@ def chat_message(x: ChatMessage, owner: str = Depends(require_owner)):
     return result
 
 @app.post('/chat/approve/{pending_id}')
-def chat_approve(pending_id: str, owner: str = Depends(require_owner)):
+def chat_approve(pending_id: str, owner: str = Depends(access_privileged)):
     result = COMMAND_AGENT.approve(pending_id, owner=owner)
     if not result.get('ok') and result.get('error'):
         raise HTTPException(404 if 'not found' in result['error'] else 409, result['error'])
@@ -3164,7 +3231,7 @@ def chat_approve(pending_id: str, owner: str = Depends(require_owner)):
     return result
 
 @app.post('/chat/reject/{pending_id}')
-def chat_reject(pending_id: str, owner: str = Depends(require_owner)):
+def chat_reject(pending_id: str, owner: str = Depends(access_privileged)):
     result = COMMAND_AGENT.reject(pending_id, owner=owner)
     if not result.get('ok') and result.get('error'):
         raise HTTPException(404, result['error'])
@@ -3172,28 +3239,28 @@ def chat_reject(pending_id: str, owner: str = Depends(require_owner)):
     return result
 
 @app.get('/chat/audit')
-def chat_audit(owner: str = Depends(require_owner), limit: int = 50):
+def chat_audit(owner: str = Depends(access_privileged), limit: int = 50):
     return {'items': COMMAND_AUDIT.recent(limit)}
 
 @app.get('/chat/memory/search')
-def chat_memory_search(q: str, owner: str = Depends(require_owner), limit: int = 8):
+def chat_memory_search(q: str, owner: str = Depends(access_public), limit: int = 8):
     return {'results': COMMAND_MEMORY.relevant(q, limit)}
 
 @app.post('/chat/memory/remember')
-def chat_memory_remember(x: ChatMemoryWrite, owner: str = Depends(require_owner)):
+def chat_memory_remember(x: ChatMemoryWrite, owner: str = Depends(access_privileged)):
     mid = COMMAND_MEMORY.remember(x.kind, x.content, source=f'owner:{owner}', confidence=x.confidence)
     OWNER.authorize('CHAT_MEMORY_REMEMBER', f'{owner} remembered kind={x.kind} id={mid}')
     return {'ok': True, 'memory_id': mid}
 
 @app.post('/chat/memory/forget/{memory_id}')
-def chat_memory_forget(memory_id: int, owner: str = Depends(require_owner)):
+def chat_memory_forget(memory_id: int, owner: str = Depends(access_privileged)):
     if not COMMAND_MEMORY.forget(memory_id):
         raise HTTPException(404, 'memory not found')
     OWNER.authorize('CHAT_MEMORY_FORGET', f'{owner} forgot memory {memory_id}')
     return {'ok': True, 'forgotten': memory_id}
 
 @app.post('/chat/memory/correct/{memory_id}')
-def chat_memory_correct(memory_id: int, x: ChatMemoryCorrect, owner: str = Depends(require_owner)):
+def chat_memory_correct(memory_id: int, x: ChatMemoryCorrect, owner: str = Depends(access_privileged)):
     if not COMMAND_MEMORY.correct(memory_id, x.content, confidence=x.confidence):
         raise HTTPException(404, 'memory not found')
     OWNER.authorize('CHAT_MEMORY_CORRECT', f'{owner} corrected memory {memory_id}')
@@ -3246,43 +3313,43 @@ class ModeSet(BaseModel):
     mode: str
 
 @app.get('/coding/tracks')
-def coding_tracks(owner: str = Depends(require_owner)):
+def coding_tracks(owner: str = Depends(access_public)):
     return {'tracks': CODING_CURRICULUM.list_tracks()}
 
 @app.get('/coding/profile')
-def coding_profile(owner: str = Depends(require_owner)):
+def coding_profile(owner: str = Depends(access_public)):
     return CODING_PROFILES.get_profile(owner)
 
 @app.post('/coding/mode')
-def coding_mode(x: ModeSet, owner: str = Depends(require_owner)):
+def coding_mode(x: ModeSet, owner: str = Depends(access_public)):
     return CODING_PROFILES.set_mode(owner, x.mode)
 
 @app.get('/coding/assessment')
-def coding_assessment(owner: str = Depends(require_owner)):
+def coding_assessment(owner: str = Depends(access_public)):
     return CODING_PROFILES.start_assessment()
 
 @app.post('/coding/assessment/submit')
-def coding_assessment_submit(x: AssessmentSubmit, owner: str = Depends(require_owner)):
+def coding_assessment_submit(x: AssessmentSubmit, owner: str = Depends(access_public)):
     result = CODING_PROFILES.grade_assessment(owner, x.answers)
     CODING_MEMORY.sync_from_profile(owner, result.get('profile') or {})
     OWNER.authorize('CODING_ASSESSMENT', f'{owner} completed skill assessment')
     return result
 
 @app.post('/coding/path')
-def coding_path(track_id: str = 'python', goal: str = '', owner: str = Depends(require_owner)):
+def coding_path(track_id: str = 'python', goal: str = '', owner: str = Depends(access_public)):
     path = CODING_AGENT.tutor.start_path(owner, track_id, goal=goal)
     return path
 
 @app.get('/coding/lesson/{track_id}/{lesson_id}')
-def coding_lesson(track_id: str, lesson_id: str, owner: str = Depends(require_owner), reveal_solution: bool = False):
+def coding_lesson(track_id: str, lesson_id: str, owner: str = Depends(access_public), reveal_solution: bool = False):
     return CODING_AGENT.tutor.lesson(track_id, lesson_id, reveal_solution=reveal_solution)
 
 @app.post('/coding/hint')
-def coding_hint(x: HintRequest, owner: str = Depends(require_owner)):
+def coding_hint(x: HintRequest, owner: str = Depends(access_public)):
     return CODING_AGENT.tutor.hint(owner, x.track_id, x.lesson_id)
 
 @app.post('/coding/exercise/submit')
-def coding_exercise_submit(x: ExerciseSubmit, owner: str = Depends(require_owner)):
+def coding_exercise_submit(x: ExerciseSubmit, owner: str = Depends(access_public)):
     result = CODING_AGENT.tutor.submit_exercise(owner, x.track_id, x.lesson_id, x.code)
     # Only sandbox-passing submissions become learning candidates (never failing attempts)
     if result.get('passed') and result.get('mode') == 'sandbox' and (x.code or '').strip():
@@ -3308,7 +3375,7 @@ def coding_exercise_submit(x: ExerciseSubmit, owner: str = Depends(require_owner
     return result
 
 @app.post('/coding/solution')
-def coding_solution(x: SolutionRequest, owner: str = Depends(require_owner)):
+def coding_solution(x: SolutionRequest, owner: str = Depends(access_public)):
     result = CODING_AGENT.tutor.solution(owner, x.track_id, x.lesson_id, confirmed=bool(x.confirm))
     if result.get('needs_confirmation'):
         return result
@@ -3316,46 +3383,46 @@ def coding_solution(x: SolutionRequest, owner: str = Depends(require_owner)):
     return result
 
 @app.post('/coding/sandbox')
-def coding_sandbox(x: SandboxRequest, owner: str = Depends(require_owner)):
+def coding_sandbox(x: SandboxRequest, owner: str = Depends(access_public)):
     return _tool_run_sandbox(x.code, x.test_code)
 
 @app.post('/coding/review')
-def coding_review(x: ReviewRequest, owner: str = Depends(require_owner)):
+def coding_review(x: ReviewRequest, owner: str = Depends(access_public)):
     return CODING_AGENT.reviewer.review(x.code, language=x.language, context=x.context)
 
 @app.post('/coding/debug/start')
-def coding_debug_start(x: DebugStart, owner: str = Depends(require_owner)):
+def coding_debug_start(x: DebugStart, owner: str = Depends(access_public)):
     return CODING_AGENT.debugger.start(owner, x.code, x.test_code, x.description)
 
 @app.post('/coding/debug/respond')
-def coding_debug_respond(x: DebugRespond, owner: str = Depends(require_owner)):
+def coding_debug_respond(x: DebugRespond, owner: str = Depends(access_public)):
     return CODING_AGENT.debugger.respond(x.session_id, x.hypothesis)
 
 @app.get('/coding/projects')
-def coding_projects(owner: str = Depends(require_owner), level: str | None = None):
+def coding_projects(owner: str = Depends(access_public), level: str | None = None):
     return {'projects': CODING_CURRICULUM.projects(level)}
 
 @app.get('/coding/projects/{project_id}')
-def coding_project(project_id: str, owner: str = Depends(require_owner)):
+def coding_project(project_id: str, owner: str = Depends(access_public)):
     p = CODING_CURRICULUM.get_project(project_id)
     if not p:
         raise HTTPException(404, 'project not found')
     return p
 
 @app.get('/coding/knowledge')
-def coding_knowledge(q: str = '', owner: str = Depends(require_owner), limit: int = 8):
+def coding_knowledge(q: str = '', owner: str = Depends(access_public), limit: int = 8):
     return {'results': CODING_CURRICULUM.knowledge_search(q, limit)}
 
 @app.get('/coding/progress')
-def coding_progress(owner: str = Depends(require_owner)):
+def coding_progress(owner: str = Depends(access_public)):
     return CODING_PROFILES.progress(owner)
 
 @app.get('/coding/training/status')
-def coding_training_status(owner: str = Depends(require_owner)):
+def coding_training_status(owner: str = Depends(access_public)):
     return CODING_TRAINING.status()
 
 @app.post('/coding/chat')
-def coding_chat(x: CodingChat, owner: str = Depends(require_owner)):
+def coding_chat(x: CodingChat, owner: str = Depends(access_public)):
     result = CODING_AGENT.handle(x.message, owner=owner, mode=x.mode, code=x.code, language=x.language)
     OWNER.authorize('CODING_CHAT', f'{owner} coding intent={result.get("intent")}')
     # Raw chats are never training data

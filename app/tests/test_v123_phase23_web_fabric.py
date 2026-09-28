@@ -198,7 +198,7 @@ class TestAPIEndpoints(unittest.TestCase):
         from pfai import api as api_mod
         from tests._prod_env_isolation import isolated_unconfigured_env
 
-        api_mod.app.dependency_overrides[api_mod.require_owner] = lambda: "owner-test"
+        api_mod.app.dependency_overrides[api_mod.access_public] = lambda: "owner-test"
         try:
             with isolated_unconfigured_env():
                 r = self.client.get("/platform/web/providers")
@@ -217,12 +217,12 @@ class TestAPIEndpoints(unittest.TestCase):
                 blob = json.dumps(r.json())
                 self.assertNotIn("SMTP_PASSWORD=", blob)
         finally:
-            api_mod.app.dependency_overrides.pop(api_mod.require_owner, None)
+            api_mod.app.dependency_overrides.pop(api_mod.access_public, None)
 
     def test_chat_research_route(self):
         from pfai import api as api_mod
 
-        api_mod.app.dependency_overrides[api_mod.require_owner] = lambda: "owner-test"
+        api_mod.app.dependency_overrides[api_mod.access_public] = lambda: "owner-test"
         try:
             r = self.client.post("/chat", json={"message": "ابحث عن آخر المعلومات حول Python"})
             self.assertEqual(r.status_code, 200)
@@ -232,7 +232,7 @@ class TestAPIEndpoints(unittest.TestCase):
             self.assertFalse(body.get("fabricated_citations", False))
             self.assertFalse(body.get("PHASE_24_ALLOWED", True))
         finally:
-            api_mod.app.dependency_overrides.pop(api_mod.require_owner, None)
+            api_mod.app.dependency_overrides.pop(api_mod.access_public, None)
 
 
 class TestStampHelper(unittest.TestCase):
