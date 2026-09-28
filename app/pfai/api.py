@@ -309,9 +309,16 @@ def _tool_web_search(query: str = '', q: str = '', limit: int = 5, approved: boo
             'note': status.get('note') or 'Configure PFAI_WEB_ALLOW_NETWORK + search provider',
         }
     session = WebResearchSession()
+    # fetch_top=0 → search snippets only (no page fetches) for chat latency
     return _run_with_timeout(
-        lambda: session.research(query, limit=min(5, int(limit or 5)), approved=bool(approved), actor=str(actor or 'chat')),
-        timeout_s=float(os.environ.get('PFAI_CHAT_WEB_TIMEOUT', os.environ.get('PFAI_WEB_TIMEOUT', '12')) or 12),
+        lambda: session.research(
+            query,
+            limit=min(5, int(limit or 5)),
+            fetch_top=0,
+            approved=bool(approved),
+            actor=str(actor or 'chat'),
+        ),
+        timeout_s=float(os.environ.get('PFAI_CHAT_WEB_TIMEOUT', os.environ.get('PFAI_WEB_TIMEOUT', '8')) or 8),
         label='web_search',
     )
 
