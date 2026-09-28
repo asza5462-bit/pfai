@@ -1,6 +1,6 @@
 # PFAI Project Memory
 
-Last updated: 2026-09-28 (PFAI 8.3.0 — integrity harden · web latency bound)
+Last updated: 2026-09-28 (PFAI 8.4.0 — integrity harden · web latency bound)
 
 ## Snapshot
 
@@ -20,6 +20,13 @@ Last updated: 2026-09-28 (PFAI 8.3.0 — integrity harden · web latency bound)
 | Autonomous tick | **ready** (not per-chat) |
 | MODEL_QUALITY_PRODUCTION_VALIDATED | **false** |
 | Anthropic required | false |
+
+## Advanced self-develop (8.4)
+
+- Maturity stages: emerging → capable → advanced → sovereign_safe
+- Multi-pass code build (review×3, repair≤6), sandbox-only accept
+- Chat: advanced_status / awareness / self_develop / code_build
+- Still never auto-promotes weights
 
 ## Honesty
 

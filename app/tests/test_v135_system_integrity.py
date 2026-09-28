@@ -71,7 +71,7 @@ class TestIntegrityAPI(unittest.TestCase):
     def test_cohesive_core(self):
         h = self.client.get("/health").json()
         self.assertEqual(h.get("status"), "ok")
-        self.assertEqual(h.get("version"), "8.3.0")
+        self.assertTrue(str(h.get("version")).startswith("8.4"))
         tools = self.client.get("/chat/tools").json()
         self.assertTrue(tools.get("open_chat_tools"))
         self.assertEqual(tools.get("locked_count"), 0)

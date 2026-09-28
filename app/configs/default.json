@@ -77,8 +77,8 @@
       "enabled": true,
       "tasks_per_cycle": 2,
       "candidates": 5,
-      "max_repairs": 4,
-      "adversarial_rounds": 2,
+      "max_repairs": 6,
+      "adversarial_rounds": 3,
       "auto_repair": true,
       "regression_learning": true,
       "verify_before_curation": true

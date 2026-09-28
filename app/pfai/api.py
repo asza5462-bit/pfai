@@ -113,8 +113,16 @@ RESEARCH_GATE=ResearchGate(Policy(_SECURITY_CFG))
 # never promotes.
 _CODE_CFG=Config.load('configs/default.json').get('continuous_training', {}).get('code_learning', {})
 CODE_LEARNING=CodeLearningPipeline(runtime.model,CONTINUOUS,CODE_EVAL,research_gate=RESEARCH_GATE,
-    n=int(_CODE_CFG.get('candidates', 5)), max_repairs=int(_CODE_CFG.get('max_repairs', 4)),
-    adversarial_rounds=int(_CODE_CFG.get('adversarial_rounds', 2)), auto_repair=bool(_CODE_CFG.get('auto_repair', True)))
+    n=int(_CODE_CFG.get('candidates', 5)), max_repairs=int(_CODE_CFG.get('max_repairs', 6)),
+    adversarial_rounds=int(_CODE_CFG.get('adversarial_rounds', 3)), auto_repair=bool(_CODE_CFG.get('auto_repair', True)))
+from .advanced_self_develop import AdvancedSelfDevelop  # noqa: E402
+ADVANCED = AdvancedSelfDevelop(
+    code_learning=CODE_LEARNING,
+    continuous=CONTINUOUS,
+    evaluator=CODE_EVAL,
+    review_passes=int(_CODE_CFG.get('review_passes') or 3),
+    max_repairs=int(_CODE_CFG.get('max_repairs') or 6),
+)
 STATIC=Path(__file__).parent/'static'
 
 # --- Command Chat brain (Agent) ↔ heart (core services) -----------------
@@ -192,6 +200,24 @@ def _tool_self_improve_tick(include_continuous_tick: bool = True):
 
 def _tool_autonomy_status():
     return AUTONOMY.status()
+
+def _tool_advanced_status():
+    return ADVANCED.status()
+
+def _tool_advanced_awareness():
+    return ADVANCED.awareness(intent='chat')
+
+def _tool_advanced_self_develop(force: bool = True, include_continuous_tick: bool = True):
+    """Aware multi-pass code self-build + learn (no weight promote)."""
+    return ADVANCED.autonomous_cycle(
+        force=bool(force),
+        include_continuous_tick=bool(include_continuous_tick),
+    )
+
+def _tool_advanced_code_build(instruction: str = '', test_code: str = ''):
+    if not (instruction or '').strip() or not (test_code or '').strip():
+        return {'ok': False, 'error': 'instruction and test_code are required', 'weight_promotion': 'never_auto'}
+    return ADVANCED.multi_pass_build(instruction.strip(), test_code.strip())
 
 def _tool_remember_knowledge(kind: str = 'approved_knowledge', content: str = ''):
     if not str(content).strip():
@@ -450,7 +476,8 @@ def _tool_app_control_status():
         'academy_tracks': len(CODING_CURRICULUM.list_tracks()),
         'master_chat': True,
         'autonomy': open_execution_status(),
-        'note': 'Chat is the control plane — ops/learn/train/web/code + self-improve',
+        'advanced': ADVANCED.maturity(),
+        'note': 'Chat is the control plane — ops/learn/train/web/code + self-improve + advanced self-develop',
     }
 
 def _tool_learner_snapshot(owner: str = 'owner'):
@@ -963,27 +990,44 @@ def _continuous_with_autonomy(cycle_fn):
             AUTONOMY.run_cycle(include_continuous_tick=False)
     except Exception as exc:
         log.warning('autonomy pre-cycle heal skipped: %s', exc)
-    return _ORIG_CONTINUOUS_RUN_SERVICE(cycle_fn)
+    result = _ORIG_CONTINUOUS_RUN_SERVICE(cycle_fn)
+    # Advanced stage: self-directed multi-pass code build into curation
+    try:
+        stage = (ADVANCED.maturity() or {}).get('stage')
+        if stage in {'capable', 'advanced', 'sovereign_safe'}:
+            ADVANCED.autonomous_cycle(force=True, include_continuous_tick=False)
+    except Exception as exc:
+        log.warning('advanced self-develop cycle skipped: %s', exc)
+    return result
 
 CONTINUOUS._run_service_cycle = _continuous_with_autonomy  # type: ignore[method-assign]
 
-# Register autonomy tools after self-heal/continuous wiring exists
+# Register autonomy + advanced self-develop tools after wiring exists
 for _spec in (
     ToolSpec('self_check_run', 'Run platform self-check diagnostics', 'read', False, {}),
     ToolSpec('self_heal_cycle', 'Detect → safe-heal → retest (auto in open mode)', 'write', False, {'apply': 'bool?'}),
     ToolSpec('self_improve_tick', 'Full autonomy tick: check + safe heal + continuous learn', 'write', False, {'include_continuous_tick': 'bool?'}),
     ToolSpec('autonomy_status', 'Open-execution + self-improve autonomy status', 'read', False, {}),
+    ToolSpec('advanced_status', 'Maturity stage of continuous learn + self-develop', 'read', False, {}),
+    ToolSpec('advanced_awareness', 'What the advanced brain is doing / will not do', 'read', False, {}),
+    ToolSpec('advanced_self_develop', 'Aware multi-pass code self-build + curate (no promote)', 'write', False, {'force': 'bool?', 'include_continuous_tick': 'bool?'}),
+    ToolSpec('advanced_code_build', 'Multi-pass verify/review/repair for a coding task', 'write', False, {'instruction': 'string', 'test_code': 'string'}),
 ):
     TOOL_ROUTER.specs[_spec.name] = _spec
 TOOL_ROUTER.handlers['self_check_run'] = _tool_self_check_run
 TOOL_ROUTER.handlers['self_heal_cycle'] = _tool_self_heal_cycle
 TOOL_ROUTER.handlers['self_improve_tick'] = _tool_self_improve_tick
 TOOL_ROUTER.handlers['autonomy_status'] = _tool_autonomy_status
+TOOL_ROUTER.handlers['advanced_status'] = _tool_advanced_status
+TOOL_ROUTER.handlers['advanced_awareness'] = _tool_advanced_awareness
+TOOL_ROUTER.handlers['advanced_self_develop'] = _tool_advanced_self_develop
+TOOL_ROUTER.handlers['advanced_code_build'] = _tool_advanced_code_build
 log.info(
-    'autonomy ready open=%s auto_learn=%s auto_heal=%s',
+    'autonomy ready open=%s auto_learn=%s auto_heal=%s advanced_stage=%s',
     open_execution_status().get('open_chat_tools'),
     auto_accept_learning(),
     auto_safe_heal(),
+    (ADVANCED.maturity() or {}).get('stage'),
 )
 ELITE = EliteOrchestrator(
     root='data/longevity/elite',
@@ -1660,7 +1704,9 @@ def _looks_like_autonomy_intent(message: str) -> bool:
     return bool(re.search(
         r"أصلح\s*نفس|صلح\s*نفس|self[_\s-]?heal|self[_\s-]?check|self[_\s-]?improve|"
         r"طور\s*نفس|حدّث\s*نفس|حدث\s*نفس|يطور\s*نفس|يصلح\s*نفس|"
-        r"استقلال|autonom|فك\s*القيود|بدون\s*قيود|تحسين\s*ذاتي|self_improve",
+        r"استقلال|autonom|فك\s*القيود|بدون\s*قيود|تحسين\s*ذاتي|self_improve|"
+        r"يبني\s*ال?اكواد|يبني\s*الأكواد|self[_\s-]?develop|advanced_self|"
+        r"يراجع\s*اكثر|يصحح\s*اكثر|واعي|بدون\s*الرجوع",
         message or "",
         re.I,
     ))

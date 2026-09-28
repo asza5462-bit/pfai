@@ -408,7 +408,9 @@ def _looks_like_autonomy_intent(message: str) -> bool:
     return bool(re.search(
         r"أصلح\s*نفس|صلح\s*نفس|self[_\s-]?heal|self[_\s-]?check|self[_\s-]?improve|"
         r"طور\s*نفس|حدّث\s*نفس|حدث\s*نفس|يطور\s*نفس|يصلح\s*نفس|"
-        r"استقلال|autonom|فك\s*القيود|بدون\s*قيود|تحسين\s*ذاتي|self_improve",
+        r"استقلال|autonom|فك\s*القيود|بدون\s*قيود|تحسين\s*ذاتي|self_improve|"
+        r"يبني\s*ال?اكواد|يبني\s*الأكواد|self[_\s-]?develop|advanced_self|"
+        r"يراجع\s*اكثر|يصحح\s*اكثر|واعي|بدون\s*الرجوع|مرحلة\s*متطورة",
         message or "",
         re.I,
     ))

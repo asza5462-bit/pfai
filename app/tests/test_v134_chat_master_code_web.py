@@ -1,4 +1,4 @@
-"""PFAI 8.3 — chat master control: coding strength + web tools + unified plane."""
+"""PFAI 8.4 — chat master control: coding strength + web tools + unified plane."""
 import hashlib
 import os
 import tempfile
@@ -111,8 +111,8 @@ class TestChatMasterAPI(unittest.TestCase):
 
     def test_version_82(self):
         from pfai import __version__
-        self.assertEqual(__version__, "8.3.0")
-        self.assertEqual(self.client.get("/health").json().get("version"), "8.3.0")
+        self.assertTrue(__version__.startswith("8.4"))
+        self.assertTrue(str(self.client.get("/health").json().get("version")).startswith("8.4"))
 
     def test_tools_catalog_master(self):
         r = self.client.get("/chat/tools")
@@ -152,7 +152,7 @@ class TestChatMasterAPI(unittest.TestCase):
         html = self.client.get("/").text
         self.assertIn("بحث ويب", html)
         self.assertIn("تحكم كامل", html)
-        self.assertIn("PFAI v8.3", html)
+        self.assertIn("PFAI v8.4", html)
 
 
 if __name__ == "__main__":

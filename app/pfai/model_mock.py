@@ -150,17 +150,21 @@ class MockCommandProvider(ModelProvider):
             add("forget_memory")
         if re.search(r"correct|تصحيح|هذا التحليل غير صحيح", text + ar):
             add("save_owner_correction")
-        # Self-heal / self-improve / unlock autonomy
+        # Self-heal / self-improve / advanced self-develop
         if re.search(
             r"أصلح\s*نفس|صلح\s*نفس|self[_\s-]?heal|self[_\s-]?check|self[_\s-]?improve|"
             r"طور\s*نفس|حدّث\s*نفس|حدث\s*نفس|يطور\s*نفس|يصلح\s*نفس|يحل\s*مشاكل|"
-            r"استقلال|autonom|فك\s*القيود|بدون\s*قيود|طور\s*ذات|تحسين\s*ذاتي",
+            r"استقلال|autonom|فك\s*القيود|بدون\s*قيود|طور\s*ذات|تحسين\s*ذاتي|"
+            r"يبني\s*ال?اكواد|يبني\s*الأكواد|self[_\s-]?develop|advanced_self|"
+            r"يراجع\s*اكثر|يصحح\s*اكثر|واعي|بدون\s*الرجوع|مرحلة\s*متطورة",
             text + ar,
             re.I,
         ):
+            add("advanced_awareness")
+            add("advanced_status")
+            add("advanced_self_develop")
             add("autonomy_status")
             add("self_improve_tick")
-            add("self_check_run")
 
         if not picks:
             add("app_control_status")
@@ -284,6 +288,19 @@ class MockCommandProvider(ModelProvider):
                         "auto_accept_learning": (res.get("autonomy") or res.get("learning") or {}).get("auto_accept_learning"),
                         "weight_promotion": res.get("weight_promotion") or "never_auto",
                     }, 260)
+                )
+            elif name in {"advanced_self_develop", "advanced_status", "advanced_awareness", "advanced_code_build"} and isinstance(res, dict):
+                mat = res.get("maturity") or res.get("advanced") or {}
+                insights.append(
+                    ("advanced self-develop: " if en else "التطوير الذاتي المتقدم: ")
+                    + _brief({
+                        "stage": res.get("stage") or mat.get("stage"),
+                        "ran": res.get("ran"),
+                        "task": res.get("task_id"),
+                        "solved": (res.get("build") or {}).get("solved", res.get("solved")),
+                        "passes": len((res.get("build") or {}).get("passes") or res.get("passes") or []),
+                        "weight_promotion": res.get("weight_promotion") or "never_auto",
+                    }, 280)
                 )
             elif name in {"continuous_start", "continuous_resume", "continuous_pause", "continuous_stop"}:
                 insights.append(f"{name} → {_brief(res, 160)}")
