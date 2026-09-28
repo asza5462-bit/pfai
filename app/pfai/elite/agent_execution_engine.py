@@ -783,6 +783,17 @@ class AgentExecutionEngine:
         answer: str,
     ) -> dict[str, Any]:
         metrics.setdefault("total_task_latency", time.time() - started)
+        finding_count = 0
+        findings: list[Any] = []
+        for s in task.steps:
+            res = s.get("result") or {}
+            if res.get("finding_count"):
+                finding_count += int(res.get("finding_count") or 0)
+            if res.get("findings"):
+                findings.extend(list(res.get("findings") or [])[:20])
+            nested = res.get("result") or {}
+            if isinstance(nested, dict) and nested.get("finding_count"):
+                finding_count += int(nested.get("finding_count") or 0)
         return {
             "ok": ok,
             "answer": answer,
@@ -797,10 +808,18 @@ class AgentExecutionEngine:
             "validation": task.validation_results,
             "retry_recovery": task.retry_recovery,
             "metrics": metrics,
-            "budget": BudgetTracker(self.budgets_cfg).snapshot() if False else None,
+            "budget": None,
             "phase": 20,
             "PHASE_21_ALLOWED": False,
             "agent_execution_engine": True,
             "version": self.VERSION,
             "unified_ai_core": True,
+            "finding_count": finding_count,
+            "phase15": {
+                "intent": "security_review" if finding_count or "security_analysis" in (task.selected_capabilities or []) else "agent",
+                "finding_count": finding_count,
+                "findings": findings[:20],
+            }
+            if finding_count or "security_analysis" in (task.selected_capabilities or [])
+            else None,
         }
