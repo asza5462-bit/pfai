@@ -363,6 +363,25 @@ def _tool_smart_training_start(activate_if_pass: bool = False):
         async_mode=True,
     )
 
+def _tool_memory_audit(owner: str = ''):
+    return {**COMMAND_MEMORY.audit(owner=owner or ''), 'write_path': False, 'read_only': True}
+
+def _tool_memory_heal(owner: str = ''):
+    return {**COMMAND_MEMORY.heal_conflicts(owner=owner or ''), 'write_path': True, 'read_only': False, 'auto_promote': False}
+
+def _tool_memory_status(owner: str = '', q: str = ''):
+    audit = COMMAND_MEMORY.audit(owner=owner or '')
+    facts = COMMAND_MEMORY.recall_facts(q or 'user name prefer', limit=8, owner=owner or '')
+    return {
+        'ok': True,
+        'version': getattr(COMMAND_MEMORY, 'VERSION', '8.11'),
+        'audit': audit,
+        'sample_facts': facts,
+        'read_only': False,
+        'write_path': True,
+        'note': 'Legendary memory with conflict supersede + owner scope + secret redaction',
+    }
+
 def _tool_run_sandbox(code: str = '', test_code: str = ''):
     r = CODING_SANDBOX.evaluate(code or '', test_code or '')
     return {
@@ -643,6 +662,9 @@ CODING_TOOL_SPECS = list(DEFAULT_TOOLS) + [
     ToolSpec('training_cycle_start', 'START real weight-training cycle from chat (write — not read-only)', 'write', False, {'owner_requested': 'bool?', 'activate_if_pass': 'bool?'}),
     ToolSpec('smart_training_status', 'Smart real-training diagnosis (write-path ready)', 'read', False, {}),
     ToolSpec('smart_training_start', 'Prepare + start REAL LoRA training cycle', 'write', False, {'activate_if_pass': 'bool?'}),
+    ToolSpec('memory_status', 'Legendary memory status + sample conflict-free facts', 'read', False, {'owner': 'string?', 'q': 'string?'}),
+    ToolSpec('memory_audit', 'Audit memory conflicts, duplicates, secret leaks', 'read', False, {'owner': 'string?'}),
+    ToolSpec('memory_heal', 'Supersede conflicting facts (keep winners only)', 'write', False, {'owner': 'string?'}),
     ToolSpec('coding_hint', 'Progressive coding hint with diagnostics', 'read', False, {'owner': 'string?', 'track_id': 'string?', 'lesson_id': 'string?', 'code': 'string?', 'stderr': 'string?'}),
     ToolSpec('coding_exercise_submit', 'Submit academy exercise code for sandbox grading', 'write', False, {'owner': 'string?', 'track_id': 'string', 'lesson_id': 'string', 'code': 'string'}),
     ToolSpec('web_status', 'Web fabric readiness / providers', 'read', False, {}),
@@ -700,6 +722,9 @@ TOOL_ROUTER = ToolRouter({
     'training_cycle_start': _tool_training_cycle_start,
     'smart_training_status': _tool_smart_training_status,
     'smart_training_start': _tool_smart_training_start,
+    'memory_status': _tool_memory_status,
+    'memory_audit': _tool_memory_audit,
+    'memory_heal': _tool_memory_heal,
     'remember_knowledge': _tool_remember_knowledge,
     'forget_memory': _tool_forget_memory,
     'correct_memory': _tool_correct_memory,

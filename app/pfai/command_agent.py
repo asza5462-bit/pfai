@@ -64,7 +64,10 @@ class CommandAgent:
             return {"ok": False, "error": "message is required", "timeline": timeline}
 
         lang = language or _detect_lang(message)
-        cid = self.memory.ensure_conversation(conversation_id)
+        try:
+            cid = self.memory.ensure_conversation(conversation_id, owner=owner)
+        except TypeError:
+            cid = self.memory.ensure_conversation(conversation_id)
         self.memory.add_message(cid, "user", message, status="completed")
 
         # Delegate coding-education intents to Coding Academy brain when wired.
@@ -111,17 +114,64 @@ class CommandAgent:
 
         mark("thinking", "Loading legendary memory + deep comprehension")
         try:
-            self.memory.ingest_user_turn(message, conversation_id=cid)
+            self.memory.ingest_user_turn(message, conversation_id=cid, owner=owner)
+        except TypeError:
+            try:
+                self.memory.ingest_user_turn(message, conversation_id=cid)
+            except Exception as exc:
+                log.debug("legendary ingest skipped: %s", exc)
         except Exception as exc:
             log.debug("legendary ingest skipped: %s", exc)
+        # Heal conflicts opportunistically (cheap, owner-scoped)
+        try:
+            if hasattr(self.memory, "heal_conflicts"):
+                self.memory.heal_conflicts(owner=owner)
+        except Exception:
+            pass
         dialog = self.memory.recent_dialog(cid, limit=10)
         if hasattr(self.memory, "legendary_context"):
-            mem_ctx = self.memory.legendary_context(message, conversation_id=cid, limit=10)
+            try:
+                mem_ctx = self.memory.legendary_context(message, conversation_id=cid, owner=owner, limit=10)
+            except TypeError:
+                mem_ctx = self.memory.legendary_context(message, conversation_id=cid, limit=10)
         else:
             mem_ctx = self.memory.context_block(message)
         from .deep_comprehension import comprehend, comprehension_block
         understanding = comprehend(message, dialog=dialog, memory_hints=mem_ctx, language=lang)
         mark("thinking", comprehension_block(understanding, language=lang)[:220])
+
+        # Memory-first direct answer (identity/prefs) — no tool fan-out needed
+        direct = None
+        if hasattr(self.memory, "direct_answer"):
+            try:
+                direct = self.memory.direct_answer(message, owner=owner, language=lang)
+            except Exception:
+                direct = None
+        if direct and (understanding.get("intent") in {"memory_mind", "followup", "general"}):
+            mark("completed", "Answered from conflict-free legendary facts")
+            reply = _memory_direct_reply(lang, direct, mem_ctx, understanding)
+            try:
+                self.memory.update_digest(cid, self.memory.recent_dialog(cid, limit=16) + [
+                    {"role": "assistant", "content": reply}
+                ])
+            except Exception:
+                pass
+            self.memory.add_message(
+                cid, "assistant", reply, status="completed",
+                meta={"timeline": timeline, "memory_direct": True, "understanding": understanding, "provider": self.provider_name()},
+            )
+            return {
+                "ok": True,
+                "conversation_id": cid,
+                "reply": reply,
+                "timeline": timeline,
+                "tools": [],
+                "provider": self.provider_name(),
+                "memory_used": mem_ctx,
+                "understanding": understanding,
+                "status": "completed",
+                "language": lang,
+            }
 
         # Correction conversational shortcut
         if _is_correction_offer(message, dialog):
@@ -595,6 +645,35 @@ def _is_correction_offer(message: str, dialog: list[dict]) -> bool:
         if last.get("role") == "assistant" and "correction" in (last.get("content") or "").lower():
             return True
     return False
+
+
+def _memory_direct_reply(lang: str, direct: str, mem_ctx: str, understanding: dict) -> str:
+    """Short, precise reply from conflict-free facts — no template fog."""
+    en = (lang or "").startswith("en")
+    latent = (understanding or {}).get("latent_need") or ""
+    facts = []
+    for line in (mem_ctx or "").splitlines():
+        if line.strip().startswith("- ("):
+            facts.append(line.strip()[:160])
+        if len(facts) >= 4:
+            break
+    if en:
+        parts = ["Got it — from legendary memory (conflict-resolved):", direct]
+        if facts:
+            parts.append("Active facts:")
+            parts.extend(f"  {f}" for f in facts)
+        if latent:
+            parts.append(f"Latent need noted: {latent}")
+        parts.append("Tell me what else to remember or correct.")
+        return "\n".join(parts)
+    parts = ["من الذاكرة الأسطورية (بدون تعارض):", direct]
+    if facts:
+        parts.append("حقائق نشطة:")
+        parts.extend(f"  {f}" for f in facts)
+    if latent:
+        parts.append(f"الحاجة الكامنة: {latent}")
+    parts.append("قل لي ماذا أتذكر أيضاً أو ما الذي أصحّحه.")
+    return "\n".join(parts)
 
 
 def _approval_reply(lang: str, pending: dict) -> str:

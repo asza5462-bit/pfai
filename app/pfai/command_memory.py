@@ -1,19 +1,24 @@
-"""Command Chat memory service — wraps existing MemoryStore + conversation SQLite.
+"""Command Chat memory — legendary, conflict-safe, owner-scoped.
 
-Learning in phase-1 means durable memory / feedback / approved knowledge —
+Learning here means durable memory / feedback / approved knowledge —
 never automatic model-weight mutation.
 """
 from __future__ import annotations
 
 import json
+import logging
+import re
 import sqlite3
 import threading
 import uuid
 from datetime import datetime, timezone
 from pathlib import Path
-from typing import Any, Iterable
+from typing import Any
 
 from .memory import MemoryStore
+from . import memory_guardian as guardian
+
+log = logging.getLogger("pfai.command_memory")
 
 APPROVED_KINDS = {
     "preference",
@@ -26,10 +31,13 @@ APPROVED_KINDS = {
     "lesson",
     "epic_memory",
     "user_desire",
+    "identity",
 }
 
 
 class CommandMemoryService:
+    VERSION = "8.11.0"
+
     def __init__(self, memory: MemoryStore, chat_db_path: str = "data/command_chat.sqlite3"):
         self.memory = memory
         p = Path(chat_db_path)
@@ -84,35 +92,94 @@ class CommandMemoryService:
                 CREATE INDEX IF NOT EXISTS idx_legendary_subject ON legendary_facts(subject);
                 """
             )
+            self._migrate_schema()
             self.db.commit()
 
+    def _migrate_schema(self) -> None:
+        """Additive columns for owner scope + conflict status."""
+        cols = {r[1] for r in self.db.execute("PRAGMA table_info(legendary_facts)").fetchall()}
+        alters = []
+        if "owner" not in cols:
+            alters.append("ALTER TABLE legendary_facts ADD COLUMN owner TEXT DEFAULT ''")
+        if "status" not in cols:
+            alters.append("ALTER TABLE legendary_facts ADD COLUMN status TEXT DEFAULT 'active'")
+        if "scope" not in cols:
+            alters.append("ALTER TABLE legendary_facts ADD COLUMN scope TEXT DEFAULT 'user'")
+        if "conversation_id" not in cols:
+            alters.append("ALTER TABLE legendary_facts ADD COLUMN conversation_id TEXT DEFAULT ''")
+        for sql in alters:
+            try:
+                self.db.execute(sql)
+            except sqlite3.OperationalError as exc:
+                log.debug("migrate skip: %s", exc)
+        # conversations owner
+        ccols = {r[1] for r in self.db.execute("PRAGMA table_info(conversations)").fetchall()}
+        if "owner" not in ccols:
+            try:
+                self.db.execute("ALTER TABLE conversations ADD COLUMN owner TEXT DEFAULT ''")
+            except sqlite3.OperationalError:
+                pass
+        self.db.execute(
+            "CREATE INDEX IF NOT EXISTS idx_legendary_owner_pred ON legendary_facts(owner, predicate, status)"
+        )
+
     # -- conversations -------------------------------------------------
-    def create_conversation(self, title: str = "PFAI Command Chat") -> str:
+    def create_conversation(self, title: str = "PFAI Command Chat", owner: str = "") -> str:
         cid = uuid.uuid4().hex
         now = _now()
         with self._lock:
-            self.db.execute(
-                "INSERT INTO conversations(id,title,created_at,updated_at) VALUES(?,?,?,?)",
-                (cid, title, now, now),
-            )
+            try:
+                self.db.execute(
+                    "INSERT INTO conversations(id,title,created_at,updated_at,owner) VALUES(?,?,?,?,?)",
+                    (cid, title, now, now, owner or ""),
+                )
+            except sqlite3.OperationalError:
+                self.db.execute(
+                    "INSERT INTO conversations(id,title,created_at,updated_at) VALUES(?,?,?,?)",
+                    (cid, title, now, now),
+                )
             self.db.commit()
         return cid
 
-    def list_conversations(self, limit: int = 30) -> list[dict]:
+    def list_conversations(self, limit: int = 30, owner: str = "") -> list[dict]:
         with self._lock:
-            rows = self.db.execute(
-                "SELECT id,title,created_at,updated_at FROM conversations ORDER BY updated_at DESC LIMIT ?",
-                (int(limit),),
-            ).fetchall()
+            if owner:
+                try:
+                    rows = self.db.execute(
+                        "SELECT id,title,created_at,updated_at FROM conversations "
+                        "WHERE owner=? OR owner='' OR owner IS NULL "
+                        "ORDER BY updated_at DESC LIMIT ?",
+                        (owner, int(limit)),
+                    ).fetchall()
+                except sqlite3.OperationalError:
+                    rows = self.db.execute(
+                        "SELECT id,title,created_at,updated_at FROM conversations ORDER BY updated_at DESC LIMIT ?",
+                        (int(limit),),
+                    ).fetchall()
+            else:
+                rows = self.db.execute(
+                    "SELECT id,title,created_at,updated_at FROM conversations ORDER BY updated_at DESC LIMIT ?",
+                    (int(limit),),
+                ).fetchall()
         return [dict(id=r[0], title=r[1], created_at=r[2], updated_at=r[3]) for r in rows]
 
-    def ensure_conversation(self, conversation_id: str | None) -> str:
+    def ensure_conversation(self, conversation_id: str | None, owner: str = "") -> str:
         if conversation_id:
             with self._lock:
                 row = self.db.execute("SELECT id FROM conversations WHERE id=?", (conversation_id,)).fetchone()
             if row:
+                if owner:
+                    try:
+                        with self._lock:
+                            self.db.execute(
+                                "UPDATE conversations SET owner=? WHERE id=? AND (owner='' OR owner IS NULL)",
+                                (owner, conversation_id),
+                            )
+                            self.db.commit()
+                    except sqlite3.OperationalError:
+                        pass
                 return conversation_id
-        return self.create_conversation()
+        return self.create_conversation(owner=owner)
 
     def add_message(self, conversation_id: str, role: str, content: str, status: str = "completed", meta: dict | None = None) -> int:
         now = _now()
@@ -191,15 +258,36 @@ class CommandMemoryService:
         kind = (kind or "approved_knowledge").strip()
         if kind not in APPROVED_KINDS and kind not in {"fact", "lesson"}:
             kind = "approved_knowledge"
-        # Deduplicate exact same content+kind recently
-        existing = self.memory.search(content[:80], limit=5)
+        content, redacted = guardian.redact_secrets(content or "")
+        if redacted:
+            source = f"{source}|redacted"
+        if not content.strip():
+            return 0
+        # Deduplicate exact same content+kind
+        existing = self.memory.search(content[:80], limit=8)
         for row in existing:
             if row.get("kind") == kind and row.get("content") == content:
                 return int(row["id"])
+        # Supersede conflicting identity/preference content for same kind key prefix
+        if kind in {"identity", "preference", "user_desire"}:
+            self._supersede_similar_durable(kind, content)
         return int(self.memory.add(kind, content, source, confidence))
 
-    def relevant(self, query: str, limit: int = 8) -> list[dict]:
-        # Tokenize query for broader recall (legendary memory)
+    def _supersede_similar_durable(self, kind: str, content: str) -> int:
+        """Forget older rows of same kind that clearly conflict (e.g. name lines)."""
+        removed = 0
+        # Identity: keep only newest "name=" style
+        if kind == "identity" or re.search(r"(?i)اسم|name\s*is|اسمي", content):
+            for row in self.memory.list_by_kind("identity", limit=40) + self.memory.list_by_kind("epic_memory", limit=40):
+                c = row.get("content") or ""
+                if row.get("content") == content:
+                    continue
+                if re.search(r"(?i)اسمي|my name is|name_is|اسم المستخدم", c) and re.search(r"(?i)اسمي|my name is|name_is|اسم المستخدم", content):
+                    if self.memory.forget(int(row["id"])):
+                        removed += 1
+        return removed
+
+    def relevant(self, query: str, limit: int = 8, *, include_coding: bool | None = None) -> list[dict]:
         tokens = [t for t in re_split_tokens(query) if len(t) >= 3][:8]
         hits = list(self.memory.search(query, limit=max(limit, 12)) or [])
         seen = {h.get("id") for h in hits}
@@ -209,9 +297,12 @@ class CommandMemoryService:
                     continue
                 seen.add(h.get("id"))
                 hits.append(h)
-        # Prefer preference/decision/correction/approved_knowledge/desires
+        if include_coding is None:
+            include_coding = guardian.is_coding_query(query)
+        if not include_coding:
+            hits = guardian.filter_durable_for_context(hits, query)
         priority = {
-            "preference": 0, "user_desire": 0, "correction": 1, "decision": 2,
+            "identity": 0, "preference": 0, "user_desire": 0, "correction": 1, "decision": 2,
             "epic_memory": 2, "approved_knowledge": 3, "fact": 3, "feedback": 4, "lesson": 5,
         }
         hits.sort(key=lambda r: (
@@ -225,9 +316,9 @@ class CommandMemoryService:
         return self.memory.forget(memory_id)
 
     def correct(self, memory_id: int, new_content: str, confidence: float = 0.9) -> bool:
+        new_content, _ = guardian.redact_secrets(new_content or "")
         ok = self.memory.update(memory_id, new_content, confidence=confidence)
         if ok:
-            # Keep an explicit correction trail as well
             self.remember("correction", f"Corrected memory #{memory_id}: {new_content}", source="owner_correction", confidence=confidence)
         return ok
 
@@ -235,41 +326,97 @@ class CommandMemoryService:
         return self.legendary_context(query, limit=limit)
 
     # -- legendary memory ----------------------------------------------
-    def remember_fact(self, subject: str, predicate: str, obj: str, *, confidence: float = 0.85, source: str = "chat") -> int:
-        subject, predicate, obj = (subject or "").strip()[:120], (predicate or "").strip()[:80], (obj or "").strip()[:400]
-        if not subject or not obj:
+    def remember_fact(
+        self,
+        subject: str,
+        predicate: str,
+        obj: str,
+        *,
+        confidence: float = 0.85,
+        source: str = "chat",
+        owner: str = "",
+        conversation_id: str = "",
+        scope: str = "user",
+    ) -> int:
+        subject = (subject or "").strip()[:120]
+        predicate = (predicate or "").strip()[:80]
+        obj, redacted = guardian.redact_secrets((obj or "").strip()[:400])
+        if redacted:
+            source = f"{source}|redacted"
+        if not subject or not obj or not predicate:
             return 0
         now = _now()
         with self._lock:
+            # Exact active match → refresh
             row = self.db.execute(
-                "SELECT id FROM legendary_facts WHERE subject=? AND predicate=? AND object=? LIMIT 1",
-                (subject, predicate, obj),
+                "SELECT id FROM legendary_facts WHERE subject=? AND predicate=? AND object=? "
+                "AND COALESCE(status,'active')='active' AND COALESCE(owner,'')=? LIMIT 1",
+                (subject, predicate, obj, owner or ""),
             ).fetchone()
             if row:
-                self.db.execute("UPDATE legendary_facts SET last_seen=?, confidence=? WHERE id=?", (now, float(confidence), row[0]))
+                self.db.execute(
+                    "UPDATE legendary_facts SET last_seen=?, confidence=? WHERE id=?",
+                    (now, float(confidence), row[0]),
+                )
                 self.db.commit()
                 return int(row[0])
+
+            # Conflict: same subject+predicate, different object → supersede losers
+            rivals = self.db.execute(
+                "SELECT id, object, confidence, last_seen FROM legendary_facts "
+                "WHERE subject=? AND predicate=? AND COALESCE(status,'active')='active' "
+                "AND COALESCE(owner,'')=?",
+                (subject, predicate, owner or ""),
+            ).fetchall()
+            for r in rivals:
+                if str(r[1]) != obj:
+                    self.db.execute(
+                        "UPDATE legendary_facts SET status='superseded', last_seen=? WHERE id=?",
+                        (now, r[0]),
+                    )
+                    log.info(
+                        "memory conflict supersede id=%s %s.%s '%s' → '%s' owner=%s",
+                        r[0], subject, predicate, r[1], obj, owner or "*",
+                    )
+
             cur = self.db.execute(
-                "INSERT INTO legendary_facts(subject,predicate,object,confidence,source,created_at,last_seen) VALUES(?,?,?,?,?,?,?)",
-                (subject, predicate, obj, float(confidence), source, now, now),
+                "INSERT INTO legendary_facts(subject,predicate,object,confidence,source,created_at,last_seen,owner,status,scope,conversation_id) "
+                "VALUES(?,?,?,?,?,?,?,?,?,?,?)",
+                (subject, predicate, obj, float(confidence), source, now, now, owner or "", "active", scope, conversation_id or ""),
             )
             self.db.commit()
             return int(cur.lastrowid)
 
-    def recall_facts(self, query: str, limit: int = 8) -> list[dict]:
+    def recall_facts(self, query: str, limit: int = 8, *, owner: str = "") -> list[dict]:
         tokens = [t for t in re_split_tokens(query) if len(t) >= 2][:10]
+        # Always include identity tokens for name questions
+        if re.search(r"(?i)اسم|name|أنا|who\s+am", query or ""):
+            tokens = list(dict.fromkeys(["name", "اسم", "user"] + tokens))
         if not tokens:
-            return []
+            tokens = ["user"]
         out: list[dict] = []
         seen = set()
         with self._lock:
             for tok in tokens:
-                rows = self.db.execute(
-                    "SELECT id,subject,predicate,object,confidence,source,last_seen FROM legendary_facts "
-                    "WHERE subject LIKE ? OR object LIKE ? OR predicate LIKE ? "
-                    "ORDER BY last_seen DESC LIMIT ?",
-                    (f"%{tok}%", f"%{tok}%", f"%{tok}%", max(2, limit // 2)),
-                ).fetchall()
+                if owner:
+                    rows = self.db.execute(
+                        "SELECT id,subject,predicate,object,confidence,source,last_seen,COALESCE(status,'active'),COALESCE(owner,'') "
+                        "FROM legendary_facts "
+                        "WHERE COALESCE(status,'active')='active' "
+                        "AND (COALESCE(owner,'')=? OR COALESCE(owner,'')='') "
+                        "AND (subject LIKE ? OR object LIKE ? OR predicate LIKE ?) "
+                        "ORDER BY last_seen DESC LIMIT ?",
+                        (owner, f"%{tok}%", f"%{tok}%", f"%{tok}%", max(3, limit)),
+                    ).fetchall()
+                else:
+                    rows = self.db.execute(
+                        "SELECT id,subject,predicate,object,confidence,source,last_seen,COALESCE(status,'active'),COALESCE(owner,'') "
+                        "FROM legendary_facts "
+                        "WHERE COALESCE(status,'active')='active' "
+                        "AND (subject LIKE ? OR object LIKE ? OR predicate LIKE ?) "
+                        "ORDER BY last_seen DESC LIMIT ?",
+                        (f"%{tok}%", f"%{tok}%", f"%{tok}%", max(3, limit)),
+                    ).fetchall()
                 for r in rows:
                     if r[0] in seen:
                         continue
@@ -277,20 +424,48 @@ class CommandMemoryService:
                     out.append(dict(
                         id=r[0], subject=r[1], predicate=r[2], object=r[3],
                         confidence=r[4], source=r[5], last_seen=r[6],
+                        status=r[7], owner=r[8],
                     ))
-        return out[:limit]
+        # Collapse remaining conflicts by winner
+        by_key: dict[tuple[str, str], list[dict]] = {}
+        for f in out:
+            by_key.setdefault((f["subject"], f["predicate"]), []).append(f)
+        collapsed = []
+        for rows in by_key.values():
+            w = guardian.pick_winner_fact(rows)
+            if w:
+                collapsed.append(w)
+        collapsed.sort(key=lambda f: (float(f.get("confidence") or 0), str(f.get("last_seen") or "")), reverse=True)
+        return collapsed[:limit]
+
+    def list_active_facts(self, *, owner: str = "", limit: int = 200) -> list[dict]:
+        with self._lock:
+            if owner:
+                rows = self.db.execute(
+                    "SELECT id,subject,predicate,object,confidence,source,last_seen,COALESCE(status,'active'),COALESCE(owner,'') "
+                    "FROM legendary_facts WHERE COALESCE(status,'active')='active' "
+                    "AND (COALESCE(owner,'')=? OR COALESCE(owner,'')='') "
+                    "ORDER BY last_seen DESC LIMIT ?",
+                    (owner, int(limit)),
+                ).fetchall()
+            else:
+                rows = self.db.execute(
+                    "SELECT id,subject,predicate,object,confidence,source,last_seen,COALESCE(status,'active'),COALESCE(owner,'') "
+                    "FROM legendary_facts WHERE COALESCE(status,'active')='active' "
+                    "ORDER BY last_seen DESC LIMIT ?",
+                    (int(limit),),
+                ).fetchall()
+        return [
+            dict(id=r[0], subject=r[1], predicate=r[2], object=r[3], confidence=r[4],
+                 source=r[5], last_seen=r[6], status=r[7], owner=r[8])
+            for r in rows
+        ]
 
     def update_digest(self, conversation_id: str, dialog: list[dict]) -> str:
-        """Compress recent dialog into a durable conversation digest."""
+        """Compress recent dialog into a durable conversation digest (no template spam)."""
         if not conversation_id or not dialog:
             return ""
-        bits = []
-        for m in dialog[-12:]:
-            role = m.get("role") or "?"
-            content = re_sub_ws((m.get("content") or "")[:220])
-            if content:
-                bits.append(f"{role}: {content}")
-        digest = " | ".join(bits)[:1800]
+        digest = guardian.digest_from_dialog(dialog)
         with self._lock:
             self.db.execute(
                 "INSERT INTO conversation_digests(conversation_id,digest,turn_count,updated_at) VALUES(?,?,?,?) "
@@ -310,66 +485,142 @@ class CommandMemoryService:
             ).fetchone()
         return (row[0] if row else "") or ""
 
-    def ingest_user_turn(self, message: str, *, conversation_id: str = "") -> dict:
-        """Auto-capture desires/preferences/facts from a user turn (legendary intake)."""
-        import re
+    def ingest_user_turn(
+        self,
+        message: str,
+        *,
+        conversation_id: str = "",
+        owner: str = "",
+    ) -> dict:
+        """Auto-capture identity/desires/preferences/facts (legendary intake)."""
         text = (message or "").strip()
         stored = []
         if not text:
-            return {"stored": 0}
+            return {"stored": 0, "redacted": False}
+        text, redacted = guardian.redact_secrets(text)
+
+        # Structured identity + language prefs
+        for fact in guardian.extract_identity_and_prefs(text):
+            mid = self.remember_fact(
+                fact["subject"], fact["predicate"], fact["object"],
+                confidence=float(fact.get("confidence") or 0.9),
+                source="legendary_ingest",
+                owner=owner,
+                conversation_id=conversation_id,
+            )
+            kind = fact.get("kind") or "fact"
+            did = self.remember(
+                kind if kind in APPROVED_KINDS else "identity",
+                f"{fact['predicate']}={fact['object']}",
+                source="legendary_ingest",
+                confidence=float(fact.get("confidence") or 0.9),
+            )
+            stored.append((kind, mid or did))
+
         # Desires
         m = re.search(r"(?:أريد|اريد|I want|I need)\s+(.{8,240})", text, re.I)
         if m:
             desire = m.group(1).strip()
             mid = self.remember("user_desire", desire, source="legendary_ingest", confidence=0.9)
-            self.remember_fact("user", "desires", desire, confidence=0.9, source="legendary_ingest")
+            self.remember_fact("user", "desires", desire, confidence=0.9, source="legendary_ingest", owner=owner, conversation_id=conversation_id)
             stored.append(("user_desire", mid))
+
         # Preferences
         m = re.search(r"(?:فضّل|prefer|دائماً|always|لا ت(?:قم|فعل)|never)\s+(.{6,200})", text, re.I)
         if m:
             pref = m.group(1).strip()
             mid = self.remember("preference", pref, source="legendary_ingest", confidence=0.85)
-            self.remember_fact("user", "prefers", pref, confidence=0.85, source="legendary_ingest")
+            self.remember_fact("user", "prefers", pref, confidence=0.85, source="legendary_ingest", owner=owner, conversation_id=conversation_id)
             stored.append(("preference", mid))
+
         # Explicit remember requests
-        if re.search(r"\bremember\b|تذكّر|تذكر هذا|احفظ", text, re.I):
+        if re.search(r"\bremember\b|تذكّر|تذكر هذا|احفظ|تذكر أن", text, re.I):
             mid = self.remember("epic_memory", text[:500], source="legendary_ingest", confidence=0.95)
             stored.append(("epic_memory", mid))
+
         if conversation_id:
             self.update_digest(conversation_id, self.recent_dialog(conversation_id, limit=16))
-        return {"stored": len(stored), "items": stored}
+        return {"stored": len(stored), "items": stored, "redacted": redacted, "version": self.VERSION}
 
-    def legendary_context(self, query: str, *, conversation_id: str = "", limit: int = 10) -> str:
-        """Rich memory block: durable hits + facts + conversation digest."""
+    def legendary_context(
+        self,
+        query: str,
+        *,
+        conversation_id: str = "",
+        owner: str = "",
+        limit: int = 10,
+    ) -> str:
+        """Rich memory block: durable hits + conflict-free facts + clean digest."""
         rows = self.relevant(query, limit=limit)
-        facts = self.recall_facts(query, limit=6)
+        facts = self.recall_facts(query, limit=8, owner=owner)
         digest = self.get_digest(conversation_id) if conversation_id else ""
-        lines = ["## Legendary Memory"]
+        lines = ["## Legendary Memory", f"version={self.VERSION}"]
+        if owner:
+            lines.append(f"owner_scope: {owner}")
         if digest:
             lines.append(f"Thread digest: {digest[:500]}")
         if facts:
-            lines.append("Facts:")
+            lines.append("Facts (active, conflict-resolved):")
             for f in facts:
                 lines.append(f"- ({f.get('subject')}) {f.get('predicate')} → {f.get('object')}")
         if rows:
             lines.append("Durable:")
             for r in rows:
                 lines.append(f"- [{r.get('kind')}|id={r.get('id')}|c={r.get('confidence')}] {r.get('content')}")
-        if len(lines) == 1:
+        direct = guardian.answer_from_facts(facts, query, language="ar" if re.search(r"[\u0600-\u06FF]", query or "") else "en")
+        if direct:
+            lines.append(f"DirectAnswer: {direct}")
+        if len(lines) <= 2:
             return "(no durable memory hits)"
         return "\n".join(lines)
+
+    def direct_answer(self, query: str, *, owner: str = "", language: str = "ar") -> str | None:
+        facts = self.recall_facts(query, limit=12, owner=owner)
+        return guardian.answer_from_facts(facts, query, language=language)
+
+    def heal_conflicts(self, *, owner: str = "") -> dict[str, Any]:
+        """Resolve all subject+predicate conflicts by superseding losers."""
+        facts = self.list_active_facts(owner=owner, limit=500)
+        conflicts = guardian.find_fact_conflicts(facts)
+        superseded = 0
+        now = _now()
+        with self._lock:
+            for c in conflicts:
+                rows = [f for f in facts if f.get("subject") == c["subject"] and f.get("predicate") == c["predicate"]]
+                winner = guardian.pick_winner_fact(rows)
+                if not winner:
+                    continue
+                for r in rows:
+                    if r.get("id") == winner.get("id"):
+                        continue
+                    self.db.execute(
+                        "UPDATE legendary_facts SET status='superseded', last_seen=? WHERE id=?",
+                        (now, int(r["id"])),
+                    )
+                    superseded += 1
+            self.db.commit()
+        report = self.audit(owner=owner)
+        return {"ok": True, "superseded": superseded, "conflicts_before": len(conflicts), "audit": report}
+
+    def audit(self, *, owner: str = "") -> dict[str, Any]:
+        facts = self.list_active_facts(owner=owner, limit=500)
+        durable = list(self.memory.all_documents() or [])[:500]
+        if not guardian.is_coding_query("audit"):
+            # full durable list for secret/coding bleed detection
+            pass
+        report = guardian.integrity_report(facts=facts, durable=durable, owner=owner)
+        report["version"] = self.VERSION
+        return report
 
     def close(self):
         self.db.close()
 
 
 def re_split_tokens(text: str) -> list[str]:
-    import re
     return [t for t in re.split(r"[^\w\u0600-\u06FF]+", (text or "").lower()) if t]
 
 
 def re_sub_ws(text: str) -> str:
-    import re
     return re.sub(r"\s+", " ", (text or "")).strip()
 
 

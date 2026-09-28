@@ -195,13 +195,17 @@ class MockCommandProvider(ModelProvider):
         # Legendary memory / deep understanding asks
         if re.search(
             r"ذاكرة\s*أسطور|legendary\s*memory|تذكر\s*هذا|احفظ\s*هذا|افهمني|فهم\s*عالي|"
-            r"يتفوق|أقوى\s*الذكاء|memory\s*first|what\s*do\s*you\s*remember",
+            r"يتفوق|أقوى\s*الذكاء|memory\s*first|what\s*do\s*you\s*remember|"
+            r"تعارض\s*الذاكرة|تسريب\s*ذاكر|memory\s*audit|memory\s*heal|أصلح\s*الذاكرة|"
+            r"ما\s*اسمي|ماذا\s*أفضل",
             text + ar,
             re.I,
         ):
+            add("memory_status")
+            add("memory_audit")
             add("memory_search")
-            add("unified_brain_status")
-            add("app_control_status")
+            if re.search(r"أصلح|heal|تعارض|تسريب|conflict", text + ar, re.I):
+                add("memory_heal")
         # Unified one-mind asks — single pulse (speed + coherence)
         elif re.search(
             r"عقل\s*واحد|unified\s*brain|كل\s*شيء\s*يعمل|سلاسة|سرعة\s*متناه|"
@@ -391,9 +395,12 @@ class MockCommandProvider(ModelProvider):
                 insights.append(f"{name}: {_brief(res, 120)}")
 
         mem_lines = []
+        direct_answer = ""
         if memory_context and "no durable" not in memory_context.lower():
             for line in (memory_context or "").splitlines():
                 line = line.strip()
+                if line.startswith("DirectAnswer:"):
+                    direct_answer = line.split(":", 1)[-1].strip()
                 if line.startswith("-") or line.startswith("Thread") or line.startswith("Facts"):
                     mem_lines.append(line[:200])
                 if len(mem_lines) >= 5:
@@ -401,6 +408,21 @@ class MockCommandProvider(ModelProvider):
 
         latent = u.get("latent_need") or ""
         intent = u.get("intent") or "general"
+        # Memory-first: if we already have a conflict-free direct answer, lead with it.
+        if direct_answer and intent in {"memory_mind", "followup", "general"}:
+            if en:
+                return "\n".join([
+                    "From legendary memory (no conflicts):",
+                    direct_answer,
+                    *(["Supporting facts:", *[f"  {x}" for x in mem_lines[:4]]] if mem_lines else []),
+                    "Tell me what else to remember or correct.",
+                ])
+            return "\n".join([
+                "من الذاكرة الأسطورية (بدون تعارض):",
+                direct_answer,
+                *(["حقائق داعمة:", *[f"  {x}" for x in mem_lines[:4]]] if mem_lines else []),
+                "قل لي ماذا أتذكر أيضاً أو ما الذي أصحّحه.",
+            ])
         next_move = {
             "unify_system": ("اطلب نبضة عقل واحد أو راقب اللوحة الحية.", "Ask for a unified pulse or watch the live board."),
             "quantum_iot_speed": (

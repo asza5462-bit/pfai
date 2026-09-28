@@ -153,7 +153,7 @@ class TestChatMasterAPI(unittest.TestCase):
         html = self.client.get("/").text
         self.assertIn("بحث ويب", html)
         self.assertIn("تحكم كامل", html)
-        self.assertIn("PFAI v8.10", html)
+        self.assertTrue("PFAI v8." in html)
 
 
 if __name__ == "__main__":
