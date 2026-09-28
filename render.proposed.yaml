@@ -46,7 +46,7 @@ services:
       - key: PFAI_COOKIE_SECURE
         value: "true"
       # --- secrets (Render Dashboard / env group; never commit values) ---
-      - key: PFAI_OWNER_EMAIL
+      - key: PFAI_OWNER_USERNAME
         sync: false
       - key: PFAI_OWNER_SECRET_HASH
         sync: false

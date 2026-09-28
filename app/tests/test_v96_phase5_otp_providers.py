@@ -47,25 +47,25 @@ class TestOwnerPasscodeAuth(unittest.TestCase):
 
         oa.PBKDF2_ITERATIONS = 1000
         self.auth = OwnerAuthService(self.owner, root=str(self.root), session_ttl=30)
-        for k in ("PFAI_OWNER_EMAIL", "PFAI_OWNER_SECRET_HASH"):
+        for k in ("PFAI_OWNER_USERNAME", "PFAI_OWNER_SECRET_HASH"):
             os.environ.pop(k, None)
-        self.auth.run_setup("owner@example.com", STRONG, STRONG)
+        self.auth.run_setup("owneruser", STRONG, STRONG)
 
     def tearDown(self):
-        for k in ("PFAI_OWNER_EMAIL", "PFAI_OWNER_SECRET_HASH"):
+        for k in ("PFAI_OWNER_USERNAME", "PFAI_OWNER_SECRET_HASH"):
             os.environ.pop(k, None)
         self.tmp.cleanup()
 
     def test_passcode_login_session_logout(self):
-        ver = self.auth.login("owner@example.com", STRONG, client_key="c1")
+        ver = self.auth.login("owneruser", STRONG, client_key="c1")
         self.assertTrue(ver["ok"])
         token = ver["token"]
-        self.assertEqual(self.auth.resolve_session(token), "owner@example.com")
+        self.assertEqual(self.auth.resolve_session(token), "owneruser")
         self.auth.logout(token)
         self.assertIsNone(self.auth.resolve_session(token))
 
     def test_bad_passcode_fails_uniformly(self):
-        bad = self.auth.login("owner@example.com", "wrong-passcode!!", client_key="c2")
+        bad = self.auth.login("owneruser", "wrong-passcode!!", client_key="c2")
         self.assertFalse(bad["ok"])
         self.assertEqual(bad["error"], AUTH_FAIL_MESSAGE)
 
@@ -76,10 +76,10 @@ class TestOwnerPasscodeAuth(unittest.TestCase):
 
     def test_public_status_lists_passcode_not_email_otp(self):
         st = self.auth.public_status()
-        self.assertIn("passcode", st["auth_methods"])
+        self.assertIn("password", st["auth_methods"])
         self.assertNotIn("email_otp", st["auth_methods"])
         self.assertEqual(st.get("email_otp"), "REMOVED")
-        self.assertNotIn("passcode_hash", json.dumps(st))
+        self.assertNotIn("password_hash", json.dumps(st))
         self.assertNotIn("email_config", st)
 
 
@@ -225,7 +225,7 @@ class TestLocalOpenWeightProviders(unittest.TestCase):
 class TestPhase5APISecurity(unittest.TestCase):
     @classmethod
     def setUpClass(cls):
-        os.environ["PFAI_OWNER_EMAIL"] = "test-owner@example.invalid"
+        os.environ["PFAI_OWNER_USERNAME"] = "testowner"
         os.environ["PFAI_OWNER_SECRET_HASH"] = hashlib.sha256(b"test-secret").hexdigest()
         os.environ.pop("ANTHROPIC_API_KEY", None)
         # TestClient is HTTP — production Secure cookies would not be stored.
@@ -238,11 +238,11 @@ class TestPhase5APISecurity(unittest.TestCase):
         cls.owner_auth = OWNER_AUTH
 
     def test_otp_routes_gone(self):
-        r = self.client.post("/owner/otp/request", json={"email": "test-owner@example.invalid"})
+        r = self.client.post("/owner/otp/request", json={"username": "testowner"})
         self.assertEqual(r.status_code, 404)
         r2 = self.client.post(
             "/owner/otp/verify",
-            json={"email": "test-owner@example.invalid", "otp": "000000", "challenge_id": "x"},
+            json={"username": "testowner", "otp": "000000", "challenge_id": "x"},
         )
         self.assertEqual(r2.status_code, 404)
 
@@ -251,12 +251,12 @@ class TestPhase5APISecurity(unittest.TestCase):
         client = TestClient(self.client.app)
         bad = client.post(
             "/owner/login",
-            json={"email": "test-owner@example.invalid", "passcode": "wrong-secret"},
+            json={"username": "testowner", "password": "wrong-secret"},
         )
         self.assertIn(bad.status_code, (401, 429))
         ok = client.post(
             "/owner/login",
-            json={"email": "test-owner@example.invalid", "passcode": "test-secret"},
+            json={"username": "testowner", "password": "test-secret"},
         )
         self.assertEqual(ok.status_code, 200, ok.text)
         self.assertTrue(ok.json()["authenticated"])

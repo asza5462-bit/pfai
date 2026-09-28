@@ -111,18 +111,18 @@ class TestCommandAgentFlow(unittest.TestCase):
         self.tmp.cleanup()
 
     def test_health_command_completes_with_mock(self):
-        r = self.agent.handle("شغّل فحص الصحة", owner="owner@example.com")
+        r = self.agent.handle("شغّل فحص الصحة", owner="owneruser")
         self.assertEqual(r["status"], "completed")
         self.assertEqual(r["provider"], "mock-command")
         self.assertTrue(any(s["status"] == "executing" for s in r["timeline"]))
         self.assertTrue(any(t.get("tool") == "health_check" and t.get("ok") for t in r["tools"]))
 
     def test_sensitive_tool_waits_for_approval(self):
-        r = self.agent.handle("start continuous learning now", owner="owner@example.com")
+        r = self.agent.handle("start continuous learning now", owner="owneruser")
         self.assertEqual(r["status"], "waiting_for_approval")
         self.assertIsNotNone(r.get("pending"))
         self.assertFalse(self.flags["started"])
-        approved = self.agent.approve(r["pending"]["pending_id"], owner="owner@example.com")
+        approved = self.agent.approve(r["pending"]["pending_id"], owner="owneruser")
         self.assertTrue(approved["ok"])
         self.assertTrue(self.flags["started"])
         events = self.audit.recent(10)
@@ -130,8 +130,8 @@ class TestCommandAgentFlow(unittest.TestCase):
         self.assertTrue(any(e.get("approved") is True for e in events))
 
     def test_reject_sensitive_tool(self):
-        r = self.agent.handle("start continuous training", owner="owner@example.com")
-        rejected = self.agent.reject(r["pending"]["pending_id"], owner="owner@example.com")
+        r = self.agent.handle("start continuous training", owner="owneruser")
+        rejected = self.agent.reject(r["pending"]["pending_id"], owner="owneruser")
         self.assertTrue(rejected["ok"])
         self.assertFalse(self.flags["started"])
 
@@ -139,7 +139,7 @@ class TestCommandAgentFlow(unittest.TestCase):
 class TestChatAPIWiring(unittest.TestCase):
     @classmethod
     def setUpClass(cls):
-        os.environ["PFAI_OWNER_EMAIL"] = "test-owner@example.invalid"
+        os.environ["PFAI_OWNER_USERNAME"] = "testowner"
         os.environ["PFAI_OWNER_SECRET_HASH"] = hashlib.sha256(b"test-secret").hexdigest()
         os.environ.pop("ANTHROPIC_API_KEY", None)
         from pfai.api import app, runtime
@@ -153,7 +153,7 @@ class TestChatAPIWiring(unittest.TestCase):
 
     @classmethod
     def tearDownClass(cls):
-        os.environ.pop("PFAI_OWNER_EMAIL", None)
+        os.environ.pop("PFAI_OWNER_USERNAME", None)
         os.environ.pop("PFAI_OWNER_SECRET_HASH", None)
 
     def test_chat_requires_owner(self):

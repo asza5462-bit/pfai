@@ -27,7 +27,7 @@ PFAI 8.0 is a production-oriented AI control plane:
 1. Never delete or disable an existing user-facing feature without an explicit request.
 2. Never break existing API routes or response contracts.
 3. Never commit secrets (`ANTHROPIC_API_KEY`, owner plaintext secret, `.env`).
-4. Never put API keys or owner passcodes in source, README examples as real values, frontend, logs, or chat.
+4. Never put API keys or owner passwords in source, README examples as real values, frontend, logs, or chat.
 5. Continuous learning may curate/evaluate candidates; **promotion to active requires owner approval**.
 6. Network access is deny-by-default (`security.allow_network` + exact `allowed_domains`).
 7. Prefer small, modular fixes over rewrites.
@@ -71,7 +71,7 @@ python -m pytest tests/test_api_wiring.py tests/test_v81_continuous_enable_gate.
 - PHASE 2: `Orchestrator` + `ProviderRegistry`/`ModelRouter` wired; `/chat/*` preserved; `/orchestrate` additive
 - PHASE 3: deep LTM/Knowledge adapters, migration apply+backup, eval baselines, portable export (`/platform/ltm|eval|migrations|export*`)
 - PHASE 4: unified ToolPermission + AuthorizedExecutor, versioned skills, TaskPlanner, bounded heal; `/platform/plan|skills*|tools|heal*`
-- PHASE 5: Owner passcode auth (Email OTP permanently removed); Local/OpenWeight adapters; migration audit/verify; schema target 3
+- PHASE 5: Owner username+password auth (Email OTP / email login permanently removed); Local/OpenWeight adapters; migration audit/verify; schema target 3
 - PHASE 6: AutonomousTrainingOrchestrator
 - PHASE 7: TrainingRuntimeDetector + SkillPacks + Learning Control Center; schema target 5 + dataset/model registries; `/platform/training/*`; schema target 4; training isolated from authority
 - Constraints: additive only; no Anthropic force; no auto fine-tune; no external deploy unless asked

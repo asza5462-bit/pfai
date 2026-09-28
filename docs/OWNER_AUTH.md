@@ -1,15 +1,15 @@
 # Owner Authentication & First-time Setup
 
-PFAI owner privileges are **server-side only**. The Dashboard never stores the owner passcode.
+PFAI owner privileges are **server-side only**. The Dashboard never stores the owner password.
 
-**Email OTP was permanently removed.** Owner login is passcode + HttpOnly session only.
+**Email OTP and email-based login were permanently removed.** Owner login is username + password + HttpOnly session only.
 
 ## Environment variables (required for production)
 
 | Variable | Purpose |
 |---|---|
-| `PFAI_OWNER_EMAIL` | Sole authorized owner identity |
-| `PFAI_OWNER_SECRET_HASH` | Passcode hash only — **never** the plaintext passcode |
+| `PFAI_OWNER_USERNAME` | Sole authorized owner username (not an email) |
+| `PFAI_OWNER_SECRET_HASH` | Password hash only — **never** the plaintext password |
 | `PFAI_ENV` | Set to `production` (or `prod`) on real hosts |
 
 Optional:
@@ -22,7 +22,7 @@ Optional:
 | `PFAI_OWNER_LOCKOUT_SECONDS` | Lockout cooldown (default `900`) |
 | `PFAI_COOKIE_SECURE` | Dev override: `true` forces Secure cookies; `false` allows HTTP cookies locally |
 
-Do **not** set `PFAI_EMAIL_*`, `PFAI_SMTP_*`, or `PFAI_OTP_*` for authentication — those paths are gone.
+Do **not** set `PFAI_OWNER_EMAIL`, `PFAI_EMAIL_*`, `PFAI_SMTP_*`, or `PFAI_OTP_*` for authentication — those paths are gone.
 
 ## Production HTTPS + Secure cookies (required)
 
@@ -39,8 +39,8 @@ Local development may use HTTP when `PFAI_ENV` is unset/non-production and (opti
 ```bash
 cd app
 python -m pfai.hash_owner_secret
-# enter passcode (hidden) → prints pbkdf2_sha256$... hash
-export PFAI_OWNER_EMAIL='owner@example.com'
+# enter password (hidden) → prints pbkdf2_sha256$... hash
+export PFAI_OWNER_USERNAME='your_username'
 export PFAI_OWNER_SECRET_HASH='(paste hash here)'
 ```
 
@@ -50,34 +50,34 @@ Legacy SHA-256 hex hashes are still accepted for existing environments:
 python3 -c 'import hashlib; print(hashlib.sha256(b"YOUR_NEW_SECRET").hexdigest())'
 ```
 
-**Never** put the plaintext passcode in Git, README, frontend, tests, logs, or chat.
+**Never** put the plaintext password in Git, README, frontend, tests, logs, or chat.
 
 ## First-time setup (local / fresh volume)
 
 If no owner is configured and setup is not locked:
 
 1. Open the Dashboard → **صلاحية المالك**
-2. Enter owner email + strong passcode + confirmation
+2. Enter owner username + strong password + confirmation
 3. Server stores **hash only** under `data/security/` and writes `owner_setup.lock`
 4. Setup cannot be re-run to steal ownership
 
-Production hosts should still set `PFAI_OWNER_EMAIL` / `PFAI_OWNER_SECRET_HASH` as platform secrets.
+Production hosts should still set `PFAI_OWNER_USERNAME` / `PFAI_OWNER_SECRET_HASH` as platform secrets.
 
 ## Login / logout / session
 
-- `POST /owner/login` `{ "email", "passcode" }` → HttpOnly session cookie `pfai_owner_session` (SameSite=Strict; Secure on HTTPS / always in production)
+- `POST /owner/login` `{ "username", "password" }` → HttpOnly session cookie `pfai_owner_session` (SameSite=Strict; Secure on HTTPS / always in production)
 - `POST /owner/logout` → clears session
-- `GET /owner/status` → public flags (`setup_required`, `authenticated`, `auth_methods`) — no secrets; `email_otp=REMOVED`
+- `GET /owner/status` → public flags (`setup_required`, `authenticated`, `auth_methods`) — no secrets; `email_otp=REMOVED`, `email_auth=REMOVED`
 - Owner APIs also accept legacy `X-Owner-Secret` for automation (verified server-side)
 
 Failed logins use a **uniform** error and apply rate-limit lockout.
 
-Routes `/owner/otp/request` and `/owner/otp/verify` are removed (404).
+Routes `/owner/otp/request` and `/owner/otp/verify` are removed (404). Email is never used as the username.
 
-## Compromised development passcodes
+## Compromised development passwords
 
-Any passcode that was shared during development must be treated as **compromised**.
-Before any real deployment, choose a **new** production passcode, generate a new hash,
+Any password that was shared during development must be treated as **compromised**.
+Before any real deployment, choose a **new** production password, generate a new hash,
 and rotate `PFAI_OWNER_SECRET_HASH` (and clear old sessions).
 
 ## Public vs owner-gated surfaces (security notes)

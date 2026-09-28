@@ -44,20 +44,20 @@ class TestEmailProvidersPhase13(unittest.TestCase):
 
     def test_owner_auth_passcode_only_no_otp(self):
         tmp = tempfile.mkdtemp()
-        owner = OwnerControl(email_env="PFAI_OWNER_EMAIL_T13", secret_env="PFAI_OWNER_SECRET_T13")
+        owner = OwnerControl(username_env="PFAI_OWNER_USERNAME_T13", secret_env="PFAI_OWNER_SECRET_T13")
         oa = OwnerAuthService(owner, root=tmp)
-        os.environ["PFAI_OWNER_EMAIL_T13"] = "owner@example.com"
+        os.environ["PFAI_OWNER_USERNAME_T13"] = "owneruser"
         digest = oa.hash_passcode("StrongPassw0rd!")
         os.environ["PFAI_OWNER_SECRET_T13"] = digest
-        oa._write_credentials("owner@example.com", digest)
-        oa._write_setup_lock("owner@example.com")
+        oa._write_credentials("owneruser", digest)
+        oa._write_setup_lock("owneruser")
         self.assertFalse(hasattr(oa, "request_otp"))
         st = oa.public_status()
         self.assertNotIn("email_otp", st["auth_methods"])
-        self.assertIn("passcode", st["auth_methods"])
+        self.assertIn("password", st["auth_methods"])
         self.assertEqual(st.get("email_otp"), "REMOVED")
         self.assertNotIn("email_config", st)
-        login = oa.login("owner@example.com", "StrongPassw0rd!", client_key="t13")
+        login = oa.login("owneruser", "StrongPassw0rd!", client_key="t13")
         self.assertTrue(login["ok"])
 
 

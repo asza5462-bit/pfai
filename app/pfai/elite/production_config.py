@@ -25,14 +25,14 @@ def detect_production_config() -> dict[str, Any]:
     completed: list[str] = []
 
     # Owner auth — env presence only (never values)
-    if _set("PFAI_OWNER_EMAIL") and _set("PFAI_OWNER_SECRET_HASH"):
+    if _set("PFAI_OWNER_USERNAME") and _set("PFAI_OWNER_SECRET_HASH"):
         completed.append("owner_auth_env_present")
     else:
         missing.append(
             {
                 "id": "OWNER_AUTH_SECRETS",
-                "why": "Owner login email identity and passcode hash are required for protected routes",
-                "where": "Deployment secret store / host environment (PFAI_OWNER_EMAIL, PFAI_OWNER_SECRET_HASH)",
+                "why": "Owner login username and password hash are required for protected routes",
+                "where": "Deployment secret store / host environment (PFAI_OWNER_USERNAME, PFAI_OWNER_SECRET_HASH)",
                 "owner_action": "Set both variables from a private secret store; never commit values",
             }
         )
@@ -98,7 +98,7 @@ def detect_production_config() -> dict[str, Any]:
             "EMAIL_DELIVERY_STATUS": email_status,
             "EMAIL_LIFECYCLE_STATUS": email.get("EMAIL_LIFECYCLE_STATUS"),
             "SANDBOX_STATUS": sandbox.get("SANDBOX_STATUS"),
-            "OWNER_AUTH_ENV_PRESENT": _set("PFAI_OWNER_EMAIL") and _set("PFAI_OWNER_SECRET_HASH"),
+            "OWNER_AUTH_ENV_PRESENT": _set("PFAI_OWNER_USERNAME") and _set("PFAI_OWNER_SECRET_HASH"),
             "local_docker_deployable": deployable_locally,
             "public_deploy_ready_artifacts": ["Dockerfile", "docker-compose.yml", "render.yaml"],
             "completed_by_cursor": completed

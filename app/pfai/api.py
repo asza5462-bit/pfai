@@ -367,8 +367,9 @@ PLATFORM_SELF_CHECK = SelfCheck({
         'runtime': detect_runtime_capabilities(probe_inference=False).get('status'),
     },
     'owner_auth_ready': lambda: {
-        'ok': 'passcode' in OWNER_AUTH.public_status().get('auth_methods', []),
+        'ok': 'password' in OWNER_AUTH.public_status().get('auth_methods', []),
         'email_otp': 'REMOVED',
+        'email_auth': 'REMOVED',
         'auth_methods': OWNER_AUTH.public_status().get('auth_methods', []),
     },
     'local_model_adapter': lambda: _local_model_adapter_check(),
@@ -609,15 +610,15 @@ def require_owner(
     if not OWNER_AUTH.owner_configured() and OWNER_AUTH.setup_required():
         raise HTTPException(503, 'owner setup required: POST /owner/setup')
 
-    email = OWNER_AUTH.resolve_session(pfai_owner_session)
-    if email:
-        return email
+    username = OWNER_AUTH.resolve_session(pfai_owner_session)
+    if username:
+        return username
 
     if x_owner_secret and OWNER_AUTH.authenticate_secret_header(x_owner_secret):
-        return OWNER.owner_email() or 'owner'
+        return OWNER.owner_username() or 'owner'
 
-    if not OWNER.owner_email() and not OWNER_AUTH.owner_configured():
-        raise HTTPException(503, 'owner identity not configured: complete /owner/setup or set PFAI_OWNER_EMAIL')
+    if not OWNER.owner_username() and not OWNER_AUTH.owner_configured():
+        raise HTTPException(503, 'owner identity not configured: complete /owner/setup or set PFAI_OWNER_USERNAME')
     raise HTTPException(401, 'authentication required')
 
 
@@ -627,36 +628,36 @@ def owner_status(
     pfai_owner_session: str | None = Cookie(default=None, alias=COOKIE_NAME),
 ):
     """Public auth status — no secrets. Used by Dashboard to choose setup vs login."""
-    email = OWNER_AUTH.resolve_session(pfai_owner_session) or ''
-    return OWNER_AUTH.public_status(authenticated=bool(email), email=email)
+    username = OWNER_AUTH.resolve_session(pfai_owner_session) or ''
+    return OWNER_AUTH.public_status(authenticated=bool(username), username=username)
 
 
 class OwnerSetupBody(BaseModel):
-    email: str
-    passcode: str
-    passcode_confirm: str
+    username: str
+    password: str
+    password_confirm: str
 
 
 class OwnerLoginBody(BaseModel):
-    email: str
-    passcode: str
+    username: str
+    password: str
 
 
 @app.post('/owner/setup')
 def owner_setup(x: OwnerSetupBody, request: Request, response: Response):
     """First-time owner initialization only. Permanently disabled after success."""
-    result = OWNER_AUTH.run_setup(x.email, x.passcode, x.passcode_confirm)
-    # Never echo passcode fields back.
+    result = OWNER_AUTH.run_setup(x.username, x.password, x.password_confirm)
+    # Never echo password fields back.
     if not result.get('ok'):
         code = 409 if result.get('error') == 'owner setup is disabled' else 400
         raise HTTPException(code, result.get('error') or 'setup failed')
     # Auto-login session after setup
-    login = OWNER_AUTH.login(x.email, x.passcode, client_key=_client_key(request))
+    login = OWNER_AUTH.login(x.username, x.password, client_key=_client_key(request))
     if login.get('ok') and login.get('token'):
         response.set_cookie(COOKIE_NAME, login['token'], **_secure_cookie_flags(request))
     return {
         'ok': True,
-        'email': result.get('email'),
+        'username': result.get('username'),
         'setup_locked': True,
         'message': result.get('message'),
         'authenticated': bool(login.get('ok')),
@@ -665,15 +666,15 @@ def owner_setup(x: OwnerSetupBody, request: Request, response: Response):
 
 @app.post('/owner/login')
 def owner_login(x: OwnerLoginBody, request: Request, response: Response):
-    result = OWNER_AUTH.login(x.email, x.passcode, client_key=_client_key(request))
+    result = OWNER_AUTH.login(x.username, x.password, client_key=_client_key(request))
     if not result.get('ok'):
-        # Uniform failure (no email/passcode distinction); 429 when locked out.
+        # Uniform failure (no username/password distinction); 429 when locked out.
         status = 429 if result.get('locked') else 401
         raise HTTPException(status, AUTH_FAIL_MESSAGE)
     response.set_cookie(COOKIE_NAME, result['token'], **_secure_cookie_flags(request))
     return {
         'ok': True,
-        'email': result['email'],
+        'username': result['username'],
         'expires_in': result['expires_in'],
         'authenticated': True,
     }
