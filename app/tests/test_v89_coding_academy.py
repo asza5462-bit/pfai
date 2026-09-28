@@ -142,6 +142,8 @@ class TestCodingAPI(unittest.TestCase):
         body = r.json()
         self.assertIn("coding", body)
         self.assertEqual(body["coding"]["intent"], "teach")
+        self.assertIn("learning_context", body)
+        self.assertFalse(body["learning_context"].get("can_start_training_from_chat"))
 
     def test_coding_chat_review(self):
         r = self.client.post("/coding/chat", headers=self.h, json={

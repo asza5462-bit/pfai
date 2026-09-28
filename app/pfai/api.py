@@ -171,6 +171,81 @@ def _tool_coding_teach(track_id: str = 'python', goal: str = '', owner: str = 'o
 def _tool_coding_review(code: str = '', language: str = 'python'):
     return CODING_AGENT.reviewer.review(code or '', language=language or 'python')
 
+def _tool_coding_next_lesson(owner: str = 'owner', track_id: str = 'python'):
+    nxt = CODING_AGENT.tutor.adaptive_next(owner, track_id or 'python')
+    lesson_id = (nxt.get('next') or {}).get('id')
+    lesson = CODING_AGENT.tutor.lesson(track_id or 'python', lesson_id, reveal_solution=False) if lesson_id else None
+    return {'ok': True, 'track_id': track_id or 'python', 'next': nxt, 'lesson': lesson, 'trained': False}
+
+def _tool_learner_snapshot(owner: str = 'owner'):
+    profile = CODING_PROFILES.get_profile(owner)
+    progress = CODING_PROFILES.progress(owner)
+    skills = profile.get('skills') or {}
+    weak = [k for k, v in skills.items() if float(v or 0) < 0.6][:5]
+    return {
+        'ok': True,
+        'profile': {
+            'display_level': profile.get('display_level'),
+            'mode': profile.get('mode'),
+            'completed_lessons': len(profile.get('completed_lessons') or []),
+            'weak_skills': weak,
+        },
+        'progress': progress,
+        'tracks': CODING_CURRICULUM.list_tracks()[:10],
+        'training_from_chat': False,
+        'note': 'Academy snapshot only — model training never auto-starts from chat',
+    }
+
+def _tool_training_eligibility():
+    """Read-only next-training eligibility. Never starts a cycle."""
+    stats = AUTONOMOUS_TRAINING.learning_statistics()
+    elig = stats.get('next_training_eligibility') or {}
+    return {
+        'ok': True,
+        'eligible': bool(elig.get('eligible')),
+        'eligibility': elig,
+        'accepted_candidates': stats.get('accepted_candidates'),
+        'dataset_growth_since_last_trained': stats.get('dataset_growth_since_last_trained'),
+        'dataset_version': stats.get('dataset_version'),
+        'trained': False,
+        'can_start_from_chat': False,
+        'note': 'read-only; use Training UI or POST /platform/training/cycle (privileged) to train',
+    }
+
+def _tool_training_control_status():
+    """Read-only autonomous-training control-center snapshot."""
+    cc = AUTONOMOUS_TRAINING.control_center_status()
+    return {
+        'ok': True,
+        'labels': cc.get('labels') or {},
+        'status': cc.get('status') or cc.get('training_status') or cc,
+        'paused': cc.get('paused'),
+        'autonomous_enabled': cc.get('autonomous_enabled'),
+        'active_job': cc.get('active_job'),
+        'can_start_from_chat': False,
+        'note': 'read-only control-center snapshot',
+    }
+
+def _chat_learning_hub(owner: str) -> dict:
+    """Lightweight academy bridge for chat responses (no training mutation)."""
+    try:
+        profile = CODING_PROFILES.get_profile(owner)
+        progress = CODING_PROFILES.progress(owner)
+    except Exception:
+        profile, progress = {}, {}
+    skills = profile.get('skills') or {}
+    return {
+        'academy': {
+            'display_level': profile.get('display_level'),
+            'mode': profile.get('mode'),
+            'completed_lessons': len(profile.get('completed_lessons') or []),
+            'weak_skills': [k for k, v in skills.items() if float(v or 0) < 0.6][:5],
+        },
+        'progress': progress,
+        'training_from_chat': False,
+        'can_start_training_from_chat': False,
+    }
+
 CODING_TOOL_SPECS = list(DEFAULT_TOOLS) + [
     ToolSpec('run_sandbox', 'Execute learner code in isolated Python sandbox', 'write', False, {'code': 'string', 'test_code': 'string?'}),
     ToolSpec('coding_tracks', 'List extensible coding curriculum tracks', 'read', False, {}),
@@ -180,6 +255,10 @@ CODING_TOOL_SPECS = list(DEFAULT_TOOLS) + [
     ToolSpec('coding_progress', 'Learner coding progress snapshot', 'read', False, {'owner': 'string?'}),
     ToolSpec('coding_projects', 'List project-based learning catalog', 'read', False, {'level': 'string?'}),
     ToolSpec('coding_knowledge', 'Search coding knowledge base', 'read', False, {'q': 'string', 'limit': 'int?'}),
+    ToolSpec('coding_next_lesson', 'Next adaptive lesson for a track (read/teach)', 'read', False, {'owner': 'string?', 'track_id': 'string?'}),
+    ToolSpec('learner_snapshot', 'Academy + progress snapshot linked to chat (no training)', 'read', False, {'owner': 'string?'}),
+    ToolSpec('training_eligibility', 'Read next-training eligibility gates (no mutation)', 'read', False, {}),
+    ToolSpec('training_control_status', 'Read training control-center status (no mutation)', 'read', False, {}),
 ]
 
 # PHASE 4: shared authorization choke-point (server-side only)
@@ -233,6 +312,10 @@ TOOL_ROUTER = ToolRouter({
     'coding_progress': lambda owner='owner': CODING_PROFILES.progress(owner),
     'coding_projects': lambda level='': {'projects': CODING_CURRICULUM.projects(level or None)},
     'coding_knowledge': lambda q='', limit=8: {'results': CODING_CURRICULUM.knowledge_search(q, int(limit or 8))},
+    'coding_next_lesson': _tool_coding_next_lesson,
+    'learner_snapshot': _tool_learner_snapshot,
+    'training_eligibility': _tool_training_eligibility,
+    'training_control_status': _tool_training_control_status,
 }, specs=CODING_TOOL_SPECS, executor=PLATFORM_EXECUTOR)
 COMMAND_AGENT = CommandAgent(TOOL_ROUTER, COMMAND_MEMORY, COMMAND_AUDIT, model=runtime.model)
 COMMAND_AGENT.coding_agent = CODING_AGENT
@@ -3224,6 +3307,28 @@ def chat_message(x: ChatMessage, owner: str = Depends(access_public)):
         }
     result = COMMAND_AGENT.handle(msg, owner=owner, conversation_id=x.conversation_id, language=x.language)
     OWNER.authorize('CHAT_COMMAND', f'{owner} chat turn status={result.get("status")}')
+    coding = result.get('coding')
+    if isinstance(coding, dict):
+        if not result.get('learning_context'):
+            from .coding_agent import build_learning_context
+            result['learning_context'] = build_learning_context(coding)
+        result['learning_hub'] = _chat_learning_hub(owner)
+    else:
+        tools = result.get('tools') or []
+        edu_tools = {
+            'coding_teach', 'coding_tracks', 'coding_assess', 'coding_progress',
+            'coding_projects', 'coding_knowledge', 'coding_next_lesson', 'coding_review',
+            'learner_snapshot', 'training_eligibility', 'training_control_status', 'run_sandbox',
+        }
+        if any((t.get('tool') in edu_tools) for t in tools if isinstance(t, dict)):
+            result['learning_hub'] = _chat_learning_hub(owner)
+            result.setdefault('learning_context', {
+                'intent': 'tools',
+                'training_auto': False,
+                'can_start_training_from_chat': False,
+                'tools': [t.get('tool') for t in tools if isinstance(t, dict) and t.get('tool') in edu_tools],
+                'note': 'Education/training status via read-only tools — never auto-train from chat',
+            })
     return result
 
 @app.post('/chat/approve/{pending_id}')

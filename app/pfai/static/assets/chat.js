@@ -1,13 +1,16 @@
-/* PFAI Command Chat — Brain UI wired to /chat/* APIs */
+/* PFAI Command Chat — Advanced Brain UI linked to Academy + Training (read-only) */
 (function () {
   let conversationId = localStorage.getItem('pfai_chat_conversation') || null;
   let busy = false;
+  let lastExercise = null; // {track_id, lesson_id, starter}
 
   const STATUS_LABEL = {
     thinking: { ar: 'فهم الطلب', en: 'Understanding' },
     planning: { ar: 'تخطيط', en: 'Planning' },
     calling_tool: { ar: 'اختيار القدرات', en: 'Selecting capabilities' },
     executing: { ar: 'تنفيذ', en: 'Executing' },
+    teaching: { ar: 'تعليم', en: 'Teaching' },
+    reviewing: { ar: 'مراجعة', en: 'Reviewing' },
     waiting_for_approval: { ar: 'بانتظار الموافقة', en: 'Waiting for approval' },
     completed: { ar: 'اكتمل', en: 'Completed' },
     failed: { ar: 'فشل', en: 'Failed' },
@@ -60,6 +63,201 @@
     </div>`;
   }
 
+  function renderLearningContext(ctx, lang) {
+    if (!ctx) return '';
+    const bits = [];
+    if (ctx.intent) bits.push(`${lang === 'en' ? 'intent' : 'نية'}: ${ctx.intent}`);
+    if (ctx.mode) bits.push(`${lang === 'en' ? 'mode' : 'وضع'}: ${ctx.mode}`);
+    if (ctx.track_id) bits.push(`track: ${ctx.track_id}`);
+    if (ctx.lesson_title || ctx.lesson_id) bits.push(`${ctx.lesson_title || ctx.lesson_id}`);
+    if (ctx.assessment_count) bits.push(`assessment: ${ctx.assessment_count}`);
+    bits.push(lang === 'en' ? 'training auto: off' : 'تدريب تلقائي: متوقف');
+    return `<div class="chat-learn-strip">${bits.map(b => `<span class="chat-chip">${esc(String(b))}</span>`).join('')}</div>`;
+  }
+
+  function renderTrainingChips(tools, lang) {
+    if (!tools || !tools.length) return '';
+    const chips = [];
+    tools.forEach(t => {
+      if (!t || !t.ok) return;
+      const name = t.tool || '';
+      const res = t.result || {};
+      if (name === 'training_eligibility' || (res.eligibility && res.can_start_from_chat === false && 'eligible' in res)) {
+        const elig = res.eligible;
+        const reason = (res.eligibility && (res.eligibility.reason || (res.eligibility.reasons || [])[0])) || res.reason || '';
+        chips.push(`<span class="chat-chip ${elig ? 'ok' : 'warn'}">${lang === 'en' ? 'Training eligible' : 'أهلية التدريب'}: ${elig ? 'YES' : 'NO'}${reason ? ' · ' + esc(String(reason).slice(0, 80)) : ''}</span>`);
+        chips.push(`<span class="chat-chip muted">${lang === 'en' ? 'Cannot start from chat' : 'لا يبدأ من الشات'}</span>`);
+      }
+      if (name === 'training_control_status') {
+        chips.push(`<span class="chat-chip">control: ${esc(String(res.paused === true ? 'paused' : (res.autonomous_enabled ? 'autonomous' : 'manual')))}</span>`);
+      }
+      if (name === 'learner_snapshot' && res.profile) {
+        chips.push(`<span class="chat-chip ok">${lang === 'en' ? 'Level' : 'مستوى'}: ${esc(res.profile.display_level || '—')}</span>`);
+        if ((res.profile.weak_skills || []).length) {
+          chips.push(`<span class="chat-chip warn">${lang === 'en' ? 'Weak' : 'ضعيف'}: ${esc((res.profile.weak_skills || []).slice(0, 3).join(', '))}</span>`);
+        }
+      }
+    });
+    if (!chips.length) return '';
+    return `<div class="chat-learn-strip">${chips.join('')}</div>`;
+  }
+
+  function renderCodingCard(coding, lang) {
+    if (!coding) return '';
+    const parts = [];
+    const intent = coding.intent || '';
+    const path = coding.path || {};
+    const lessonWrap = coding.lesson || {};
+    const lesson = lessonWrap.lesson || {};
+    const exercise = lessonWrap.exercise || {};
+    const trackId = coding.track_id || path.track_id || lesson.track_id || 'python';
+    const lessonId = lesson.id;
+
+    if (intent === 'teach' && path && path.path) {
+      const items = (path.path || []).slice(0, 6).map(p =>
+        `<li><strong>${esc(p.title || p.id)}</strong> <span class="muted">${esc(p.level || '')}</span></li>`
+      ).join('');
+      parts.push(`<div class="chat-coding-card">
+        <div class="chat-coding-head">${lang === 'en' ? 'Learning path' : 'مسار تعليمي'} · ${esc(path.track_id || trackId)} · ${esc(path.recommended_level || '')}</div>
+        <ul class="chat-path-list">${items}</ul>
+        <div class="chat-actions">
+          <button class="btn" data-chat-quick-set="أعطني تمرينًا في ${esc(path.track_id || trackId)}">${lang === 'en' ? 'Next exercise' : 'التمرين التالي'}</button>
+          <button class="btn" data-goto-academy="1">${lang === 'en' ? 'Open Academy' : 'فتح الأكاديمية'}</button>
+        </div>
+      </div>`);
+    }
+
+    if ((intent === 'exercise' || exercise.prompt) && lessonId) {
+      lastExercise = {
+        track_id: trackId,
+        lesson_id: lessonId,
+        starter: exercise.starter || '',
+      };
+      const starter = exercise.starter || '# write your solution\n';
+      parts.push(`<div class="chat-coding-card" data-ex-track="${esc(trackId)}" data-ex-lesson="${esc(lessonId)}">
+        <div class="chat-coding-head">${lang === 'en' ? 'Exercise' : 'تمرين'}: ${esc(lesson.title || lessonId)}</div>
+        <div class="chat-ex-prompt">${esc(exercise.prompt || '')}</div>
+        <textarea class="textarea chat-ex-code" rows="8">${esc(starter)}</textarea>
+        <div class="chat-actions">
+          <button class="btn primary" data-ex-submit="1">${lang === 'en' ? 'Submit solution' : 'إرسال الحل'}</button>
+          <button class="btn" data-ex-hint="1">${lang === 'en' ? 'Hint' : 'تلميح'}</button>
+          <button class="btn" data-goto-academy="1">${lang === 'en' ? 'Academy' : 'الأكاديمية'}</button>
+        </div>
+        <div class="chat-ex-result muted" hidden></div>
+      </div>`);
+    }
+
+    if (intent === 'assess' && coding.assessment) {
+      const n = coding.assessment.count || (coding.assessment.items || []).length;
+      parts.push(`<div class="chat-coding-card">
+        <div class="chat-coding-head">${lang === 'en' ? 'Skill assessment ready' : 'اختبار المهارات جاهز'} · ${n} ${lang === 'en' ? 'items' : 'أسئلة'}</div>
+        <div class="muted">${lang === 'en' ? 'Submit answers via Academy or /coding/assessment/submit' : 'أرسل الإجابات من الأكاديمية أو /coding/assessment/submit'}</div>
+        <div class="chat-actions"><button class="btn" data-goto-academy="1">${lang === 'en' ? 'Open Academy' : 'فتح الأكاديمية'}</button></div>
+      </div>`);
+    }
+
+    if (intent === 'review' && coding.review) {
+      const findings = coding.review.findings || [];
+      const high = findings.filter(f => f.severity === 'high').length;
+      parts.push(`<div class="chat-coding-card">
+        <div class="chat-coding-head">${lang === 'en' ? 'Code review' : 'مراجعة كود'} · ${findings.length} notes (${high} high)</div>
+        <ul class="chat-path-list">${findings.slice(0, 5).map(f =>
+          `<li><strong>${esc(f.category || '')}</strong> ${esc((f.message || f.detail || '').slice(0, 140))}</li>`
+        ).join('')}</ul>
+      </div>`);
+    }
+
+    if (intent === 'project' && coding.projects) {
+      parts.push(`<div class="chat-coding-card">
+        <div class="chat-coding-head">${lang === 'en' ? 'Projects' : 'مشاريع'}</div>
+        <ul class="chat-path-list">${(coding.projects || []).slice(0, 5).map(p =>
+          `<li><strong>${esc(p.title || p.id)}</strong> <span class="muted">${esc(p.level || '')}</span></li>`
+        ).join('')}</ul>
+      </div>`);
+    }
+
+    return parts.join('');
+  }
+
+  function wireCodingCard(root) {
+    if (!root) return;
+    root.querySelectorAll('[data-goto-academy]').forEach(btn => {
+      btn.onclick = () => {
+        const navBtn = document.querySelector('[data-id="academy"]');
+        if (typeof show === 'function') show('academy', navBtn);
+        if (typeof loadAcademy === 'function') loadAcademy();
+      };
+    });
+    root.querySelectorAll('[data-chat-quick-set]').forEach(btn => {
+      btn.onclick = () => {
+        const input = $('chatInput');
+        if (input) {
+          input.value = btn.getAttribute('data-chat-quick-set');
+          sendChat();
+        }
+      };
+    });
+    root.querySelectorAll('[data-ex-submit]').forEach(btn => {
+      btn.onclick = () => submitExerciseFromCard(btn.closest('.chat-coding-card'));
+    });
+    root.querySelectorAll('[data-ex-hint]').forEach(btn => {
+      btn.onclick = () => hintFromCard(btn.closest('.chat-coding-card'));
+    });
+  }
+
+  async function submitExerciseFromCard(card) {
+    if (!card || busy) return;
+    const track = card.getAttribute('data-ex-track');
+    const lesson = card.getAttribute('data-ex-lesson');
+    const codeEl = card.querySelector('.chat-ex-code');
+    const out = card.querySelector('.chat-ex-result');
+    const code = (codeEl && codeEl.value) || '';
+    setBusy(true);
+    try {
+      const r = await api('/coding/exercise/submit', {
+        method: 'POST',
+        body: { track_id: track, lesson_id: lesson, code },
+      });
+      const passed = !!r.passed;
+      const cand = r.learning_candidate || {};
+      if (out) {
+        out.hidden = false;
+        out.className = 'chat-ex-result ' + (passed ? 'ok' : 'bad');
+        out.textContent = (passed ? '✓ Passed' : '✗ Failed')
+          + (r.message ? ' · ' + r.message : '')
+          + (r.stderr ? '\n' + r.stderr.slice(0, 300) : '')
+          + `\nlearning_candidate: ${cand.eligibility || 'n/a'} · trained=${cand.trained === true}`;
+      }
+      toast(passed ? 'تم اجتياز التمرين' : 'فشل التمرين', !passed);
+      refreshLearningRail();
+      if (typeof loadAcademy === 'function') loadAcademy();
+    } catch (e) {
+      if (out) { out.hidden = false; out.className = 'chat-ex-result bad'; out.textContent = e.message; }
+      toast(e.message, true);
+    } finally {
+      setBusy(false);
+    }
+  }
+
+  async function hintFromCard(card) {
+    if (!card) return;
+    const track = card.getAttribute('data-ex-track');
+    const lesson = card.getAttribute('data-ex-lesson');
+    const out = card.querySelector('.chat-ex-result');
+    try {
+      const r = await api('/coding/hint', { method: 'POST', body: { track_id: track, lesson_id: lesson } });
+      if (out) {
+        out.hidden = false;
+        out.className = 'chat-ex-result muted';
+        out.textContent = r.exhausted
+          ? (r.message || 'No more hints')
+          : `Hint #${r.level}: ${r.hint || ''}`;
+      }
+    } catch (e) {
+      toast(e.message, true);
+    }
+  }
+
   function appendBubble(role, content, meta) {
     const box = $('chatLog');
     if (!box) return;
@@ -90,9 +288,15 @@
     const citeHtml = (meta && meta.citations && meta.citations.length)
       ? `<div class="chat-meta muted">citations: ${meta.citations.length} (provenance retained; not fabricated)</div>`
       : '';
+    const learnHtml = renderLearningContext(meta && meta.learning_context, lang);
+    const trainHtml = renderTrainingChips(meta && meta.tools, lang);
+    const codingHtml = role === 'assistant' ? renderCodingCard(meta && meta.coding, lang) : '';
     div.innerHTML = `
       <div class="chat-role">${role === 'user' ? 'المالك / Owner' : 'عقل PFAI / Brain'}</div>
       <div class="chat-text">${esc(content)}</div>
+      ${learnHtml}
+      ${trainHtml}
+      ${codingHtml}
       ${renderProgress(meta && meta.progress, lang)}
       ${renderTimeline(meta && meta.timeline, lang)}
       ${actions}
@@ -105,6 +309,7 @@
     box.scrollTop = box.scrollHeight;
     div.querySelectorAll('[data-approve]').forEach(btn => btn.onclick = () => approvePending(btn.getAttribute('data-approve')));
     div.querySelectorAll('[data-reject]').forEach(btn => btn.onclick = () => rejectPending(btn.getAttribute('data-reject')));
+    wireCodingCard(div);
   }
 
   function setBusy(v) {
@@ -115,6 +320,45 @@
     if (input) input.disabled = v;
     const ind = $('chatBusy');
     if (ind) ind.style.display = v ? 'inline-flex' : 'none';
+  }
+
+  function applyLearningHub(hub) {
+    if (!hub || !hub.academy) return;
+    const a = hub.academy;
+    const elLevel = $('chatLearnLevel');
+    const elMode = $('chatLearnMode');
+    const elDone = $('chatLearnDone');
+    const elWeak = $('chatLearnWeak');
+    if (elLevel) elLevel.textContent = a.display_level || '—';
+    if (elMode) elMode.textContent = a.mode || '—';
+    if (elDone) elDone.textContent = a.completed_lessons != null ? a.completed_lessons : '—';
+    if (elWeak) elWeak.textContent = (a.weak_skills || []).slice(0, 3).join(', ') || '—';
+  }
+
+  async function refreshLearningRail() {
+    try {
+      const [profile, elig] = await Promise.all([
+        api('/coding/profile'),
+        api('/platform/training/eligibility').catch(() => null),
+      ]);
+      applyLearningHub({
+        academy: {
+          display_level: profile.display_level,
+          mode: profile.mode,
+          completed_lessons: (profile.completed_lessons || []).length,
+          weak_skills: Object.entries(profile.skills || {}).filter(([, v]) => Number(v) < 0.6).map(([k]) => k),
+        },
+      });
+      const chip = $('chatTrainElig');
+      if (chip && elig) {
+        chip.textContent = elig.eligible
+          ? 'Eligible · لا يبدأ من الشات'
+          : `Not eligible · ${(elig.reason || (elig.blockers || [])[0] || '—').toString().slice(0, 48)}`;
+        chip.className = 'chat-chip ' + (elig.eligible ? 'ok' : 'warn');
+      }
+    } catch (e) {
+      /* rail is best-effort */
+    }
   }
 
   async function sendChat() {
@@ -141,7 +385,12 @@
         response_kind: r.response_kind,
         information_source: r.information_source,
         citations: r.citations,
+        coding: r.coding,
+        learning_context: r.learning_context,
+        tools: r.tools,
       });
+      if (r.learning_hub) applyLearningHub(r.learning_hub);
+      else refreshLearningRail();
       if (r.status === 'failed') toast('الأمر فشل / Command failed', true);
       else if (r.status === 'waiting_for_approval') toast('بانتظار موافقتك / Waiting for approval');
       else toast('تم / Done');
@@ -196,6 +445,8 @@
           pending: (m.meta || {}).pending,
           provider: (m.meta || {}).provider,
           response_kind: (m.meta || {}).response_kind,
+          coding: (m.meta || {}).coding,
+          learning_context: (m.meta || {}).learning_context,
           status: m.status,
         });
       });
@@ -207,9 +458,21 @@
   async function newChat() {
     conversationId = null;
     localStorage.removeItem('pfai_chat_conversation');
+    lastExercise = null;
     const box = $('chatLog');
     if (box) box.innerHTML = '';
-    appendBubble('assistant', 'مرحباً — أنا عقل PFAI. اطلب تحليل النظام، فحص الصحة، مراجعة البيانات، أو أي أمر تشغيلي. الإجراءات الحساسة تتطلب موافقتك.\n\nHello — I am the PFAI brain. Ask for system analysis, health checks, data review, or operational commands. Sensitive actions require your approval.', { status: 'completed', provider: 'ready' });
+    appendBubble('assistant',
+      'مرحباً — أنا عقل PFAI المتقدم.\n'
+      + '• أوامر تشغيلية · أدوات · ذاكرة · موافقة المالك\n'
+      + '• مرتبط بأكاديمية البرمجة: علمني / تمرين / اختبر مستواي\n'
+      + '• مرتبط بالتدريب: اسأل عن أهلية التدريب (قراءة فقط — لا يبدأ التدريب من الشات)\n\n'
+      + 'Hello — Advanced PFAI brain.\n'
+      + '• Ops commands · tools · memory · owner approval\n'
+      + '• Linked to Coding Academy: teach / exercise / assess\n'
+      + '• Linked to training eligibility (read-only — never auto-trains from chat)',
+      { status: 'completed', provider: 'ready' }
+    );
+    refreshLearningRail();
   }
 
   async function loadChatAudit() {
@@ -229,8 +492,13 @@
       const r = await api('/chat/tools');
       const el = $('chatTools');
       if (!el) return;
-      el.innerHTML = `<div class="muted">provider: ${esc(r.provider)}</div>` +
-        (r.tools || []).map(t => `<span class="tag">${esc(t.name)}${t.requires_approval ? ' 🔒' : ''}</span>`).join('');
+      const tools = r.tools || [];
+      const edu = tools.filter(t => /coding_|training_|learner_|run_sandbox/.test(t.name || ''));
+      el.innerHTML = `<div class="muted">provider: ${esc(r.provider)} · ${tools.length} tools</div>`
+        + `<div class="chat-learn-strip" style="margin:8px 0">${edu.map(t =>
+          `<span class="chat-chip">${esc(t.name)}${t.requires_approval ? ' 🔒' : ''}</span>`
+        ).join('')}</div>`
+        + tools.map(t => `<span class="tag">${esc(t.name)}${t.requires_approval ? ' 🔒' : ''}</span>`).join('');
     } catch (e) {
       const el = $('chatTools');
       if (el) el.textContent = e.message;
@@ -256,13 +524,14 @@
       $('chatInput').value = btn.getAttribute('data-chat-quick');
       sendChat();
     });
-    if (!$('chatLog').dataset.booted) {
+    if ($('chatLog') && !$('chatLog').dataset.booted) {
       $('chatLog').dataset.booted = '1';
       if (conversationId) loadChatHistory();
       else newChat();
     }
     loadChatTools();
     loadChatAudit();
+    refreshLearningRail();
   };
 
   window.loadCommandChat = function loadCommandChat() {
@@ -270,10 +539,10 @@
     loadChatHistory();
     loadChatTools();
     loadChatAudit();
+    refreshLearningRail();
   };
 
   window.loadAcademy = async function loadAcademy() {
-
     try {
       const [profile, tracks, projects] = await Promise.all([
         api('/coding/profile'),
@@ -292,6 +561,7 @@
       $('acProjects').innerHTML = (projects.projects || []).map(p =>
         `<div class="status-card"><strong>${esc(p.title)}</strong><span>${esc(p.level)} · ${esc((p.skills || []).join(', '))}</span></div>`
       ).join('') || '<div class="empty">لا توجد مشاريع</div>';
+      refreshLearningRail();
     } catch (e) {
       toast(e.message, true);
     }
@@ -302,6 +572,10 @@
       const r = await api('/coding/path?track_id=' + encodeURIComponent(id) + '&goal=' + encodeURIComponent('Learn ' + id));
       $('acProfile').textContent = JSON.stringify(r, null, 2);
       toast('تم بناء مسار تعليمي');
+      const navBtn = document.querySelector('[data-id="chat"]');
+      if (typeof show === 'function') show('chat', navBtn);
+      $('chatInput').value = 'علمني ' + id;
+      sendChat();
     } catch (e) { toast(e.message, true); }
   };
 
@@ -309,7 +583,11 @@
     try {
       const r = await api('/coding/assessment');
       $('acProfile').textContent = JSON.stringify(r, null, 2);
-      toast('assessment جاهز — استخدم /coding/assessment/submit أو Chat');
+      toast('assessment جاهز — استخدم Chat أو /coding/assessment/submit');
+      const navBtn = document.querySelector('[data-id="chat"]');
+      if (typeof show === 'function') show('chat', navBtn);
+      $('chatInput').value = 'اختبر مستواي';
+      sendChat();
     } catch (e) { toast(e.message, true); }
   };
 

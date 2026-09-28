@@ -43,8 +43,19 @@ class MockCommandProvider(ModelProvider):
                 add("system_status")
         if re.search(r"module|وحدات|مكون", text + ar):
             add("modules_list")
-        if re.search(r"continuous|تعلم|training|تدريب", text + ar):
+        if re.search(
+            r"eligib|أهلية|حالة\s*التدريب|training\s*status|جاهزية\s*التدريب|"
+            r"هل\s*(التدريب|النموذج)|next\s*training|can\s*we\s*train|متى\s*نتدرب",
+            text + ar,
+            re.I,
+        ):
+            add("training_eligibility")
+            add("training_control_status")
+        elif re.search(r"continuous|تعلم\s*مستمر|continuous\s*learning", text + ar):
             add("continuous_status")
+        elif re.search(r"\btraining\b|تدريب\s*النموذج|تدريب\s*النماذج", text + ar):
+            add("training_control_status")
+            add("training_eligibility")
         if re.search(r"deploy|نشر", text + ar):
             add("deployments_list")
         if re.search(r"recover|استرداد", text + ar):
@@ -57,7 +68,7 @@ class MockCommandProvider(ModelProvider):
             add("chat_audit_recent")
         if re.search(r"improv|تحسين|اقترح", text + ar):
             add("propose_improvement")
-        if re.search(r"علمني|teach|learn|مبتدئ|تمرين|python|javascript", text + ar):
+        if re.search(r"علمني|teach|learn|مبتدئ|تمرين|python|javascript|مسار\s*تعليمي|أكاديمية", text + ar):
             add("coding_teach")
             add("coding_tracks")
         if re.search(r"اختبر مستواي|assess|assessment", text + ar):
@@ -68,6 +79,12 @@ class MockCommandProvider(ModelProvider):
             add("coding_projects")
         if re.search(r"sandbox|نفذ الكود|run code", text + ar):
             add("run_sandbox")
+        if re.search(r"الدرس\s*التالي|next\s*lesson|تمرين\s*التالي", text + ar):
+            add("coding_next_lesson")
+            add("coding_progress")
+        if re.search(r"تقدمي|learner\s*snapshot|لوحة\s*التعلم|skill\s*profile|مهاراتي", text + ar):
+            add("learner_snapshot")
+            add("coding_progress")
         if re.search(r"search knowledge|ابحث.*معرف|راجع.*بيانات|بيانات", text + ar):
             add("knowledge_search")
             add("memory_search")

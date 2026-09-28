@@ -82,6 +82,7 @@ class CodingAgent:
         result.setdefault("intent", intent["name"])
         if result.get("ok", True):
             result["timeline"].append({"status": "completed", "detail": "Coding turn finished"})
+        result["learning_context"] = build_learning_context(result)
         return result
 
     def _detect_intent(self, message: str, code: str = "") -> dict:
@@ -150,7 +151,15 @@ class CodingAgent:
                 return {"ok": True, "reply": "No remaining lessons in this track. Try another track or a project."}
             timeline.append({"status": "teaching", "detail": f"Lesson {lesson_id}"})
             lesson = self.tutor.lesson(track_id, lesson_id, reveal_solution=False)
-            return {"ok": True, "reply": f"Exercise: {lesson.get('lesson',{}).get('title')}. Submit code to /coding/exercise/submit. Ask for hints if stuck.", "lesson": lesson, "next": nxt}
+            title = (lesson.get("lesson") or {}).get("title") or lesson_id
+            prompt = ((lesson.get("exercise") or {}).get("prompt") or "")[:280]
+            reply = (
+                f"Exercise ready: {title} ({track_id}/{lesson_id}).\n"
+                f"{prompt}\n"
+                "Use the chat exercise card to submit code, or ask for a hint. "
+                "Passing sandbox work may become a learning candidate — training never auto-starts from chat."
+            )
+            return {"ok": True, "reply": reply, "lesson": lesson, "next": nxt, "track_id": track_id}
         if name == "hint":
             # Expect track/lesson encoded in message like track:lesson or use python first incomplete
             track_id, lesson_id = self._parse_lesson_ref(message, owner)
@@ -232,3 +241,35 @@ def _extract_code(message: str) -> str:
             lines = lines[1:]
         return "\n".join(lines).strip()
     return ""
+
+
+def build_learning_context(coding: dict[str, Any] | None) -> dict[str, Any]:
+    """Compact education bridge for Command Chat UI (never starts training)."""
+    coding = coding or {}
+    path = coding.get("path") or {}
+    lesson_wrap = coding.get("lesson") or {}
+    lesson = lesson_wrap.get("lesson") if isinstance(lesson_wrap.get("lesson"), dict) else {}
+    exercise = lesson_wrap.get("exercise") if isinstance(lesson_wrap.get("exercise"), dict) else {}
+    nxt = coding.get("next") or {}
+    track_id = (
+        coding.get("track_id")
+        or path.get("track_id")
+        or lesson.get("track_id")
+        or None
+    )
+    return {
+        "mode": coding.get("mode"),
+        "intent": coding.get("intent"),
+        "track_id": track_id,
+        "lesson_id": lesson.get("id"),
+        "lesson_title": lesson.get("title"),
+        "has_exercise": bool(exercise),
+        "hints_available": exercise.get("hints_available"),
+        "path_len": len(path.get("path") or []) or None,
+        "assessment_count": (coding.get("assessment") or {}).get("count"),
+        "project_count": len(coding.get("projects") or []) or None,
+        "next_lesson_id": (nxt.get("next") or {}).get("id") if isinstance(nxt, dict) else None,
+        "training_auto": False,
+        "can_start_training_from_chat": False,
+        "note": "Education linked; model training never auto-starts from chat",
+    }

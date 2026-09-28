@@ -68,14 +68,24 @@ class CommandAgent:
         self.memory.add_message(cid, "user", message, status="completed")
 
         # Delegate coding-education intents to Coding Academy brain when wired.
+        # Training eligibility / control status stay on ToolRouter (read-only).
         coding_agent = getattr(self, "coding_agent", None)
-        if coding_agent is not None and _looks_like_coding_intent(message):
+        if (
+            coding_agent is not None
+            and _looks_like_coding_intent(message)
+            and not _looks_like_training_status_intent(message)
+        ):
             try:
+                from .coding_agent import build_learning_context
                 coding = coding_agent.handle(message, owner=owner)
                 reply = coding.get("reply") or json.dumps(coding, ensure_ascii=False)[:1200]
                 status = "completed" if coding.get("ok", True) else "failed"
                 tl = coding.get("timeline") or [{"status": "teaching", "detail": "coding academy"}]
-                self.memory.add_message(cid, "assistant", reply, status=status, meta={"coding": coding, "timeline": tl})
+                learning_context = coding.get("learning_context") or build_learning_context(coding)
+                self.memory.add_message(
+                    cid, "assistant", reply, status=status,
+                    meta={"coding": coding, "timeline": tl, "learning_context": learning_context},
+                )
                 self.audit.record(
                     actor=owner, command=message, tool="coding_agent", status=status,
                     result={"intent": coding.get("intent")}, required_approval=False, conversation_id=cid,
@@ -86,6 +96,7 @@ class CommandAgent:
                     "reply": reply,
                     "timeline": tl,
                     "coding": coding,
+                    "learning_context": learning_context,
                     "provider": coding.get("provider") or self.provider_name(),
                     "status": status,
                     "language": lang,
@@ -317,11 +328,24 @@ def _detect_lang(text: str) -> str:
     return "en"
 
 
+def _looks_like_training_status_intent(message: str) -> bool:
+    """Model-training status / eligibility — not Coding Academy teach intents."""
+    return bool(re.search(
+        r"أهلية\s*التدريب|training\s*eligibility|حالة\s*التدريب|training\s*status|"
+        r"جاهزية\s*التدريب|control.?center.*train|هل\s*(التدريب|النموذج).*جاهز|"
+        r"next\s*training|can\s*we\s*train|متى\s*نتدرب",
+        message or "",
+        re.I,
+    ))
+
+
 def _looks_like_coding_intent(message: str) -> bool:
     return bool(re.search(
         r"علمني|teach me|learn |مبتدئ|full stack|اختبر مستواي|assess|تمرين|exercise|راجع هذا الكود|code review|"
         r"تلميح|hint|اشرح لي هذا الخطأ|debug|مشروع أتدرب|project|javascript|python|architecture|"
-        r"لماذا هذا الكود|learning mode|engineering mode|sandbox|اختبرني",
+        r"لماذا هذا الكود|learning mode|engineering mode|sandbox|اختبرني|"
+        r"مسار تعليمي|learning path|أكاديمية|coding academy|"
+        r"الدرس التالي|next lesson",
         message or "",
         re.I,
     ))
