@@ -277,7 +277,7 @@ class TestAPIEndpoints(unittest.TestCase):
         def fake_owner():
             return "owner-test"
 
-        api_mod.app.dependency_overrides[api_mod.require_owner] = fake_owner
+        api_mod.app.dependency_overrides[api_mod.access_public] = fake_owner
         try:
             r = self.client.post("/chat", json={"message": "What is recursion?"})
             self.assertEqual(r.status_code, 200, r.text)
@@ -286,12 +286,12 @@ class TestAPIEndpoints(unittest.TestCase):
             self.assertIn(body.get("phase"), (22, 23))
             self.assertFalse(body.get("PHASE_24_ALLOWED", True))
         finally:
-            api_mod.app.dependency_overrides.pop(api_mod.require_owner, None)
+            api_mod.app.dependency_overrides.pop(api_mod.access_public, None)
 
     def test_runtime_diagnostics_endpoints(self):
         from pfai import api as api_mod
 
-        api_mod.app.dependency_overrides[api_mod.require_owner] = lambda: "owner-test"
+        api_mod.app.dependency_overrides[api_mod.access_public] = lambda: "owner-test"
         try:
             for path in ("/runtime/status", "/runtime/capabilities", "/runtime/health", "/system/status", "/platform/phase22/status"):
                 r = self.client.get(path)
@@ -302,12 +302,12 @@ class TestAPIEndpoints(unittest.TestCase):
                 self.assertNotIn("ANTHROPIC_API_KEY", blob)
                 self.assertFalse(body.get("PHASE_24_ALLOWED", False))
         finally:
-            api_mod.app.dependency_overrides.pop(api_mod.require_owner, None)
+            api_mod.app.dependency_overrides.pop(api_mod.access_public, None)
 
     def test_chat_message_routes_complex_to_production(self):
         from pfai import api as api_mod
 
-        api_mod.app.dependency_overrides[api_mod.require_owner] = lambda: "owner-test"
+        api_mod.app.dependency_overrides[api_mod.access_public] = lambda: "owner-test"
         try:
             r = self.client.post(
                 "/chat/message",
@@ -321,7 +321,7 @@ class TestAPIEndpoints(unittest.TestCase):
             self.assertIn("progress", body)
             self.assertFalse(body.get("PHASE_24_ALLOWED", True))
         finally:
-            api_mod.app.dependency_overrides.pop(api_mod.require_owner, None)
+            api_mod.app.dependency_overrides.pop(api_mod.access_public, None)
 
 
 class TestSecretLeakage(unittest.TestCase):

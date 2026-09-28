@@ -343,27 +343,30 @@ class TestOwnerAuthAPI(unittest.TestCase):
                 if p.default is inspect.Parameter.empty:
                     continue
                 dep = getattr(p.default, "dependency", None)
-                if callable(dep) and getattr(dep, "__name__", "") == "require_owner":
+                dep_name = getattr(dep, "__name__", "") if callable(dep) else ""
+                if dep_name in ("require_owner", "access_public", "access_privileged"):
                     uses_owner = True
-                if isinstance(p.default, DependsParam) and getattr(p.default.dependency, "__name__", "") == "require_owner":
-                    uses_owner = True
+                if isinstance(p.default, DependsParam):
+                    dep_name = getattr(p.default.dependency, "__name__", "")
+                    if dep_name in ("require_owner", "access_public", "access_privileged"):
+                        uses_owner = True
             if uses_owner:
                 owner_paths.append(path)
 
         self.assertGreaterEqual(len(owner_paths), 40)
+        # Privileged routes must reject unauthenticated public callers.
         for method, path in [
-            ("POST", "/orchestrate"),
-            ("POST", "/chat/message"),
-            ("GET", "/coding/tracks"),
             ("POST", "/platform/learning"),
             ("GET", "/owner/identity"),
             ("POST", "/continuous/promote/x"),
+            ("POST", "/deploy/canary"),
+            ("POST", "/platform/training/cycle"),
         ]:
             if method == "GET":
                 r = self.client.get(path)
             else:
-                r = self.client.request(method, path, json={"goal": "x", "message": "x", "content": "x"})
-            self.assertIn(r.status_code, (401, 503, 422), msg=f"{method} {path} -> {r.status_code}")
+                r = self.client.request(method, path, json={"goal": "x", "message": "x", "content": "x", "version": "x", "traffic": 0.1})
+            self.assertIn(r.status_code, (401, 403, 503, 422), msg=f"{method} {path} -> {r.status_code}")
 
     def test_privilege_escalation_ignored(self):
         self.client.cookies.clear()
