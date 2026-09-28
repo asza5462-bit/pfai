@@ -35,7 +35,8 @@ class MockCommandProvider(ModelProvider):
 
         web_intent = bool(re.search(
             r"ابحث\s*في\s*(الويب|الانترنت|الإنترنت)|search\s*(the\s*)?web|web\s*search|"
-            r"web\s*research|بحث\s*ويب|من\s*الإنترنت|from\s*the\s*internet|look\s*up\s*online|"
+            r"web\s*research|deep\s*research|بحث\s*ويب|بحث\s*عميق|من\s*الإنترنت|"
+            r"from\s*the\s*internet|look\s*up\s*online|on\s*the\s*web|"
             r"fetch\s*url|افتح\s*الرابط|https?://|web\s*status|حالة\s*الويب",
             text + ar,
             re.I,
