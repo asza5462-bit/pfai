@@ -13,7 +13,53 @@ services:
         value: 8000
       - key: PFAI_LOG_LEVEL
         value: INFO
+      - key: PFAI_ENV
+        value: production
       - key: PFAI_CONTINUOUS_TRAINING_ENABLED
+        value: "false"
+      - key: PFAI_WEB_ALLOW_NETWORK
+        value: "1"
+      - key: PFAI_WEB_SEARCH_PROVIDER
+        value: auto
+      - key: PFAI_WEB_FETCH_PROVIDER
+        value: http_fetch
+      - key: PFAI_WEB_TIMEOUT
+        value: "20"
+      - key: PFAI_WEB_ALLOW_PRIVATE
+        value: "0"
+      - key: PFAI_EMAIL_PROVIDER
+        sync: false
+      - key: PFAI_EMAIL_REQUIRE_PRODUCTION
+        sync: false
+      - key: PFAI_SMTP_HOST
+        sync: false
+      - key: PFAI_SMTP_PORT
+        sync: false
+      - key: PFAI_SMTP_USER
+        sync: false
+      - key: PFAI_SMTP_PASSWORD
+        sync: false
+      - key: PFAI_SMTP_FROM
+        sync: false
+      - key: PFAI_SMTP_TLS
+        value: "true"
+      - key: PFAI_SMTP_TIMEOUT
+        value: "20"
+      - key: PFAI_EMAIL_API_ENDPOINT
+        sync: false
+      - key: PFAI_EMAIL_API_KEY
+        sync: false
+      - key: PFAI_EMAIL_FROM
+        sync: false
+      - key: PFAI_OTP_TTL_SECONDS
+        value: "300"
+      - key: PFAI_OTP_MAX_ATTEMPTS
+        value: "5"
+      - key: PFAI_OTP_RESEND_COOLDOWN
+        value: "60"
+      - key: PFAI_OTP_MAX_REQUESTS_PER_HOUR
+        value: "10"
+      - key: PFAI_COOKIE_SECURE
         value: "true"
       - key: PFAI_OWNER_EMAIL
         sync: false

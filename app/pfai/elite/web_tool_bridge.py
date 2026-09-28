@@ -75,7 +75,7 @@ def register_web_tools(fabric: ToolFabric, *, activate: bool = True) -> dict[str
     def web_search(**kwargs: Any) -> dict[str, Any]:
         query = str(kwargs.get("query") or kwargs.get("input") or "").strip()
         status = web_config_report()
-        if status.get("WEB_FABRIC_STATUS") != "READY":
+        if status.get("WEB_FABRIC_STATUS") not in ("READY", "CONFIGURED"):
             return {
                 "ok": False,
                 "WEB_FABRIC_STATUS": status.get("WEB_FABRIC_STATUS") or "NOT_CONFIGURED",
@@ -98,7 +98,7 @@ def register_web_tools(fabric: ToolFabric, *, activate: bool = True) -> dict[str
         if not auth.get("ok"):
             return {"ok": False, "error": auth.get("error"), "ssrf_blocked": True}
         status = web_config_report()
-        if status.get("WEB_FABRIC_STATUS") != "READY":
+        if status.get("WEB_FABRIC_STATUS") not in ("READY", "CONFIGURED"):
             return {
                 "ok": False,
                 "WEB_FABRIC_STATUS": status.get("WEB_FABRIC_STATUS") or "NOT_CONFIGURED",

@@ -284,11 +284,14 @@ def email_provider_from_env(*, allow_mock: bool | None = None) -> EmailProvider:
 def email_config_report(provider: EmailProvider | None = None) -> dict[str, Any]:
     """Startup/config report without revealing secrets.
 
-    EMAIL_DELIVERY_STATUS is derived from actual configuration only:
-      READY       — smtp/api fully configured for delivery
-      TEST_ONLY   — MockEmailProvider (dev/test)
-      NOT_CONFIGURED — missing/incomplete production config or fail-closed
+    EMAIL_DELIVERY_STATUS is derived from actual configuration + live evidence:
+      PRODUCTION_READY — smtp/api configured AND real delivery verified
+      READY            — smtp/api fully configured (not yet delivery-verified)
+      TEST_ONLY        — MockEmailProvider (dev/test)
+      NOT_CONFIGURED   — missing/incomplete production config or fail-closed
     """
+    from pathlib import Path
+
     prov = provider or email_provider_from_env()
     ready = prov.readiness() if hasattr(prov, "readiness") else {"ok": False}
     kind = getattr(prov, "provider_id", None) or ready.get("provider") or type(prov).__name__
@@ -302,9 +305,23 @@ def email_config_report(provider: EmailProvider | None = None) -> dict[str, Any]
         kind = "unconfigured"
     production_ready = bool(ready.get("production_ready")) and kind in ("smtp", "api")
     connected = bool(ready.get("connected"))
+    verified = False
+    verified_detail: dict[str, Any] = {}
+    try:
+        evid = Path(__file__).resolve().parents[1] / "data" / "longevity" / "elite" / "email_live_verify.json"
+        if evid.is_file():
+            verified_detail = json.loads(evid.read_text(encoding="utf-8"))
+            verified = bool(verified_detail.get("send_ok")) and str(
+                verified_detail.get("provider") or ""
+            ).lower() in ("smtp", "api")
+    except Exception:
+        verified = False
     if kind == "mock":
         delivery_status = "TEST_ONLY"
         lifecycle = "TEST_ONLY"
+    elif production_ready and verified:
+        delivery_status = "PRODUCTION_READY"
+        lifecycle = "PRODUCTION_READY"
     elif production_ready and connected:
         delivery_status = "READY"
         lifecycle = "READY"
@@ -317,10 +334,11 @@ def email_config_report(provider: EmailProvider | None = None) -> dict[str, Any]
         lifecycle = "NOT_CONFIGURED"
     return {
         "EMAIL_PROVIDER": kind,
-        "EMAIL_PRODUCTION_READY": production_ready,
+        "EMAIL_PRODUCTION_READY": bool(production_ready and verified),
         "EMAIL_DELIVERY_STATUS": delivery_status,
         "EMAIL_LIFECYCLE_STATUS": lifecycle,
         "EMAIL_REQUIRE_PRODUCTION": production_email_required(),
+        "EMAIL_VERIFIED": verified,
         "ok": bool(ready.get("ok")),
         "note": ready.get("note") or ready.get("error") or "",
         # never include keys/passwords/hosts secrets beyond booleans already in readiness
@@ -328,4 +346,10 @@ def email_config_report(provider: EmailProvider | None = None) -> dict[str, Any]
         "endpoint_configured": ready.get("endpoint_configured"),
         "from_configured": ready.get("from_configured"),
         "api_key_configured": ready.get("api_key_configured"),
+        "verify_evidence": {
+            "send_ok": verified_detail.get("send_ok"),
+            "provider": verified_detail.get("provider"),
+        }
+        if verified_detail
+        else None,
     }

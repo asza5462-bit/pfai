@@ -59,12 +59,15 @@ class TestWebSecurity(unittest.TestCase):
         self.assertEqual(second.get("error"), "request_budget_exceeded")
 
     def test_research_session_no_fake_citations(self):
-        session = WebResearchSession()
-        out = session.research("quantum computing breakthroughs")
-        self.assertEqual(out.get("WEB_FABRIC_STATUS"), "NOT_CONFIGURED")
-        self.assertFalse(out.get("fabricated_citations"))
-        self.assertEqual(out.get("citations"), [])
-        self.assertFalse(out.get("ok"))
+        from tests._prod_env_isolation import isolated_unconfigured_env
+
+        with isolated_unconfigured_env():
+            session = WebResearchSession()
+            out = session.research("quantum computing breakthroughs")
+            self.assertEqual(out.get("WEB_FABRIC_STATUS"), "NOT_CONFIGURED")
+            self.assertFalse(out.get("fabricated_citations"))
+            self.assertEqual(out.get("citations"), [])
+            self.assertFalse(out.get("ok"))
 
     def test_web_config_honesty(self):
         report = web_config_report()
@@ -82,16 +85,19 @@ class TestProductionRuntime(unittest.TestCase):
                 pass
 
     def test_pipeline_and_phase(self):
-        self.orch = _elite()
-        out = self.orch.production.handle("What is a list in Python?", actor="owner", authenticated=True)
-        self.assertTrue(out.get("production_runtime"))
-        self.assertIn(out.get("phase"), (22, 23))
-        self.assertFalse(out.get("PHASE_24_ALLOWED", True))
-        self.assertEqual(out.get("pipeline"), list(PIPELINE_STAGES))
-        self.assertIn("progress", out)
-        self.assertIn(out.get("response_kind"), ("answer_only", "plan", "code_execution", "tool_execution", "research", "agent_execution", "authorization_rejection"))
-        self.assertEqual(out.get("WEB_FABRIC_STATUS"), "NOT_CONFIGURED")
-        self.assertEqual(out.get("EMAIL_DELIVERY_STATUS"), "TEST_ONLY")
+        from tests._prod_env_isolation import isolated_unconfigured_env
+
+        with isolated_unconfigured_env():
+            self.orch = _elite()
+            out = self.orch.production.handle("What is a list in Python?", actor="owner", authenticated=True)
+            self.assertTrue(out.get("production_runtime"))
+            self.assertIn(out.get("phase"), (22, 23))
+            self.assertFalse(out.get("PHASE_24_ALLOWED", True))
+            self.assertEqual(out.get("pipeline"), list(PIPELINE_STAGES))
+            self.assertIn("progress", out)
+            self.assertIn(out.get("response_kind"), ("answer_only", "plan", "code_execution", "tool_execution", "research", "agent_execution", "authorization_rejection"))
+            self.assertEqual(out.get("WEB_FABRIC_STATUS"), "NOT_CONFIGURED")
+            self.assertEqual(out.get("EMAIL_DELIVERY_STATUS"), "TEST_ONLY")
 
     def test_unauthenticated_rejected(self):
         self.orch = _elite()
@@ -110,16 +116,19 @@ class TestProductionRuntime(unittest.TestCase):
         self.assertFalse(out.get("ok"))
 
     def test_diagnostics_no_secrets(self):
-        self.orch = _elite()
-        diag = self.orch.production.diagnostics()
-        blob = json.dumps(diag)
-        self.assertTrue(diag.get("capability_surface_only"))
-        self.assertFalse(diag.get("raw_environment_included"))
-        self.assertNotIn("ANTHROPIC_API_KEY=", blob)
-        self.assertNotIn("SMTP_PASSWORD=", blob)
-        self.assertEqual(diag.get("WEB_FABRIC_STATUS"), "NOT_CONFIGURED")
-        self.assertEqual(diag.get("EMAIL_DELIVERY_STATUS"), "TEST_ONLY")
-        self.assertEqual(diag.get("SANDBOX_STATUS"), "READY_BOUNDED")
+        from tests._prod_env_isolation import isolated_unconfigured_env
+
+        with isolated_unconfigured_env():
+            self.orch = _elite()
+            diag = self.orch.production.diagnostics()
+            blob = json.dumps(diag)
+            self.assertTrue(diag.get("capability_surface_only"))
+            self.assertFalse(diag.get("raw_environment_included"))
+            self.assertNotIn("ANTHROPIC_API_KEY=", blob)
+            self.assertNotIn("SMTP_PASSWORD=", blob)
+            self.assertEqual(diag.get("WEB_FABRIC_STATUS"), "NOT_CONFIGURED")
+            self.assertEqual(diag.get("EMAIL_DELIVERY_STATUS"), "TEST_ONLY")
+            self.assertEqual(diag.get("SANDBOX_STATUS"), "READY_BOUNDED")
 
 
 class TestPrivilegeEscalation(unittest.TestCase):
@@ -225,15 +234,18 @@ class TestSkillsGatesObservability(unittest.TestCase):
         orch.performance.shutdown()
 
     def test_gate_with_suite(self):
-        g = evaluate_phase22_gates(
-            full_tests={"ran": True, "failed": 0, "passed": 20, "skipped": 1, "total": 21}
-        )
-        self.assertFalse(g["PHASE_23_ALLOWED"])
-        self.assertEqual(g["EXACT_BLOCKERS"], [], g["EXACT_BLOCKERS"])
-        self.assertEqual(g["PHASE_22_STATUS"], "PASS")
-        self.assertEqual(g["WEB_FABRIC_STATUS"], "NOT_CONFIGURED")
-        self.assertEqual(g["EMAIL_DELIVERY_STATUS"], "TEST_ONLY")
-        self.assertEqual(g["SANDBOX_STATUS"], "READY_BOUNDED")
+        from tests._prod_env_isolation import isolated_unconfigured_env
+
+        with isolated_unconfigured_env():
+            g = evaluate_phase22_gates(
+                full_tests={"ran": True, "failed": 0, "passed": 20, "skipped": 1, "total": 21}
+            )
+            self.assertFalse(g["PHASE_23_ALLOWED"])
+            self.assertEqual(g["EXACT_BLOCKERS"], [], g["EXACT_BLOCKERS"])
+            self.assertEqual(g["PHASE_22_STATUS"], "PASS")
+            self.assertEqual(g["WEB_FABRIC_STATUS"], "NOT_CONFIGURED")
+            self.assertEqual(g["EMAIL_DELIVERY_STATUS"], "TEST_ONLY")
+            self.assertEqual(g["SANDBOX_STATUS"], "READY_BOUNDED")
 
     def test_observability(self):
         orch = _elite()

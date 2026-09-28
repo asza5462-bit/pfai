@@ -97,7 +97,7 @@ class WebResearchPipeline:
         plan = self.fabric.planner.plan(q)
         mark("query_generation", queries=plan.get("queries") or [q])
 
-        if fabric_status != "READY":
+        if fabric_status not in ("READY", "CONFIGURED"):
             out = {
                 "ok": False,
                 "WEB_FABRIC_STATUS": fabric_status,

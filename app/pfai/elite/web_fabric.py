@@ -19,6 +19,7 @@ import urllib.request
 from abc import ABC, abstractmethod
 from dataclasses import asdict, dataclass, field
 from html.parser import HTMLParser
+from pathlib import Path
 from typing import Any, Callable
 
 
@@ -460,6 +461,183 @@ class DuckDuckGoHtmlSearchProvider(WebSearchProvider):
         }
 
 
+class WikipediaOpenSearchProvider(WebSearchProvider):
+    """Keyless MediaWiki OpenSearch — no API key; provider-agnostic Wikimedia endpoint."""
+
+    provider_id = "wikipedia"
+
+    def __init__(self, *, timeout: float = 15.0, endpoint: str = "https://en.wikipedia.org/w/api.php") -> None:
+        self.timeout = float(timeout)
+        self.endpoint = endpoint.rstrip("?")
+
+    def readiness(self) -> dict[str, Any]:
+        return {
+            "ok": True,
+            "provider": self.provider_id,
+            "production_ready": True,
+            "note": "MediaWiki OpenSearch (keyless)",
+        }
+
+    def search(self, query: str, *, limit: int = 5) -> dict[str, Any]:
+        q = (query or "").strip()
+        if not q:
+            return {"ok": False, "error": "empty_query", "results": [], "provider": self.provider_id}
+        check = validate_url_for_fetch(self.endpoint)
+        if not check.get("ok"):
+            return {"ok": False, "error": check.get("error"), "results": [], "provider": self.provider_id}
+        url = self.endpoint + "?" + urllib.parse.urlencode(
+            {"action": "opensearch", "search": q, "limit": int(limit), "namespace": 0, "format": "json"}
+        )
+        req = urllib.request.Request(
+            url,
+            headers={"User-Agent": "PFAI-WebFabric/23 (keyless-opensearch)", "Accept": "application/json"},
+            method="GET",
+        )
+        try:
+            with urllib.request.urlopen(req, timeout=self.timeout) as resp:
+                data = json.loads(resp.read(500_000).decode("utf-8", errors="replace"))
+            titles = list(data[1]) if isinstance(data, list) and len(data) > 1 else []
+            descs = list(data[2]) if isinstance(data, list) and len(data) > 2 else []
+            urls = list(data[3]) if isinstance(data, list) and len(data) > 3 else []
+            results = []
+            for i, title in enumerate(titles[: int(limit)]):
+                results.append(
+                    {
+                        "url": str(urls[i] if i < len(urls) else ""),
+                        "title": str(title),
+                        "snippet": redact_secrets(str(descs[i] if i < len(descs) else "")[:400]),
+                    }
+                )
+            return {
+                "ok": True,
+                "query": q,
+                "results": results,
+                "provider": self.provider_id,
+                "retrieved_at": time.time(),
+                "fabricated": False,
+            }
+        except Exception as exc:
+            return {"ok": False, "error": type(exc).__name__, "results": [], "provider": self.provider_id}
+
+
+class DuckDuckGoInstantAnswerProvider(WebSearchProvider):
+    """Keyless DuckDuckGo Instant Answer JSON API (no HTML scrape)."""
+
+    provider_id = "ddg_ia"
+
+    def __init__(self, *, timeout: float = 15.0) -> None:
+        self.timeout = float(timeout)
+
+    def readiness(self) -> dict[str, Any]:
+        return {
+            "ok": True,
+            "provider": self.provider_id,
+            "production_ready": True,
+            "note": "DuckDuckGo Instant Answer JSON (keyless)",
+        }
+
+    def search(self, query: str, *, limit: int = 5) -> dict[str, Any]:
+        q = (query or "").strip()
+        if not q:
+            return {"ok": False, "error": "empty_query", "results": [], "provider": self.provider_id}
+        url = "https://api.duckduckgo.com/?" + urllib.parse.urlencode(
+            {"q": q, "format": "json", "no_redirect": "1", "no_html": "1"}
+        )
+        check = validate_url_for_fetch(url)
+        if not check.get("ok"):
+            return {"ok": False, "error": check.get("error"), "results": [], "provider": self.provider_id}
+        req = urllib.request.Request(
+            url,
+            headers={"User-Agent": "PFAI-WebFabric/23", "Accept": "application/json"},
+            method="GET",
+        )
+        try:
+            with urllib.request.urlopen(req, timeout=self.timeout) as resp:
+                data = json.loads(resp.read(500_000).decode("utf-8", errors="replace"))
+            results: list[dict[str, Any]] = []
+            if data.get("AbstractURL"):
+                results.append(
+                    {
+                        "url": str(data.get("AbstractURL") or ""),
+                        "title": str(data.get("Heading") or data.get("AbstractSource") or "Abstract"),
+                        "snippet": redact_secrets(str(data.get("Abstract") or "")[:400]),
+                    }
+                )
+
+            def walk(topics: list[Any]) -> None:
+                for t in topics:
+                    if len(results) >= int(limit):
+                        return
+                    if not isinstance(t, dict):
+                        continue
+                    if t.get("FirstURL"):
+                        results.append(
+                            {
+                                "url": str(t.get("FirstURL") or ""),
+                                "title": str((t.get("Text") or "").split(" - ")[0])[:200],
+                                "snippet": redact_secrets(str(t.get("Text") or "")[:400]),
+                            }
+                        )
+                    elif t.get("Topics"):
+                        walk(list(t.get("Topics") or []))
+
+            walk(list(data.get("RelatedTopics") or []))
+            # Prefer non-duckduckgo.com redirect pages when possible; keep all with URLs
+            results = [r for r in results if r.get("url")][: int(limit)]
+            return {
+                "ok": True,
+                "query": q,
+                "results": results,
+                "provider": self.provider_id,
+                "retrieved_at": time.time(),
+                "fabricated": False,
+            }
+        except Exception as exc:
+            return {"ok": False, "error": type(exc).__name__, "results": [], "provider": self.provider_id}
+
+
+class AutoWebSearchProvider(WebSearchProvider):
+    """Try keyless providers in order; never fabricates empty results as success without sources."""
+
+    provider_id = "auto"
+
+    def __init__(self, *, timeout: float = 15.0) -> None:
+        self.timeout = float(timeout)
+        self._providers: list[WebSearchProvider] = [
+            WikipediaOpenSearchProvider(timeout=timeout),
+            DuckDuckGoInstantAnswerProvider(timeout=timeout),
+            DuckDuckGoHtmlSearchProvider(timeout=timeout),
+        ]
+
+    def readiness(self) -> dict[str, Any]:
+        return {
+            "ok": True,
+            "provider": self.provider_id,
+            "production_ready": True,
+            "note": "Composite keyless search: wikipedia → ddg_ia → ddg_html",
+            "backends": [p.provider_id for p in self._providers],
+        }
+
+    def search(self, query: str, *, limit: int = 5) -> dict[str, Any]:
+        errors: list[str] = []
+        for p in self._providers:
+            out = p.search(query, limit=limit)
+            if out.get("ok") and (out.get("results") or []):
+                out = dict(out)
+                out["provider"] = f"{self.provider_id}:{p.provider_id}"
+                out["fabricated"] = False
+                return out
+            errors.append(f"{p.provider_id}:{out.get('error') or 'empty'}")
+        return {
+            "ok": False,
+            "error": "all_search_backends_empty",
+            "results": [],
+            "provider": self.provider_id,
+            "tried": errors,
+            "fabricated": False,
+        }
+
+
 class GenericHttpSearchProvider(WebSearchProvider):
     """Generic configurable HTTP search adapter (JSON). Provider-agnostic."""
 
@@ -676,6 +854,9 @@ class WebProviderRegistry:
         self._search.setdefault("mock", MockWebSearchProvider)
         self._search.setdefault("ddg", lambda: DuckDuckGoHtmlSearchProvider())
         self._search.setdefault("ddg_html", lambda: DuckDuckGoHtmlSearchProvider())
+        self._search.setdefault("ddg_ia", lambda: DuckDuckGoInstantAnswerProvider())
+        self._search.setdefault("wikipedia", lambda: WikipediaOpenSearchProvider())
+        self._search.setdefault("auto", lambda: AutoWebSearchProvider())
         self._search.setdefault(
             "http_search",
             lambda: GenericHttpSearchProvider(endpoint=os.environ.get("PFAI_WEB_SEARCH_ENDPOINT", "")),
@@ -727,6 +908,12 @@ def web_providers_from_env(
     # Explicit mock for tests
     if search_kind == "mock":
         search: WebSearchProvider = MockWebSearchProvider()
+    elif search_kind in ("auto", "keyless") and allow_network:
+        search = AutoWebSearchProvider(timeout=timeout)
+    elif search_kind in ("wikipedia", "wiki") and allow_network:
+        search = WikipediaOpenSearchProvider(timeout=timeout)
+    elif search_kind in ("ddg_ia", "duckduckgo_ia") and allow_network:
+        search = DuckDuckGoInstantAnswerProvider(timeout=timeout)
     elif search_kind in ("ddg", "ddg_html", "duckduckgo") and allow_network:
         search = DuckDuckGoHtmlSearchProvider(timeout=timeout)
     elif search_kind in ("http", "http_search") and allow_network:
@@ -748,7 +935,16 @@ def web_providers_from_env(
             timeout=timeout,
             allow_private=(os.environ.get("PFAI_WEB_ALLOW_PRIVATE") or "").lower() in ("1", "true"),
         )
-    elif search_kind in ("ddg", "ddg_html", "duckduckgo") and allow_network and not fetch_kind:
+    elif search_kind in (
+        "ddg",
+        "ddg_html",
+        "duckduckgo",
+        "auto",
+        "keyless",
+        "wikipedia",
+        "wiki",
+        "ddg_ia",
+    ) and allow_network and not fetch_kind:
         fetch = HttpWebFetchProvider(timeout=timeout)
     elif fetch_kind and fetch_kind not in ("", "unavailable", "none") and allow_network:
         fetch = reg.create_fetch(fetch_kind)
@@ -773,20 +969,47 @@ def web_config_report(
     fid = getattr(f, "provider_id", "unknown")
     if sid == "mock" or fid == "mock":
         status = "TEST_ONLY"
+    elif bool(sr.get("production_ready")) and bool(fr.get("production_ready")):
+        status = "CONFIGURED"
     elif bool(sr.get("production_ready")) or bool(fr.get("production_ready")):
-        status = "READY"
+        status = "CONFIGURED"
     else:
         status = "NOT_CONFIGURED"
+    # Load last verified smoke evidence if present (never secrets)
+    verified = False
+    verified_detail: dict[str, Any] = {}
+    try:
+        evid = Path(__file__).resolve().parents[2] / "data" / "longevity" / "elite" / "web_live_verify.json"
+        if evid.is_file():
+            verified_detail = json.loads(evid.read_text(encoding="utf-8"))
+            verified = bool(verified_detail.get("search_ok")) and bool(verified_detail.get("fetch_ok"))
+    except Exception:
+        verified = False
+    if verified and status in ("CONFIGURED", "READY"):
+        status = "READY"
+    executable = status in ("CONFIGURED", "READY", "TEST_ONLY") and sid not in ("unavailable", "unknown")
     return {
         "WEB_SEARCH_PROVIDER": sid,
         "WEB_FETCH_PROVIDER": fid,
-        "WEB_PROVIDER_AVAILABLE": status == "READY",
+        "WEB_PROVIDER_AVAILABLE": status in ("READY", "CONFIGURED"),
         "WEB_STATUS": WEB_PROVIDER_UNAVAILABLE if status == "NOT_CONFIGURED" else status,
         "WEB_FABRIC_STATUS": status,
+        "WEB_IMPLEMENTED": True,
+        "WEB_CONFIGURED": status in ("CONFIGURED", "READY", "TEST_ONLY"),
+        "WEB_EXECUTABLE": bool(executable),
+        "WEB_VERIFIED": verified,
         "search_production_ready": bool(sr.get("production_ready")),
         "fetch_production_ready": bool(fr.get("production_ready")),
         "ssrf_protection": True,
         "note": sr.get("note") or fr.get("note") or sr.get("error") or fr.get("error") or "",
+        "verify_evidence": {
+            "search_ok": verified_detail.get("search_ok"),
+            "fetch_ok": verified_detail.get("fetch_ok"),
+            "result_count": verified_detail.get("result_count"),
+            "provider": verified_detail.get("provider"),
+        }
+        if verified_detail
+        else None,
     }
 
 
@@ -1034,14 +1257,15 @@ class WebResearchSession:
 
     def research(self, query: str, *, limit: int = 5, fetch_top: int = 1, approved: bool = False, actor: str = "") -> dict[str, Any]:
         status = self.fabric.status()
-        if status.get("WEB_FABRIC_STATUS") != "READY":
+        fabric_status = status.get("WEB_FABRIC_STATUS") or "NOT_CONFIGURED"
+        if fabric_status not in ("READY", "CONFIGURED"):
             out = {
                 "ok": False,
-                "WEB_FABRIC_STATUS": status.get("WEB_FABRIC_STATUS") or "NOT_CONFIGURED",
+                "WEB_FABRIC_STATUS": fabric_status,
                 "fabricated_citations": False,
                 "fabricated_urls": False,
                 "citations": [],
-                "answer": f"Web research unavailable: WEB_FABRIC_STATUS={status.get('WEB_FABRIC_STATUS')}",
+                "answer": f"Web research unavailable: WEB_FABRIC_STATUS={fabric_status}",
                 "session_id": self.session_id,
             }
             self.history.append({"query": query, "ok": False, "status": out["WEB_FABRIC_STATUS"]})

@@ -283,7 +283,8 @@ def _platform_eval_runner(suite: str) -> dict:
     }
 
 AUTONOMOUS_TRAINING = AutonomousTrainingOrchestrator(
-    root='data/longevity/training',
+    # Production longevity root — MODEL_V0007 active + MODEL_V0001 LKG live here.
+    root=os.environ.get('PFAI_TRAINING_ROOT', 'data/longevity/training_phase9_verify'),
     learning_pipeline=PLATFORM_LEARNING,
     eval_runner=_platform_eval_runner,
     allow_mock_backend=False,
@@ -1354,7 +1355,7 @@ def web_search_api(body: WebQueryBody, owner: str = Depends(require_owner)):
     if not (body.query or '').strip():
         raise HTTPException(400, 'query is required')
     status = web_config_report()
-    if status.get('WEB_FABRIC_STATUS') != 'READY':
+    if status.get('WEB_FABRIC_STATUS') not in ('READY', 'CONFIGURED'):
         OWNER.authorize('WEB_SEARCH', f'{owner} search denied status={status.get("WEB_FABRIC_STATUS")}')
         return {
             'ok': False,
@@ -1378,7 +1379,7 @@ def web_fetch_api(body: WebQueryBody, owner: str = Depends(require_owner)):
         OWNER.authorize('WEB_FETCH', f'{owner} fetch denied')
         return {'ok': False, 'error': auth.get('error'), 'ssrf_blocked': True, 'PHASE_24_ALLOWED': False}
     status = web_config_report()
-    if status.get('WEB_FABRIC_STATUS') != 'READY':
+    if status.get('WEB_FABRIC_STATUS') not in ('READY', 'CONFIGURED'):
         return {
             'ok': False,
             'WEB_FABRIC_STATUS': status.get('WEB_FABRIC_STATUS') or 'NOT_CONFIGURED',

@@ -49,13 +49,16 @@ class TestPromptInjection(unittest.TestCase):
 
 class TestWebResearchHonesty(unittest.TestCase):
     def test_not_configured_no_fabricated_citations(self):
-        out = WebResearchPipeline().run("latest news about quantum computing")
-        self.assertEqual(out.get("WEB_FABRIC_STATUS"), "NOT_CONFIGURED")
-        self.assertEqual(out.get("WEB_RESEARCH_STATUS"), "NOT_CONFIGURED")
-        self.assertFalse(out.get("fabricated_citations"))
-        self.assertFalse(out.get("fabricated_urls"))
-        self.assertEqual(out.get("citations"), [])
-        self.assertFalse(out.get("ok"))
+        from tests._prod_env_isolation import isolated_unconfigured_env
+
+        with isolated_unconfigured_env():
+            out = WebResearchPipeline().run("latest news about quantum computing")
+            self.assertEqual(out.get("WEB_FABRIC_STATUS"), "NOT_CONFIGURED")
+            self.assertEqual(out.get("WEB_RESEARCH_STATUS"), "NOT_CONFIGURED")
+            self.assertFalse(out.get("fabricated_citations"))
+            self.assertFalse(out.get("fabricated_urls"))
+            self.assertEqual(out.get("citations"), [])
+            self.assertFalse(out.get("ok"))
 
     def test_ssrf_still_blocked(self):
         for url in ("http://127.0.0.1/", "http://169.254.169.254/", "file:///etc/passwd"):
@@ -141,21 +144,27 @@ class TestSecurityRegression(unittest.TestCase):
 
 class TestEmailHonesty(unittest.TestCase):
     def test_lifecycle_test_only(self):
-        report = email_config_report()
-        self.assertEqual(report.get("EMAIL_DELIVERY_STATUS"), "TEST_ONLY")
-        self.assertEqual(report.get("EMAIL_LIFECYCLE_STATUS"), "TEST_ONLY")
+        from tests._prod_env_isolation import isolated_unconfigured_env
+
+        with isolated_unconfigured_env():
+            report = email_config_report()
+            self.assertEqual(report.get("EMAIL_DELIVERY_STATUS"), "TEST_ONLY")
+            self.assertEqual(report.get("EMAIL_LIFECYCLE_STATUS"), "TEST_ONLY")
 
 
 class TestGatesObservabilityBenchmarks(unittest.TestCase):
     def test_gate_with_suite(self):
-        g = evaluate_phase23_gates(
-            full_tests={"ran": True, "failed": 0, "passed": 20, "skipped": 1, "total": 21}
-        )
-        self.assertFalse(g["PHASE_24_ALLOWED"])
-        self.assertEqual(g["EXACT_BLOCKERS"], [], g["EXACT_BLOCKERS"])
-        self.assertEqual(g["PHASE_23_STATUS"], "PASS")
-        self.assertEqual(g["WEB_FABRIC_STATUS"], "NOT_CONFIGURED")
-        self.assertEqual(g["EMAIL_DELIVERY_STATUS"], "TEST_ONLY")
+        from tests._prod_env_isolation import isolated_unconfigured_env
+
+        with isolated_unconfigured_env():
+            g = evaluate_phase23_gates(
+                full_tests={"ran": True, "failed": 0, "passed": 20, "skipped": 1, "total": 21}
+            )
+            self.assertFalse(g["PHASE_24_ALLOWED"])
+            self.assertEqual(g["EXACT_BLOCKERS"], [], g["EXACT_BLOCKERS"])
+            self.assertEqual(g["PHASE_23_STATUS"], "PASS")
+            self.assertEqual(g["WEB_FABRIC_STATUS"], "NOT_CONFIGURED")
+            self.assertEqual(g["EMAIL_DELIVERY_STATUS"], "TEST_ONLY")
 
     def test_observability(self):
         orch = _elite()
@@ -186,24 +195,26 @@ class TestAPIEndpoints(unittest.TestCase):
 
     def test_web_research_and_status_apis(self):
         from pfai import api as api_mod
+        from tests._prod_env_isolation import isolated_unconfigured_env
 
         api_mod.app.dependency_overrides[api_mod.require_owner] = lambda: "owner-test"
         try:
-            r = self.client.get("/platform/web/providers")
-            self.assertEqual(r.status_code, 200)
-            self.assertEqual(r.json().get("WEB_FABRIC_STATUS"), "NOT_CONFIGURED")
-            r = self.client.post("/platform/web/research", json={"query": "test research topic"})
-            self.assertEqual(r.status_code, 200)
-            body = r.json()
-            self.assertFalse(body.get("fabricated_citations", True))
-            self.assertEqual(body.get("WEB_FABRIC_STATUS"), "NOT_CONFIGURED")
-            r = self.client.get("/platform/phase23/status")
-            self.assertEqual(r.status_code, 200)
-            self.assertFalse(r.json().get("PHASE_24_ALLOWED", True))
-            r = self.client.get("/platform/mcp/status")
-            self.assertEqual(r.status_code, 200)
-            blob = json.dumps(r.json())
-            self.assertNotIn("SMTP_PASSWORD=", blob)
+            with isolated_unconfigured_env():
+                r = self.client.get("/platform/web/providers")
+                self.assertEqual(r.status_code, 200)
+                self.assertEqual(r.json().get("WEB_FABRIC_STATUS"), "NOT_CONFIGURED")
+                r = self.client.post("/platform/web/research", json={"query": "test research topic"})
+                self.assertEqual(r.status_code, 200)
+                body = r.json()
+                self.assertFalse(body.get("fabricated_citations", True))
+                self.assertEqual(body.get("WEB_FABRIC_STATUS"), "NOT_CONFIGURED")
+                r = self.client.get("/platform/phase23/status")
+                self.assertEqual(r.status_code, 200)
+                self.assertFalse(r.json().get("PHASE_24_ALLOWED", True))
+                r = self.client.get("/platform/mcp/status")
+                self.assertEqual(r.status_code, 200)
+                blob = json.dumps(r.json())
+                self.assertNotIn("SMTP_PASSWORD=", blob)
         finally:
             api_mod.app.dependency_overrides.pop(api_mod.require_owner, None)
 
