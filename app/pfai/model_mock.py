@@ -196,15 +196,15 @@ class MockCommandProvider(ModelProvider):
         if re.search(
             r"ذاكرة\s*أسطور|legendary\s*memory|تذكر\s*هذا|احفظ\s*هذا|افهمني|فهم\s*عالي|"
             r"يتفوق|أقوى\s*الذكاء|memory\s*first|what\s*do\s*you\s*remember|"
-            r"تعارض\s*الذاكرة|تسريب\s*ذاكر|memory\s*audit|memory\s*heal|أصلح\s*الذاكرة|"
-            r"ما\s*اسمي|ماذا\s*أفضل",
+            r"تعارض.*ذاكر|تسريب.*ذاكر|memory\s*audit|memory\s*heal|أصلح\s*(?:ال)?ذاكر|"
+            r"افحص.*ذاكر|ذاكرة|ما\s*اسمي|ماذا\s*أفضل",
             text + ar,
             re.I,
         ):
             add("memory_status")
             add("memory_audit")
             add("memory_search")
-            if re.search(r"أصلح|heal|تعارض|تسريب|conflict", text + ar, re.I):
+            if re.search(r"أصلح|heal|تعارض|تسريب|conflict|افحص", text + ar, re.I):
                 add("memory_heal")
         # Unified one-mind asks — single pulse (speed + coherence)
         elif re.search(

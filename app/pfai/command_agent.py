@@ -579,6 +579,7 @@ def _budget_plan(planned: list[dict], *, max_tools: int = 3) -> list[dict]:
             "quantum_pulse", "iot_understand", "evolution_tick",
             "free_sovereign_cycle", "free_sovereign_repair", "self_heal_cycle",
             "self_improve_tick", "advanced_self_develop",
+            "memory_heal", "memory_audit", "memory_status",
         }
         # If the turn is ONLY pulse + redundant status mirrors, collapse to pulse
         non_mirror = [p for p in planned if p.get("tool") in companion_ok]
