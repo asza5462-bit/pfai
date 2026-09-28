@@ -1,5 +1,17 @@
 # Agent Context Changelog
 
+## 2026-09-28 — PFAI 8.9: Free Sovereign Integrity
+
+### Implemented
+- `free_sovereign.py`: full audit → migrate → heal → ensure workers → sandbox repair → re-audit
+- Tools: `free_sovereign_audit|repair|cycle`, `free_ai_status`
+- Startup auto-applies pending schema (backup-first); hour evolution runs deep sovereign cycle
+- Arabic planner/comprehension for مراجعة شاملة / صلاحية كاملة / ذكاء حر
+- Tests: `test_v142_free_sovereign.py`
+
+### Honesty
+- Productive freedom maximized; weight promotion / SSRF / secrets stay hard-gated
+
 ## 2026-09-28 — PFAI 8.8: Quantum-inspired ultra-fast + IoT + evolution
 
 ### Implemented

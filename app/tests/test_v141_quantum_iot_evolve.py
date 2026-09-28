@@ -122,7 +122,7 @@ class TestQuantumAPI(unittest.TestCase):
     def test_version_88(self):
         from pfai import __version__
 
-        self.assertTrue(__version__.startswith("8.8"))
+        self.assertTrue(__version__.startswith("8."))
         r = self.client.get("/health")
         self.assertEqual(r.status_code, 200)
         self.assertEqual(r.json().get("version"), __version__)

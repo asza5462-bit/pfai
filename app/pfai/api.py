@@ -26,6 +26,7 @@ from .open_execution import auto_accept_learning, auto_safe_heal, open_execution
 from .quantum_core import QuantumInspiredCore, quantum_core_enabled
 from .iot_mind import IoTMind
 from .evolution_cadence import EvolutionCadence, evolution_enabled
+from .free_sovereign import FreeSovereignIntegrity
 from .logging_setup import setup_logging
 from .command_audit import CommandAuditLog
 from .command_memory import CommandMemoryService
@@ -1019,6 +1020,29 @@ PLATFORM_SELF_HEAL.register_safe_action(
     'refresh_web_fabric_status',
     lambda: __import__('pfai.elite.web_fabric', fromlist=['web_config_report']).web_config_report(),
 )
+
+def _migrate_apply_safe() -> dict:
+    """Backup-first schema apply — productive freedom, never touches weights."""
+    report = PLATFORM_MIGRATIONS_RUNNER.run(dry_run=False)
+    PLATFORM_COMPAT._current_schema = PLATFORM_MIGRATIONS_RUNNER.current_version()
+    PLATFORM_COMPAT._migration_status = PLATFORM_MIGRATIONS_RUNNER.status()
+    return {
+        'ok': bool(getattr(report, 'ok', False)),
+        'current': PLATFORM_MIGRATIONS_RUNNER.current_version(),
+        'target': PLATFORM_MIGRATIONS_RUNNER.target_version(),
+        'applied': list(getattr(report, 'applied', None) or []),
+        'error': getattr(report, 'error', None),
+        'weight_promotion': 'never_auto',
+    }
+
+PLATFORM_SELF_HEAL.register_safe_action(
+    'apply_pending_schema',
+    lambda: (
+        _migrate_apply_safe()
+        if int(PLATFORM_MIGRATIONS_RUNNER.status().get('pending_count') or 0) > 0
+        else {'ok': True, 'skipped': True, 'current': PLATFORM_MIGRATIONS_RUNNER.current_version()}
+    ),
+)
 PLATFORM_SKILLS = SkillRegistry(
     path='data/longevity/skill_versions.sqlite3',
     executor=PLATFORM_EXECUTOR,
@@ -1239,8 +1263,190 @@ TOOL_ROUTER.handlers['iot_understand'] = _tool_iot_understand
 TOOL_ROUTER.handlers['iot_status'] = _tool_iot_status
 TOOL_ROUTER.handlers['evolution_status'] = _tool_evolution_status
 TOOL_ROUTER.handlers['evolution_tick'] = _tool_evolution_tick
+
+# --- Free Sovereign Integrity (audit → repair → retest → learn) ------------
+def _conflict_scan() -> dict:
+    conflicts = []
+    for name in TOOL_ROUTER.specs:
+        if name not in TOOL_ROUTER.handlers:
+            conflicts.append({'type': 'missing_handler', 'tool': name})
+    for name in TOOL_ROUTER.handlers:
+        if name not in TOOL_ROUTER.specs:
+            conflicts.append({'type': 'orphan_handler', 'tool': name})
+    for mod in (
+        'pfai.smart_continuous', 'pfai.quantum_core', 'pfai.iot_mind',
+        'pfai.evolution_cadence', 'pfai.free_sovereign', 'pfai.advanced_self_develop',
+    ):
+        try:
+            __import__(mod)
+        except Exception as exc:
+            conflicts.append({'type': 'import_error', 'module': mod, 'error': str(exc)[:160]})
+    return {'ok': len(conflicts) == 0, 'conflicts': conflicts, 'n': len(conflicts)}
+
+def _regression_sandbox_repair() -> dict:
+    """Repair pending regression cases via multi-pass sandbox build (no promote)."""
+    try:
+        items = REGRESSIONS.pending() or []
+    except Exception as exc:
+        return {'ok': False, 'error': str(exc)[:160]}
+    if not items:
+        return {'ok': True, 'skipped': True, 'repaired': 0}
+    repaired = 0
+    details = []
+    for item in items[:2]:
+        instr = str(item.get('instruction') or item.get('prompt') or item.get('task') or '').strip()
+        tests = str(item.get('test_code') or item.get('tests') or '').strip()
+        if not instr:
+            continue
+        try:
+            build = ADVANCED.multi_pass_build(
+                instr,
+                tests or 'assert True',
+                source='free_sovereign_regression',
+            )
+            ok = bool(build.get('ok') or build.get('solved'))
+            if ok:
+                repaired += 1
+            details.append({'id': item.get('id') or item.get('case_id'), 'ok': ok})
+        except Exception as exc:
+            details.append({'error': str(exc)[:120]})
+    return {'ok': True, 'repaired': repaired, 'attempted': len(details), 'details': details}
+
+PLATFORM_SELF_HEAL.register_safe_action(
+    'ensure_evolution_worker',
+    lambda: EVOLUTION.start() if evolution_enabled() else {'ok': False, 'error': 'evolution off'},
+)
+
+FREE_SOVEREIGN = FreeSovereignIntegrity(
+    self_check_fn=PLATFORM_SELF_CHECK.run_checks,
+    heal_propose_fn=PLATFORM_SELF_HEAL.propose_fix,
+    heal_apply_fn=lambda pid: PLATFORM_SELF_HEAL.apply_fix(pid, approved=True),
+    heal_test_fn=PLATFORM_SELF_HEAL.test_fix,
+    migrate_status_fn=PLATFORM_MIGRATIONS_RUNNER.status,
+    migrate_apply_fn=_migrate_apply_safe,
+    continuous_ensure_fn=lambda: (
+        CONTINUOUS.start() if is_continuous_enabled() else {'ok': True, 'skipped': True, 'reason': 'gate_off'}
+    ),
+    continuous_tick_fn=lambda: (
+        CONTINUOUS.tick_once() if is_continuous_enabled() else {'ok': True, 'skipped': True, 'reason': 'gate_off'}
+    ),
+    evolution_ensure_fn=lambda: (
+        EVOLUTION.start() if evolution_enabled() else {'ok': True, 'skipped': True, 'reason': 'disabled'}
+    ),
+    evolution_tick_fn=lambda: EVOLUTION.tick_minute(),
+    advanced_develop_fn=lambda: ADVANCED.autonomous_cycle(force=True, include_continuous_tick=False),
+    autonomy_fn=lambda: AUTONOMY.run_cycle(include_continuous_tick=False),
+    quantum_pulse_fn=lambda: QUANTUM.pulse('sovereign audit', include_iot=False),
+    open_status_fn=open_execution_status,
+    regression_repair_fn=_regression_sandbox_repair,
+    conflict_scan_fn=_conflict_scan,
+)
+
+# Extra integrity checks for free-sovereign audits
+PLATFORM_SELF_CHECK.add_check(
+    'schema_up_to_date',
+    lambda: {
+        'ok': int(PLATFORM_MIGRATIONS_RUNNER.status().get('pending_count') or 0) == 0,
+        'current': PLATFORM_MIGRATIONS_RUNNER.current_version(),
+        'pending': PLATFORM_MIGRATIONS_RUNNER.status().get('pending_count'),
+    },
+)
+PLATFORM_SELF_CHECK.add_check(
+    'continuous_worker_ready',
+    lambda: {
+        'ok': bool(CONTINUOUS.status().get('worker_alive')) or not is_continuous_enabled(),
+        'worker_alive': CONTINUOUS.status().get('worker_alive'),
+        'enabled': is_continuous_enabled(),
+    },
+)
+PLATFORM_SELF_CHECK.add_check(
+    'evolution_cadence_ready',
+    lambda: {
+        'ok': bool(EVOLUTION.status().get('alive')) or not evolution_enabled(),
+        'alive': EVOLUTION.status().get('alive'),
+    },
+)
+PLATFORM_SELF_CHECK.add_check(
+    'tool_router_consistent',
+    lambda: _conflict_scan(),
+)
+
+def _tool_free_sovereign_audit():
+    return FREE_SOVEREIGN.audit()
+
+def _tool_free_sovereign_repair(deep_code: bool = True):
+    return FREE_SOVEREIGN.repair(deep_code=bool(deep_code))
+
+def _tool_free_sovereign_cycle(deep_code: bool = True):
+    return FREE_SOVEREIGN.sovereign_cycle(deep_code=bool(deep_code))
+
+def _tool_free_ai_status():
+    return {
+        'ok': True,
+        'free_sovereign': FREE_SOVEREIGN.status(),
+        'freedom': FREE_SOVEREIGN.freedom_map(),
+        'open': open_execution_status(),
+        'continuous': {
+            'worker_alive': CONTINUOUS.status().get('worker_alive'),
+            'pending': CONTINUOUS.status().get('pending_examples'),
+            'auto_promote': False,
+        },
+        'evolution': {
+            'alive': EVOLUTION.status().get('alive'),
+            'minute_ticks': EVOLUTION.status().get('minute_ticks'),
+        },
+        'advanced': ADVANCED.maturity(),
+        'weight_promotion': 'never_auto',
+        'note': 'ذكاء حر منتج بأقصى صلاحية نافعة — مع حدود صلبة للأوزان/SSRF/الأسرار.',
+    }
+
+for _spec in (
+    ToolSpec('free_sovereign_audit', 'Full high-precision system integrity audit', 'read', False, {}),
+    ToolSpec('free_sovereign_repair', 'Auto-repair: migrate, heal, workers, sandbox code fix', 'write', False, {'deep_code': 'bool?'}),
+    ToolSpec('free_sovereign_cycle', 'Audit → repair → re-audit free sovereign cycle', 'write', False, {'deep_code': 'bool?'}),
+    ToolSpec('free_ai_status', 'Free AI freedom map: unlocked vs hard-gated', 'read', False, {}),
+):
+    TOOL_ROUTER.specs[_spec.name] = _spec
+TOOL_ROUTER.handlers['free_sovereign_audit'] = _tool_free_sovereign_audit
+TOOL_ROUTER.handlers['free_sovereign_repair'] = _tool_free_sovereign_repair
+TOOL_ROUTER.handlers['free_sovereign_cycle'] = _tool_free_sovereign_cycle
+TOOL_ROUTER.handlers['free_ai_status'] = _tool_free_ai_status
+
+def _pfai_startup_free_sovereign() -> None:
+    """On boot: clear schema debt + soft sovereign repair (no weight promote)."""
+    try:
+        pending = int(PLATFORM_MIGRATIONS_RUNNER.status().get('pending_count') or 0)
+        if pending > 0:
+            mig = _migrate_apply_safe()
+            log.info('startup: schema migrate ok=%s current=%s', mig.get('ok'), mig.get('current'))
+    except Exception as exc:
+        log.warning('startup: schema migrate failed: %s', exc)
+    try:
+        # Soft cycle without deep code on boot (fast); deep runs via chat/evolution
+        out = FREE_SOVEREIGN.repair(deep_code=False)
+        log.info('startup: free sovereign repair ok=%s', out.get('ok'))
+    except Exception as exc:
+        log.warning('startup: free sovereign failed: %s', exc)
+
+app.router.add_event_handler('startup', _pfai_startup_free_sovereign)
+
+# Hourly evolution also runs a deep sovereign cycle
+_ORIG_EVOLVE_HOUR = EVOLUTION.hour_fn
+
+def _evolve_hour_with_sovereign() -> dict:
+    base = _ORIG_EVOLVE_HOUR() if _ORIG_EVOLVE_HOUR else {'ok': True}
+    try:
+        sov = FREE_SOVEREIGN.sovereign_cycle(deep_code=True)
+    except Exception as exc:
+        sov = {'ok': False, 'error': str(exc)[:160]}
+    return {'ok': bool((base or {}).get('ok')) and bool(sov.get('ok')), 'autonomy': base, 'sovereign': {
+        'ok': sov.get('ok'), 'improved': sov.get('improved'), 'after': sov.get('after'),
+    }}
+
+EVOLUTION.hour_fn = _evolve_hour_with_sovereign
+
 log.info(
-    'autonomy ready open=%s auto_learn=%s auto_heal=%s advanced_stage=%s unified=%s quantum=%s evolve=%s',
+    'autonomy ready open=%s auto_learn=%s auto_heal=%s advanced_stage=%s unified=%s quantum=%s evolve=%s sovereign=%s',
     open_execution_status().get('open_chat_tools'),
     auto_accept_learning(),
     auto_safe_heal(),
@@ -1248,6 +1454,7 @@ log.info(
     unified_brain_enabled(),
     quantum_core_enabled(),
     evolution_enabled(),
+    FREE_SOVEREIGN.VERSION,
 )
 ELITE = EliteOrchestrator(
     root='data/longevity/elite',

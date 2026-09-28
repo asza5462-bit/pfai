@@ -1,6 +1,6 @@
 # PFAI Project Memory
 
-Last updated: 2026-09-28 (PFAI 8.8.0 — quantum-inspired speed + IoT + evolution cadence)
+Last updated: 2026-09-28 (PFAI 8.9.0 — free sovereign integrity / self-repair)
 
 ## Snapshot
 
@@ -39,6 +39,13 @@ Last updated: 2026-09-28 (PFAI 8.8.0 — quantum-inspired speed + IoT + evolutio
 - Deep comprehension before plan/compose
 - Legendary memory: facts + digests + ranked recall + desire ingest
 - Elite replies: فهمتك → memory → live → next step
+
+## Free Sovereign Integrity (8.9)
+
+- `free_sovereign_cycle`: audit → schema migrate → heal → workers → sandbox code repair → re-audit
+- Chat: صلاحية كاملة / بلا قيود / راجع كل شيء / ذكاء حر
+- Auto schema apply on boot (backup-first); hourly evolution runs deep sovereign cycle
+- Still hard-gated: weight promotion, SSRF, secrets, security policy, arbitrary host rewrite
 
 ## Quantum-inspired + IoT + evolution (8.8)
 

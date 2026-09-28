@@ -30,6 +30,22 @@ def comprehend(
 
     # Intent taxonomy
     if re.search(
+        r"صلاحية\s*كاملة|بلا\s*اي\s*قيود|ذكاء\s*حر|راجع\s*كل|لا\s*يوجد\s*مشاكل|"
+        r"تصحيح\s*نفس|تعديل\s*ال?اكواد|free\s*sovereign|integrity",
+        text,
+        re.I,
+    ):
+        intent = "free_sovereign"
+        goals.append("zero_faults")
+        goals.append("self_correcting_code")
+        goals.append("full_productive_autonomy")
+        strategy = "sovereign_audit_repair"
+        latent = (
+            "ذكاء حر سيّد يراجع ويصلح نفسه بلا أعطال — مع حدود صلبة للأمان"
+            if ar else
+            "free sovereign AI that audits/self-repairs with honest hard safety bounds"
+        )
+    elif re.search(
         r"كم[يّ]|quantum|جزء\s*من\s*مليون|microsecond|μs|\bus\b|سرعة\s*فائق|"
         r"إنترنت\s*الأشياء|انترنت\s*الاشياء|\biot\b|mqtt|zigbee|matter",
         text,
@@ -141,6 +157,10 @@ def _default_latent(intent: str, lang: str) -> str:
         "quantum_iot_speed": (
             "سرعة محلية مقاسة + IoT حقيقي + تطوّر مستمر (بدون كمّ زائف)",
             "measured local speed + real IoT + continuous evolution (no fake quantum)",
+        ),
+        "free_sovereign": (
+            "مراجعة وإصلاح ذاتي كامل بصلاحية منتجة حرة",
+            "full self-audit/repair with free productive authority",
         ),
         "self_evolve": ("ذكاء يطوّر نفسه بتحقق حقيقي", "self-improving intelligence with real verification"),
         "teach": ("تعلّم فعّال بخطوات واضحة", "effective learning with clear steps"),

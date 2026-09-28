@@ -195,21 +195,38 @@ class MockCommandProvider(ModelProvider):
             re.I,
         ):
             add("unified_brain_pulse")
-        # Self-heal / self-improve / advanced self-develop
-        elif re.search(
+        # Free sovereign / full integrity review
+        if re.search(
+            r"راجع\s*كل|لا\s*يوجد\s*مشاكل|لا\s*بد\s*ان\s*لا\s*يوجد|"
+            r"صلاحية\s*كاملة|بلا\s*اي\s*قيود|ذكاء\s*حر|free\s*sovereign|"
+            r"تصحيح\s*نفس|تعديل\s*ال?اكواد|اعطال|متضارب|فحص\s*ذاتي|"
+            r"free_ai|sovereign_cycle|integrity\s*audit",
+            text + ar,
+            re.I,
+        ):
+            add("free_sovereign_cycle")
+            add("free_ai_status")
+            add("self_heal_cycle")
+            add("self_check_run")
+            add("advanced_self_develop")
+        if re.search(
             r"أصلح\s*نفس|صلح\s*نفس|self[_\s-]?heal|self[_\s-]?check|self[_\s-]?improve|"
             r"طور\s*نفس|حدّث\s*نفس|حدث\s*نفس|يطور\s*نفس|يصلح\s*نفس|يحل\s*مشاكل|"
             r"استقلال|autonom|فك\s*القيود|بدون\s*قيود|طور\s*ذات|تحسين\s*ذاتي|"
             r"يبني\s*ال?اكواد|يبني\s*الأكواد|self[_\s-]?develop|advanced_self|"
-            r"يراجع\s*اكثر|يصحح\s*اكثر|واعي|بدون\s*الرجوع|مرحلة\s*متطورة",
+            r"يراجع\s*اكثر|يصحح\s*اكثر|واعي|بدون\s*الرجوع|مرحلة\s*متطورة|"
+            r"شغ[ّل]\s*فحص|إصلاح\s*آمن|اصلاح\s*امن",
             text + ar,
             re.I,
         ):
+            add("self_check_run")
+            add("self_heal_cycle")
             add("advanced_awareness")
             add("advanced_status")
             add("advanced_self_develop")
             add("autonomy_status")
             add("self_improve_tick")
+            add("free_sovereign_cycle")
             add("unified_brain_pulse")
 
         if not picks:
@@ -323,6 +340,19 @@ class MockCommandProvider(ModelProvider):
                     "alive": res.get("alive"), "minute": res.get("minute_ticks"),
                     "hour": res.get("hour_ticks"), "day": res.get("day_ticks"),
                 }, 180))
+            elif name in {"free_sovereign_cycle", "free_sovereign_repair", "free_sovereign_audit"} and isinstance(res, dict):
+                insights.append(_brief({
+                    "ok": res.get("ok"), "improved": res.get("improved"),
+                    "after": res.get("after"), "schema": (res.get("schema") or {}).get("current"),
+                    "failures": ((res.get("after") or res.get("self_check") or {}).get("failures")),
+                }, 260))
+            elif name == "free_ai_status" and isinstance(res, dict):
+                fr = (res.get("freedom") or {})
+                insights.append(_brief({
+                    "unlocked": len([x for x in (fr.get("unlocked_productive") or []) if x]),
+                    "gated": fr.get("still_hard_gated"),
+                    "weight_promotion": res.get("weight_promotion"),
+                }, 220))
             elif name in {"advanced_self_develop", "self_improve_tick"} and isinstance(res, dict):
                 insights.append(_brief({
                     "stage": res.get("stage") or (res.get("maturity") or {}).get("stage"),
@@ -352,6 +382,10 @@ class MockCommandProvider(ModelProvider):
             "quantum_iot_speed": (
                 "اطلب quantum_pulse أو سؤال MQTT/Zigbee — التطور يعمل كل دقيقة.",
                 "Ask for quantum_pulse or an MQTT/Zigbee question — evolution ticks every minute.",
+            ),
+            "free_sovereign": (
+                "اطلب free_sovereign_cycle لمراجعة وإصلاح كل شيء الآن.",
+                "Ask for free_sovereign_cycle to audit and repair everything now.",
             ),
             "self_evolve": ("شغّل التطوير الذاتي المتقدم الآن.", "Run advanced self-develop now."),
             "teach": ("ابدأ درساً أو سلّم تمريناً للتحقق.", "Start a lesson or submit an exercise to verify."),
