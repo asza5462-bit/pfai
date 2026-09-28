@@ -392,9 +392,11 @@ class TestOwnerAuthAPI(unittest.TestCase):
     def test_dashboard_still_public(self):
         r = self.client.get("/")
         self.assertEqual(r.status_code, 200)
-        self.assertIn("تسجيل دخول المالك", r.text)
-        self.assertIn("اسم المستخدم", r.text)
+        # Public Access Mode UI: no owner login form.
+        self.assertIn("الوصول العام", r.text)
+        self.assertNotIn("ownerModal", r.text)
         self.assertNotIn("ownerEmail", r.text)
+        self.assertNotIn("ownerUsername", r.text)
         self.assertNotIn("type=\"email\"", r.text)
         self.assertNotIn("test-secret", r.text)
 

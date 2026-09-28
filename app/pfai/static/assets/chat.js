@@ -119,11 +119,6 @@
 
   async function sendChat() {
     if (busy) return;
-    if (!OWNER_AUTHED) {
-      toast('أدخل Owner login أولًا / Enter Owner login first', true);
-      openOwner();
-      return;
-    }
     const input = $('chatInput');
     const message = (input.value || '').trim();
     if (!message) return;
@@ -188,7 +183,7 @@
   }
 
   async function loadChatHistory() {
-    if (!OWNER_AUTHED || !conversationId) return;
+    if (!conversationId) return;
     try {
       const r = await api('/chat/conversations/' + encodeURIComponent(conversationId));
       const box = $('chatLog');
@@ -218,7 +213,6 @@
   }
 
   async function loadChatAudit() {
-    if (!OWNER_AUTHED) return;
     try {
       const r = await api('/chat/audit?limit=15');
       const el = $('chatAudit');
@@ -231,7 +225,6 @@
   }
 
   async function loadChatTools() {
-    if (!OWNER_AUTHED) return;
     try {
       const r = await api('/chat/tools');
       const el = $('chatTools');
@@ -280,7 +273,7 @@
   };
 
   window.loadAcademy = async function loadAcademy() {
-    if (!OWNER_AUTHED) { toast('سجّل دخول المالك أولاً', true); return; }
+
     try {
       const [profile, tracks, projects] = await Promise.all([
         api('/coding/profile'),
