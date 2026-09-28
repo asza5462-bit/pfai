@@ -1203,6 +1203,19 @@ def phase18_platform_status(owner: str = Depends(require_owner)):
     st['PHASE_19_ALLOWED'] = False
     return {'ok': True, **st}
 
+@app.get('/platform/phase19/status')
+def phase19_platform_status(owner: str = Depends(require_owner)):
+    from .elite.phase19_gates import phase19_status
+    st = phase19_status()
+    st['elite'] = {
+        'skill_count': ELITE.skills.health().get('count'),
+        'phase19_boot': (ELITE._boot or {}).get('phase19'),
+        'phase18_boot': (ELITE._boot or {}).get('phase18'),
+        'unified_ai_core': True,
+    }
+    st['PHASE_20_ALLOWED'] = False
+    return {'ok': True, **st}
+
 @app.get('/platform/observability')
 def platform_observability(owner: str = Depends(require_owner)):
     from .elite.platform_observability import PlatformObservability

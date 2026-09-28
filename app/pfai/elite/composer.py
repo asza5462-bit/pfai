@@ -74,6 +74,14 @@ _TEMPLATES: dict[str, list[str]] = {
         "security_remediation",
         "answer_verification",
     ],
+    "algorithms": [
+        "reasoning",
+        "problem_decomposition",
+        "code_generation",
+        "test_generation",
+        "security_review",
+        "answer_verification",
+    ],
 }
 
 _RISK_RANK = {"low": 0, "medium": 1, "high": 2, "critical": 3}

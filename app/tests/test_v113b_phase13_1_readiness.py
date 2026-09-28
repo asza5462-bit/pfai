@@ -167,7 +167,7 @@ class TestSecurityAndChatRegression(unittest.TestCase):
             bootstrap_skills=True,
         )
         out = elite.handle("plan a small coding task to add numbers", actor="t")
-        self.assertIn(out["phase"], (13, 14, 15, 16, 17))
+        self.assertIn(out["phase"], (13, 14, 15, 16, 17, 18, 19))
         self.assertIn("intent", out)
         self.assertTrue(out["skills_used"])
         self.assertIn("model_routing", out)

@@ -1,7 +1,4 @@
-"""PHASE 16 Unified Intelligence Loop — coherent pipeline over existing fabrics.
-
-Integration layer (not a rewrite). Authorization is never bypassed.
-"""
+"""PHASE 16/19 Unified Intelligence Loop — routes through UnifiedAICore while preserving meta intents."""
 from __future__ import annotations
 
 import time
@@ -37,12 +34,20 @@ class UnifiedIntelligenceLoop:
     """
     User Intent → … → Activation or Rollback.
 
-    Wraps EliteOrchestrator + SkillLearningBridge + optional training hooks.
-    Does not grant privileges; does not modify owner auth.
+    Phase 19: primary path is UnifiedAICore (capability routing + composition).
+    Meta intents (train/evaluate/rollback) remain bounded and never destroy LKG.
     """
 
     def __init__(self, orchestrator: Any) -> None:
         self.orch = orchestrator
+        self._core = None
+
+    def _core_instance(self):
+        if self._core is None:
+            from pfai.elite.unified_ai_core import UnifiedAICore
+
+            self._core = UnifiedAICore(self.orch)
+        return self._core
 
     def run(
         self,
@@ -66,7 +71,6 @@ class UnifiedIntelligenceLoop:
 
         mark("user_intent", message_preview=(message or "")[:200])
 
-        # Meta intents: evaluate / train / rollback — bounded, never destroy LKG
         meta = self._detect_meta_intent(message)
         if meta:
             mark("intent_classification", intents=[meta], mode="AI")
@@ -81,17 +85,16 @@ class UnifiedIntelligenceLoop:
             result["loop_id"] = loop_id
             result["pipeline"] = PIPELINE_STAGES
             result["stages"] = stages
-            result["phase"] = 17
+            result["phase"] = 19
             result["latency_seconds"] = time.time() - started
-            result["PHASE_18_ALLOWED"] = False
+            result["PHASE_20_ALLOWED"] = False
             return result
 
-        # Core path: existing EliteOrchestrator (authorization inside)
-        mark("intent_classification", deferred_to="elite_orchestrator")
-        mark("planning", deferred_to="elite_orchestrator")
+        mark("intent_classification", deferred_to="unified_ai_core")
+        mark("planning", deferred_to="unified_ai_core")
         mark("authorization", note="ActionPermissionGate/AuthorizedExecutor/ScopeEnforcement — never bypassed")
 
-        out = self.orch.handle(
+        out = self._core_instance().handle(
             message,
             conversation_id=conversation_id,
             context=ctx,
@@ -99,29 +102,46 @@ class UnifiedIntelligenceLoop:
             approved=approved,
             actor=actor,
             attachments=attachments,
+            allow_training_ops=allow_training_ops,
         )
 
-        # Map orchestrator timeline into pipeline stages
-        self._map_timeline(out, stages)
+        # Merge core stages into loop stages (+ aliases for prior-phase stage names)
+        _alias = {
+            "model_routing": "model_selection",
+            "skill_selection": "skill_discovery",
+            "learning_experience_record": "experience_memory",
+            "validation_testing": "verification",
+            "capability_discovery": "skill_discovery",
+        }
+        for s in out.get("stages") or []:
+            stage = s.get("stage")
+            stages.append(s if "stage" in s else {"stage": "execution", **s})
+            if stage in _alias:
+                stages.append({**s, "stage": _alias[stage], "alias_of": stage})
+
         mark("observation", execution_status=out.get("execution_status"), ok=out.get("ok"))
         mark(
             "verification",
             verification_status=out.get("verification_status")
-            or (out.get("verification") or {}).get("status"),
+            or (out.get("validation") or {}).get("status"),
         )
-        mark("evaluation", self_check=(out.get("verification") or {}).get("status"))
+        mark("evaluation", self_check=(out.get("validation") or {}).get("status"))
         mark("result", ok=out.get("ok"), answer_preview=str(out.get("answer") or "")[:240])
+        mark("experience_memory", learning=bool(out.get("learning_candidate")))
 
-        # Experience → learning candidate (no authz mutation)
-        learn = self._learning_candidate(out, message=message, stages=stages)
-
-        # Optional training is never automatic — only flagged
-        training_note = {
-            "auto_started": False,
-            "optional": True,
-            "note": "Autonomous training requires separate eligibility + quality gate; LKG preserved; cannot alter security controls",
-        }
-        mark("optional_autonomous_training", **training_note)
+        learn = out.get("learning_candidate") or self._learning_candidate(out, message=message, stages=stages)
+        if not any(s.get("stage") == "learning_candidate" for s in stages):
+            mark(
+                "learning_candidate",
+                created=bool(learn.get("recorded") or learn.get("created")),
+                eligibility=learn.get("eligibility"),
+            )
+        mark(
+            "optional_autonomous_training",
+            auto_started=False,
+            optional=True,
+            note="Autonomous training requires separate eligibility + quality gate; LKG preserved; cannot alter security controls",
+        )
         mark(
             "quality_gate",
             status="PASS"
@@ -136,15 +156,21 @@ class UnifiedIntelligenceLoop:
         )
 
         out = dict(out)
-        out["phase"] = 17
+        out["phase"] = 19
         out["loop_id"] = loop_id
         out["pipeline"] = list(PIPELINE_STAGES)
         out["stages"] = stages
         out["learning_candidate"] = learn
-        out["PHASE_18_ALLOWED"] = False
+        out["PHASE_20_ALLOWED"] = False
         out["latency_seconds"] = time.time() - started
-        if (out.get("security") or {}).get("rejected"):
-            out["phase"] = 17
+        out["unified_intelligence_loop"] = True
+        out.setdefault("skills_used", out.get("skills_used") or out.get("skills_used") or [])
+        if not out.get("skills_used"):
+            out["skills_used"] = list(out.get("capabilities") or [])
+        # Ensure security rejection surfaces for offensive path
+        if (out.get("security") or {}).get("rejected") or out.get("denied"):
+            out["ok"] = False
+            out.setdefault("security", {"rejected": True, "offensive_blocked": True})
         return out
 
     def _detect_meta_intent(self, message: str) -> str | None:
@@ -184,7 +210,6 @@ class UnifiedIntelligenceLoop:
                     "lkg_preserved": True,
                     "training_started": False,
                 }
-            # Do not auto-run heavy training in chat — export learning candidates only
             exported = self.orch.export_learning_to_training(limit=10) if hasattr(self.orch, "export_learning_to_training") else {"ok": False}
             stages.append({"stage": "execution", "ok": True, "action": "export_learning_only", "exported": exported})
             stages.append({"stage": "activation_or_rollback", "action": "none", "lkg_preserved": True})
@@ -213,8 +238,7 @@ class UnifiedIntelligenceLoop:
                 "meta_intent": meta,
                 "platform": {
                     k: status.get(k)
-                    for k in ("phase", "PHASE_15_ALLOWED", "PHASE_16_ALLOWED", "model_router", "skills")
-                    if k in status or True
+                    for k in ("phase", "PHASE_15_ALLOWED", "PHASE_16_ALLOWED", "PHASE_18_ALLOWED", "PHASE_19_ALLOWED", "model_router", "skills")
                 },
                 "lkg_preserved": True,
                 "skills_used": [],
@@ -231,7 +255,6 @@ class UnifiedIntelligenceLoop:
                     "meta_intent": meta,
                     "lkg_preserved": True,
                 }
-            # Skill learning promote_or_rollback without quality → rollback action record only
             proposal = {"skill_id": "meta", "status": "candidate"}
             action = self.orch.learning.promote_or_rollback(proposal, approved=False, quality_ok=False)
             stages.append({"stage": "activation_or_rollback", **action})
@@ -267,42 +290,8 @@ class UnifiedIntelligenceLoop:
 
         return {"ok": False, "error": "unknown_meta_intent", "meta_intent": meta}
 
-    def _map_timeline(self, out: dict[str, Any], stages: list[dict[str, Any]]) -> None:
-        for item in out.get("timeline") or []:
-            ev = item.get("event")
-            if ev in ("intent_analysis",):
-                stages.append({"stage": "intent_classification", "detail": item})
-            elif ev in ("task_planner",):
-                stages.append({"stage": "planning", "detail": item})
-            elif ev in ("skill_discovery",):
-                stages.append({"stage": "skill_discovery", "detail": item})
-            elif ev in ("skill_composition", "skill_execution"):
-                stages.append({"stage": "skill_composition" if ev == "skill_composition" else "execution", "detail": item})
-            elif ev in ("model_routing",):
-                stages.append({"stage": "model_selection", "detail": item})
-            elif ev in ("tool_mcp_sandbox", "sandbox", "web_fabric"):
-                stages.append({"stage": "tool_selection" if "tool" in ev or ev == "web_fabric" else "execution", "detail": item})
-            elif ev in (
-                "application_build",
-                "unified_coding_build",
-                "security_workflow",
-                "security_analysis",
-                "project_inspection",
-            ):
-                stages.append({"stage": "execution", "detail": item})
-            elif ev == "verification":
-                stages.append({"stage": "verification", "detail": item})
-
-        if out.get("skills_used") is not None and not any(s.get("stage") == "skill_discovery" for s in stages):
-            stages.append({"stage": "skill_discovery", "skills_used": out.get("skills_used")})
-        if out.get("tools_used") is not None:
-            stages.append({"stage": "tool_selection", "tools_used": out.get("tools_used")})
-        if out.get("model_routing") or out.get("models_used"):
-            stages.append({"stage": "model_selection", "models_used": out.get("models_used"), "routing": out.get("model_routing")})
-
     def _learning_candidate(self, out: dict[str, Any], *, message: str, stages: list[dict[str, Any]]) -> dict[str, Any]:
         stages.append({"stage": "experience_memory", "learning_event_id": out.get("learning_event_id")})
-        # Build candidate from this turn if successful
         if not out.get("ok") or (out.get("security") or {}).get("rejected"):
             stages.append({"stage": "learning_candidate", "created": False, "reason": "turn_not_eligible"})
             return {"created": False, "reason": "turn_not_eligible"}
