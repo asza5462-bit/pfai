@@ -14,6 +14,7 @@ import os
 from typing import Any
 
 from .config import Config
+from .open_execution import auto_accept_learning
 
 ENV_NAME = "PFAI_CONTINUOUS_TRAINING_ENABLED"
 _FALSEY = {"0", "false", "off", "no", "disabled"}
@@ -51,6 +52,10 @@ def continuous_gate_status(config_path: str = "configs/default.json") -> dict[st
         "env_var": ENV_NAME,
         "env_override": forced,
         "auto_promote": False,
-        "require_human_approval": True,
-        "notes": "Learning/curation may run when enabled; promotion to active always requires owner approval.",
+        "require_human_approval": not auto_accept_learning(),
+        "auto_accept_learning": auto_accept_learning(),
+        "notes": (
+            "When open: curated learning candidates auto-accept. "
+            "Promotion/activation of model weights always stays owner-gated."
+        ),
     }

@@ -150,6 +150,17 @@ class MockCommandProvider(ModelProvider):
             add("forget_memory")
         if re.search(r"correct|تصحيح|هذا التحليل غير صحيح", text + ar):
             add("save_owner_correction")
+        # Self-heal / self-improve / unlock autonomy
+        if re.search(
+            r"أصلح\s*نفس|صلح\s*نفس|self[_\s-]?heal|self[_\s-]?check|self[_\s-]?improve|"
+            r"طور\s*نفس|حدّث\s*نفس|حدث\s*نفس|يطور\s*نفس|يصلح\s*نفس|يحل\s*مشاكل|"
+            r"استقلال|autonom|فك\s*القيود|بدون\s*قيود|طور\s*ذات|تحسين\s*ذاتي",
+            text + ar,
+            re.I,
+        ):
+            add("autonomy_status")
+            add("self_improve_tick")
+            add("self_check_run")
 
         if not picks:
             add("app_control_status")
@@ -264,6 +275,16 @@ class MockCommandProvider(ModelProvider):
                 )
             elif name == "continuous_status" and isinstance(res, dict):
                 insights.append(("continuous: " if en else "التعلم المستمر: ") + _brief(res, 220))
+            elif name in {"self_improve_tick", "self_heal_cycle", "self_check_run", "autonomy_status"} and isinstance(res, dict):
+                insights.append(
+                    ("autonomy: " if en else "الاستقلال الذاتي: ")
+                    + _brief({
+                        "check_ok": res.get("check_ok", res.get("ok")),
+                        "heal": res.get("heal") or {"applied": res.get("applied")},
+                        "auto_accept_learning": (res.get("autonomy") or res.get("learning") or {}).get("auto_accept_learning"),
+                        "weight_promotion": res.get("weight_promotion") or "never_auto",
+                    }, 260)
+                )
             elif name in {"continuous_start", "continuous_resume", "continuous_pause", "continuous_stop"}:
                 insights.append(f"{name} → {_brief(res, 160)}")
             elif name in {"coding_teach", "coding_tracks", "coding_progress", "coding_next_lesson", "coding_assess"}:

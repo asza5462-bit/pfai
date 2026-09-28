@@ -31,6 +31,10 @@ services:
         value: "true"
       - key: PFAI_OPEN_CHAT_TOOLS
         value: "1"
+      - key: PFAI_AUTO_ACCEPT_LEARNING
+        value: "1"
+      - key: PFAI_AUTO_SAFE_HEAL
+        value: "1"
       - key: PFAI_WEB_ALLOW_NETWORK
         value: "1"
       - key: PFAI_WEB_SEARCH_PROVIDER

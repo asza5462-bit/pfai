@@ -3,6 +3,7 @@ from fastapi.middleware.cors import CORSMiddleware
 from fastapi.exceptions import RequestValidationError
 from fastapi.responses import JSONResponse
 import os
+import re
 import time
 from fastapi.responses import FileResponse
 from pathlib import Path
@@ -21,6 +22,7 @@ from .policy import Policy
 from .research_gate import ResearchGate
 from .config import Config
 from .continuous_gate import continuous_gate_status, is_continuous_enabled
+from .open_execution import auto_accept_learning, auto_safe_heal, open_execution_status
 from .logging_setup import setup_logging
 from .command_audit import CommandAuditLog
 from .command_memory import CommandMemoryService
@@ -91,7 +93,8 @@ CONTINUOUS = ContinuousLearningOrchestrator(
     self_training=bool(_CT_SELF.get('enabled', True)),
     self_training_batch_size=int(_CT_SELF.get('examples_per_track_per_cycle') or 2),
     self_training_min_score=float(_CT_SELF.get('min_teacher_score') or 0.8),
-    require_human_approval=True,
+    # Open mode: auto-accept curated learning candidates (NOT weight promotion)
+    require_human_approval=not auto_accept_learning(),
 )
 OWNER=OwnerControl('data/security/owner_control.jsonl')
 OWNER_AUTH=OwnerAuthService(OWNER, root='data/security')
@@ -131,13 +134,64 @@ def _tool_propose_improvement(topic: str = ''):
     return {
         'topic': topic or 'general',
         'suggestions': [
-            'Keep continuous learning on memory/feedback only unless owner explicitly starts weight training offline.',
-            'Review /metrics errors and regression queue before promoting any candidate.',
-            'Confirm owner secret rotation and research allowlist remain deny-by-default.',
+            'Run self_improve_tick to detect → safe-heal → continuous learn in one brain cycle.',
+            'Keep weight promotion explicit; curated learning auto-accepts in open mode.',
+            'Review /metrics and regression queue; SSRF and secrets stay gated.',
         ],
         'continuous_gate': status,
-        'note': 'Suggestion only — no production mutation performed.',
+        'autonomy': open_execution_status(),
+        'note': 'Suggestion only — use self_improve_tick to act within safe bounds.',
     }
+
+def _tool_self_check_run():
+    report = PLATFORM_SELF_CHECK.run_checks()
+    return {
+        'ok': bool(report.ok),
+        'summary': report.summary,
+        'checks': list(report.checks or []),
+        'auto_safe_heal': auto_safe_heal(),
+    }
+
+def _tool_self_heal_cycle(apply: bool = True):
+    """Detect → propose → optionally apply safe steps → retest/rollback."""
+    report = PLATFORM_SELF_CHECK.run_checks()
+    prop = PLATFORM_SELF_HEAL.propose_fix(report)
+    out = {
+        'ok': True,
+        'check_ok': bool(report.ok),
+        'proposal_id': prop.proposal_id,
+        'diagnosis': prop.diagnosis,
+        'steps': list(prop.steps or []),
+        'requires_owner': bool(prop.requires_owner),
+        'applied': False,
+        'weight_promotion': 'never_auto',
+    }
+    if report.ok:
+        out['note'] = 'healthy'
+        return out
+    should_apply = bool(apply) and (auto_safe_heal() or not prop.requires_owner)
+    if should_apply and prop.steps:
+        applied = PLATFORM_SELF_HEAL.apply_fix(prop.proposal_id, approved=True)
+        out['applied'] = bool(applied.applied and applied.ok)
+        out['apply_message'] = applied.message
+        tested = PLATFORM_SELF_HEAL.test_fix(prop.proposal_id)
+        out['recheck_ok'] = bool(tested.ok)
+        if not tested.ok:
+            rolled = PLATFORM_SELF_HEAL.rollback_fix(prop.proposal_id)
+            out['rolled_back'] = bool(rolled.rolled_back)
+            out['ok'] = False
+        else:
+            out['ok'] = True
+    else:
+        out['note'] = 'proposed only — approval or auto_safe_heal required'
+        out['ok'] = False
+    return out
+
+def _tool_self_improve_tick(include_continuous_tick: bool = True):
+    return AUTONOMY.run_cycle(include_continuous_tick=bool(include_continuous_tick))
+
+def _tool_autonomy_status():
+    return AUTONOMY.status()
 
 def _tool_remember_knowledge(kind: str = 'approved_knowledge', content: str = ''):
     if not str(content).strip():
@@ -395,7 +449,8 @@ def _tool_app_control_status():
         },
         'academy_tracks': len(CODING_CURRICULUM.list_tracks()),
         'master_chat': True,
-        'note': 'Chat is the control plane — use tools for ops/learn/train/web/code',
+        'autonomy': open_execution_status(),
+        'note': 'Chat is the control plane — ops/learn/train/web/code + self-improve',
     }
 
 def _tool_learner_snapshot(owner: str = 'owner'):
@@ -490,6 +545,10 @@ CODING_TOOL_SPECS = list(DEFAULT_TOOLS) + [
     ToolSpec('web_fetch', 'Fetch a URL via policy gate (SSRF-safe)', 'read', False, {'url': 'string', 'max_bytes': 'int?'}),
     ToolSpec('web_research', 'Search + fetch research pipeline with citations', 'read', False, {'query': 'string', 'limit': 'int?'}),
     ToolSpec('app_control_status', 'Master control snapshot for chat (ops+learn+train+web+academy)', 'read', False, {}),
+    ToolSpec('self_check_run', 'Run platform self-check diagnostics', 'read', False, {}),
+    ToolSpec('self_heal_cycle', 'Detect → safe-heal → retest (auto in open mode)', 'write', False, {'apply': 'bool?'}),
+    ToolSpec('self_improve_tick', 'Full autonomy tick: check + safe heal + continuous learn', 'write', False, {'include_continuous_tick': 'bool?'}),
+    ToolSpec('autonomy_status', 'Open-execution + self-improve autonomy status', 'read', False, {}),
 ]
 
 # PHASE 4: shared authorization choke-point (server-side only)
@@ -756,6 +815,22 @@ PLATFORM_SELF_HEAL.register_safe_action(
     'compat_recheck',
     lambda: {'ok': PLATFORM_COMPAT.check().python_ok},
 )
+PLATFORM_SELF_HEAL.register_safe_action(
+    'ensure_continuous_worker',
+    lambda: (
+        CONTINUOUS.start()
+        if is_continuous_enabled()
+        else {'ok': False, 'error': 'continuous gate off'}
+    ),
+)
+PLATFORM_SELF_HEAL.register_safe_action(
+    'continuous_soft_tick',
+    lambda: CONTINUOUS.tick_once() if is_continuous_enabled() else {'ok': False, 'error': 'continuous gate off'},
+)
+PLATFORM_SELF_HEAL.register_safe_action(
+    'refresh_web_fabric_status',
+    lambda: __import__('pfai.elite.web_fabric', fromlist=['web_config_report']).web_config_report(),
+)
 PLATFORM_SKILLS = SkillRegistry(
     path='data/longevity/skill_versions.sqlite3',
     executor=PLATFORM_EXECUTOR,
@@ -857,6 +932,58 @@ ORCHESTRATOR = Orchestrator(
     self_check=PLATFORM_SELF_CHECK,
     self_heal=PLATFORM_SELF_HEAL,
     planner=PLATFORM_PLANNER,
+)
+
+from .autonomous_improve import AutonomousImproveOrchestrator  # noqa: E402
+
+def _autonomy_experience_record(*, instruction: str, response: str, source_id: str, passed: bool = True):
+    try:
+        return AUTONOMOUS_TRAINING.experience.record_self_check(
+            instruction=instruction,
+            response=response,
+            source_id=source_id,
+            passed=bool(passed),
+        )
+    except Exception:
+        return None
+
+AUTONOMY = AutonomousImproveOrchestrator(
+    self_check=PLATFORM_SELF_CHECK,
+    self_heal=PLATFORM_SELF_HEAL,
+    continuous=CONTINUOUS,
+    experience_record=_autonomy_experience_record,
+)
+
+# Hook continuous worker: each background cycle also runs bounded self-heal
+_ORIG_CONTINUOUS_RUN_SERVICE = CONTINUOUS._run_service_cycle
+
+def _continuous_with_autonomy(cycle_fn):
+    try:
+        if auto_safe_heal():
+            AUTONOMY.run_cycle(include_continuous_tick=False)
+    except Exception as exc:
+        log.warning('autonomy pre-cycle heal skipped: %s', exc)
+    return _ORIG_CONTINUOUS_RUN_SERVICE(cycle_fn)
+
+CONTINUOUS._run_service_cycle = _continuous_with_autonomy  # type: ignore[method-assign]
+
+# Register autonomy tools after self-heal/continuous wiring exists
+for _spec in (
+    ToolSpec('self_check_run', 'Run platform self-check diagnostics', 'read', False, {}),
+    ToolSpec('self_heal_cycle', 'Detect → safe-heal → retest (auto in open mode)', 'write', False, {'apply': 'bool?'}),
+    ToolSpec('self_improve_tick', 'Full autonomy tick: check + safe heal + continuous learn', 'write', False, {'include_continuous_tick': 'bool?'}),
+    ToolSpec('autonomy_status', 'Open-execution + self-improve autonomy status', 'read', False, {}),
+):
+    TOOL_ROUTER.specs[_spec.name] = _spec
+TOOL_ROUTER.handlers['self_check_run'] = _tool_self_check_run
+TOOL_ROUTER.handlers['self_heal_cycle'] = _tool_self_heal_cycle
+TOOL_ROUTER.handlers['self_improve_tick'] = _tool_self_improve_tick
+TOOL_ROUTER.handlers['autonomy_status'] = _tool_autonomy_status
+log.info(
+    'autonomy ready open=%s auto_learn=%s auto_heal=%s',
+    open_execution_status().get('open_chat_tools'),
+    auto_accept_learning(),
+    auto_safe_heal(),
 )
 ELITE = EliteOrchestrator(
     root='data/longevity/elite',
@@ -1237,7 +1364,10 @@ def continuous_status():
     status = CONTINUOUS.status()
     status['gate'] = continuous_gate_status()
     status['auto_promote'] = False
-    status['require_human_approval'] = True
+    status['require_human_approval'] = not auto_accept_learning()
+    status['auto_accept_learning'] = auto_accept_learning()
+    status['auto_safe_heal'] = auto_safe_heal()
+    status['autonomy'] = open_execution_status()
     return status
 
 @app.get('/continuous/auto_score')
@@ -1526,6 +1656,16 @@ def elite_unified_chat(x: EliteChatBody, owner: str = Depends(access_public)):
     return result
 
 
+def _looks_like_autonomy_intent(message: str) -> bool:
+    return bool(re.search(
+        r"أصلح\s*نفس|صلح\s*نفس|self[_\s-]?heal|self[_\s-]?check|self[_\s-]?improve|"
+        r"طور\s*نفس|حدّث\s*نفس|حدث\s*نفس|يطور\s*نفس|يصلح\s*نفس|"
+        r"استقلال|autonom|فك\s*القيود|بدون\s*قيود|تحسين\s*ذاتي|self_improve",
+        message or "",
+        re.I,
+    ))
+
+
 def _should_use_production_runtime(message: str) -> bool:
     """Route multi-capability / agent-style turns through ProductionRuntime; keep CommandAgent for ops tools."""
     from .command_agent import _looks_like_coding_intent
@@ -1534,10 +1674,14 @@ def _should_use_production_runtime(message: str) -> bool:
     if not text:
         return False
     lowered = text.lower()
+    # Autonomy / self-heal must stay on ToolRouter (safe bounded loop)
+    if _looks_like_autonomy_intent(text):
+        return False
     operational = (
         'health check', 'health_check', 'فحص الصحة', 'system status', 'حالة النظام',
         'continuous_start', 'continuous_stop', 'metrics', 'deploy', 'rollback model',
         'حلل حالة النظام', 'افحص الأخطاء', 'راجع البيانات',
+        'self_improve', 'self_heal', 'autonomy',
     )
     if any(o in lowered for o in operational):
         return False

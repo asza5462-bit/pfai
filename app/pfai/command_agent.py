@@ -404,9 +404,23 @@ def _looks_like_web_intent(message: str) -> bool:
     ))
 
 
+def _looks_like_autonomy_intent(message: str) -> bool:
+    return bool(re.search(
+        r"أصلح\s*نفس|صلح\s*نفس|self[_\s-]?heal|self[_\s-]?check|self[_\s-]?improve|"
+        r"طور\s*نفس|حدّث\s*نفس|حدث\s*نفس|يطور\s*نفس|يصلح\s*نفس|"
+        r"استقلال|autonom|فك\s*القيود|بدون\s*قيود|تحسين\s*ذاتي|self_improve",
+        message or "",
+        re.I,
+    ))
+
+
 def _looks_like_coding_intent(message: str) -> bool:
-    # Web / training-status win over coding keyword collisions (e.g. "learn")
-    if _looks_like_web_intent(message) or _looks_like_training_status_intent(message):
+    # Web / training-status / autonomy win over coding keyword collisions (e.g. "learn")
+    if (
+        _looks_like_web_intent(message)
+        or _looks_like_training_status_intent(message)
+        or _looks_like_autonomy_intent(message)
+    ):
         return False
     return bool(re.search(
         r"علمني|teach me|learn |مبتدئ|full stack|اختبر مستواي|assess|تمرين|exercise|راجع هذا الكود|code review|"

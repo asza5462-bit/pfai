@@ -161,6 +161,12 @@ class SelfHeal:
             if candidate in self._safe_actions and candidate not in steps:
                 steps.append(candidate)
 
+        # Open/auto-safe-heal mode: low-risk registered steps need no click.
+        try:
+            from pfai.open_execution import auto_safe_heal
+            owner_gate = not (auto_safe_heal() and bool(steps) and all(s in self._safe_actions for s in steps))
+        except Exception:
+            owner_gate = True
         prop = HealProposal(
             proposal_id=pid,
             diagnosis=f"{len(failures)} failing check(s)",
@@ -168,7 +174,7 @@ class SelfHeal:
             reversible=True,
             steps=steps,
             risk="low",
-            requires_owner=True,
+            requires_owner=owner_gate,
             meta={
                 "failures": failures,
                 "forbidden": [
@@ -179,6 +185,7 @@ class SelfHeal:
                     "arbitrary_file_write",
                 ],
                 "phase": "diagnose",
+                "auto_safe_heal": not owner_gate,
             },
         )
         self._proposals[pid] = prop
@@ -189,7 +196,12 @@ class SelfHeal:
         prop = self._proposals.get(proposal_id)
         if not prop:
             return HealResult(ok=False, proposal_id=proposal_id, message="unknown proposal")
-        if prop.requires_owner and not approved:
+        try:
+            from pfai.open_execution import auto_safe_heal
+            open_ok = auto_safe_heal() and prop.safe and prop.risk == "low"
+        except Exception:
+            open_ok = False
+        if prop.requires_owner and not approved and not open_ok:
             if self.authz_audit:
                 self.authz_audit.record(
                     kind="heal",
