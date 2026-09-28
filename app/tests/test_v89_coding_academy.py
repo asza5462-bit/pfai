@@ -112,8 +112,8 @@ class TestCodingAgentAndMemory(unittest.TestCase):
 class TestCodingAPI(unittest.TestCase):
     @classmethod
     def setUpClass(cls):
-        os.environ["PFAI_OWNER_EMAIL"] = "test-owner@example.invalid"
-        os.environ["PFAI_OWNER_SECRET_HASH"] = hashlib.sha256(b"test-secret").hexdigest()
+        os.environ["PFAI_OWNER_USERNAME"] = "testowner"
+        os.environ["PFAI_OWNER_PASSWORD_HASH"] = hashlib.sha256(b"test-secret").hexdigest()
         os.environ.pop("ANTHROPIC_API_KEY", None)
         from pfai.api import app, runtime, COMMAND_AGENT, CODING_AGENT
         from pfai.model import EchoProvider
@@ -125,8 +125,8 @@ class TestCodingAPI(unittest.TestCase):
 
     @classmethod
     def tearDownClass(cls):
-        os.environ.pop("PFAI_OWNER_EMAIL", None)
-        os.environ.pop("PFAI_OWNER_SECRET_HASH", None)
+        os.environ.pop("PFAI_OWNER_USERNAME", None)
+        os.environ.pop("PFAI_OWNER_PASSWORD_HASH", None)
 
     def test_tracks_and_sandbox(self):
         t = self.client.get("/coding/tracks", headers=self.h)

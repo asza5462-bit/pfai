@@ -180,8 +180,8 @@ class TestLTMAndOrchestrator(unittest.TestCase):
 class TestApiPlatformSurface(unittest.TestCase):
     @classmethod
     def setUpClass(cls):
-        os.environ["PFAI_OWNER_EMAIL"] = "test-owner@example.invalid"
-        os.environ["PFAI_OWNER_SECRET_HASH"] = hashlib.sha256(b"test-secret").hexdigest()
+        os.environ["PFAI_OWNER_USERNAME"] = "testowner"
+        os.environ["PFAI_OWNER_PASSWORD_HASH"] = hashlib.sha256(b"test-secret").hexdigest()
         os.environ.pop("ANTHROPIC_API_KEY", None)
         from pfai.api import app
 

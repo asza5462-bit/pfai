@@ -1,11 +1,11 @@
-"""Owner authentication: setup, sessions, rate-limit, lockout, passcode login.
+"""Owner authentication: setup, sessions, rate-limit, lockout, username+password.
 
 Integrates with OwnerControl — does not replace it.
-Never stores or logs plaintext passcodes. Never returns hashes to clients
+Never stores or logs plaintext passwords. Never returns hashes to clients
 except via operator-side tooling that hashes stdin locally.
 
-Email OTP delivery was permanently removed. Owner auth is passcode + session
-cookie (+ optional X-Owner-Secret header for API clients).
+Email OTP and email-based login were permanently removed.
+Owner auth is username + password (+ HttpOnly session cookie, optional X-Owner-Secret).
 """
 from __future__ import annotations
 
@@ -13,6 +13,7 @@ import hashlib
 import hmac
 import json
 import os
+import re
 import secrets
 import threading
 import time
@@ -24,7 +25,7 @@ from .owner_control import OwnerControl
 COOKIE_NAME = "pfai_owner_session"
 AUTH_FAIL_MESSAGE = "authentication failed"
 SETUP_DISABLED_MESSAGE = "owner setup is disabled"
-WEAK_PASS_MESSAGE = "passcode does not meet strength requirements"
+WEAK_PASS_MESSAGE = "password does not meet strength requirements"
 
 # Tunables (override via env for ops, not secrets)
 DEFAULT_SESSION_TTL = int(os.environ.get("PFAI_OWNER_SESSION_TTL", "28800"))  # 8h
@@ -33,6 +34,18 @@ MAX_FAILURES = int(os.environ.get("PFAI_OWNER_MAX_FAILURES", "5"))
 LOCKOUT_SECONDS = int(os.environ.get("PFAI_OWNER_LOCKOUT_SECONDS", "900"))
 PBKDF2_ITERATIONS = int(os.environ.get("PFAI_OWNER_PBKDF2_ITERATIONS", "260000"))
 MIN_PASSCODE_LEN = int(os.environ.get("PFAI_OWNER_MIN_PASSCODE_LEN", "12"))
+_USERNAME_RE = re.compile(r"^[A-Za-z0-9][A-Za-z0-9._-]{2,63}$")
+
+
+def normalize_username(username: str) -> str:
+    return (username or "").strip().lower()
+
+
+def username_valid(username: str) -> bool:
+    u = normalize_username(username)
+    if not u or "@" in u or " " in u:
+        return False
+    return bool(_USERNAME_RE.match(u))
 
 
 class OwnerAuthService:
@@ -57,22 +70,23 @@ class OwnerAuthService:
         self._hydrate_env_from_store()
 
     # --- public status -------------------------------------------------
-    def public_status(self, *, authenticated: bool = False, email: str = "") -> dict[str, Any]:
+    def public_status(self, *, authenticated: bool = False, username: str = "") -> dict[str, Any]:
         return {
             "setup_required": self.setup_required(),
             "setup_locked": self.setup_locked(),
             "owner_configured": self.owner_configured(),
             "authenticated": bool(authenticated),
-            "email": email if authenticated else "",
+            "username": username if authenticated else "",
             "session_ttl_seconds": self.session_ttl,
             "session_abs_max_seconds": self.session_abs_max,
             "auth_methods": [
-                "passcode",
+                "password",
                 "session_cookie",
                 "x_owner_secret_header",
             ],
             "email_otp": "REMOVED",
-            "note": "Passcodes are never returned. Prefer a new production passcode before any deploy. Email OTP is permanently removed.",
+            "email_auth": "REMOVED",
+            "note": "Passwords are never returned. Configure owner username and secret via deployment environment. Email login/OTP permanently removed.",
         }
 
     def setup_required(self) -> bool:
@@ -84,13 +98,13 @@ class OwnerAuthService:
         return self.setup_lock_path.exists()
 
     def owner_configured(self) -> bool:
-        return bool(self.owner.owner_email()) and bool(self._configured_hash())
+        return bool(self.owner.owner_username()) and bool(self._configured_hash())
 
     # --- hashing -------------------------------------------------------
     @staticmethod
     def hash_passcode(passcode: str, *, salt: bytes | None = None, iterations: int = PBKDF2_ITERATIONS) -> str:
         if not passcode:
-            raise ValueError("passcode required")
+            raise ValueError("password required")
         salt = salt or secrets.token_bytes(16)
         dk = hashlib.pbkdf2_hmac("sha256", passcode.encode("utf-8"), salt, int(iterations))
         return f"pbkdf2_sha256${int(iterations)}${salt.hex()}${dk.hex()}"
@@ -125,71 +139,72 @@ class OwnerAuthService:
                 any(not c.isalnum() for c in passcode),
             ]
         )
-        # Require at least 3 character classes for strength
         return classes >= 3
 
     # --- setup (once) --------------------------------------------------
-    def run_setup(self, email: str, passcode: str, passcode_confirm: str) -> dict[str, Any]:
-        email = (email or "").strip().lower()
+    def run_setup(self, username: str, password: str, password_confirm: str) -> dict[str, Any]:
+        username = normalize_username(username)
         if self.setup_locked() or self.owner_configured():
             self.owner._audit("SETUP_BLOCKED", {"reason": "already_initialized"})
             return {"ok": False, "error": SETUP_DISABLED_MESSAGE}
 
-        if not email or "@" not in email:
+        if not username_valid(username):
             return {"ok": False, "error": "invalid setup request"}
-        if passcode != passcode_confirm:
+        if password != password_confirm:
             return {"ok": False, "error": "invalid setup request"}
-        if not self.passcode_strong(passcode):
+        if not self.passcode_strong(password):
             return {"ok": False, "error": WEAK_PASS_MESSAGE}
 
-        # If env already pins an email, setup must match it (no takeover).
-        env_email = (os.environ.get(self.owner.email_env) or "").strip().lower()
-        if env_email and env_email != email:
-            self.owner._audit("SETUP_BLOCKED", {"reason": "email_mismatch"})
+        env_user = normalize_username(os.environ.get(self.owner.username_env) or "")
+        if env_user and env_user != username:
+            self.owner._audit("SETUP_BLOCKED", {"reason": "username_mismatch"})
             return {"ok": False, "error": "invalid setup request"}
 
-        digest = self.hash_passcode(passcode)
-        self._write_credentials(email, digest)
-        self._write_setup_lock(email)
-        # Hydrate process env for this runtime (hash never logged)
-        os.environ[self.owner.email_env] = email
+        digest = self.hash_passcode(password)
+        self._write_credentials(username, digest)
+        self._write_setup_lock(username)
+        os.environ[self.owner.username_env] = username
         os.environ[self.owner.secret_env] = digest
-        self.owner._audit("SETUP_COMPLETED", {"email": email})
+        self.owner._audit("SETUP_COMPLETED", {"username": username})
         return {
             "ok": True,
-            "email": email,
+            "username": username,
             "setup_locked": True,
-            "message": "Owner setup complete. Plaintext passcode is not stored. "
-            "Before production deploy, set a NEW passcode hash via environment secrets.",
+            "message": "Owner setup complete. Plaintext password is not stored. "
+            "Before production deploy, set a NEW password hash via environment secrets.",
         }
 
     # --- login / logout / session --------------------------------------
-    def login(self, email: str, passcode: str, *, client_key: str) -> dict[str, Any]:
-        email = (email or "").strip().lower()
+    def login(self, username: str, password: str, *, client_key: str) -> dict[str, Any]:
+        username = normalize_username(username)
         client_key = (client_key or "unknown")[:128]
         if self._is_locked(client_key):
             self.owner._audit("AUTH_LOCKOUT", {"client": client_key})
             return {"ok": False, "error": AUTH_FAIL_MESSAGE, "locked": True}
 
-        configured_email = (self.owner.owner_email() or "").strip().lower()
+        configured = normalize_username(self.owner.owner_username() or "")
         stored_hash = self._configured_hash()
         ok = bool(
-            configured_email
+            configured
             and stored_hash
-            and email
-            and hmac.compare_digest(email, configured_email)
-            and self.verify_passcode(passcode, stored_hash)
+            and username
+            and username_valid(username)
+            and hmac.compare_digest(username, configured)
+            and self.verify_passcode(password, stored_hash)
         )
         if not ok:
             self._register_failure(client_key)
-            self.owner._audit("AUTH_FAILURE", {"email_attempt_present": bool(email), "client": client_key})
+            self.owner._audit(
+                "AUTH_FAILURE",
+                {"username_attempt_present": bool(username), "client": client_key},
+            )
             return {"ok": False, "error": AUTH_FAIL_MESSAGE, "locked": self._is_locked(client_key)}
 
         self._clear_failures(client_key)
         token = secrets.token_urlsafe(32)
-        self._put_session(token, configured_email)
-        self.owner._audit("AUTH_SUCCESS", {"email": configured_email, "client": client_key})
-        return {"ok": True, "email": configured_email, "token": token, "expires_in": self.session_ttl}
+        self._put_session(token, configured)
+        self.owner._audit("AUTH_SUCCESS", {"username": configured, "client": client_key})
+        return {"ok": True, "username": configured, "token": token, "expires_in": self.session_ttl}
 
     def logout(self, token: str | None) -> dict[str, Any]:
         if token:
@@ -208,22 +223,20 @@ class OwnerAuthService:
                 return None
             now = time.time()
             created = float(rec.get("created_at") or 0)
-            # Absolute auto-lock: session cannot outlive abs max even with activity.
             if created and (now - created) > self.session_abs_max:
                 sessions.pop(key, None)
                 self._save_json(self.sessions_path, sessions)
-                self.owner._audit("SESSION_ABS_EXPIRED", {"email": rec.get("email")})
+                self.owner._audit("SESSION_ABS_EXPIRED", {"username": rec.get("username") or rec.get("email")})
                 return None
             if float(rec.get("expires_at", 0)) < now:
                 sessions.pop(key, None)
                 self._save_json(self.sessions_path, sessions)
                 return None
-            # sliding idle expiration (bounded by abs max)
             remaining_abs = self.session_abs_max - (now - created) if created else self.session_ttl
             rec["expires_at"] = now + min(self.session_ttl, max(1, int(remaining_abs)))
             sessions[key] = rec
             self._save_json(self.sessions_path, sessions)
-            return str(rec.get("email") or "")
+            return str(rec.get("username") or rec.get("email") or "")
 
     def authenticate_secret_header(self, presented_secret: str) -> bool:
         """Legacy header auth used by API clients/tests — still server-side only."""
@@ -235,6 +248,9 @@ class OwnerAuthService:
     # --- internals -----------------------------------------------------
     def _configured_hash(self) -> str:
         env_hash = os.environ.get(self.owner.secret_env, "")
+        if not env_hash:
+            # Legacy alias only for local/dev transition — never preferred in production docs.
+            env_hash = os.environ.get("PFAI_OWNER_SECRET_HASH", "")
         if env_hash:
             return env_hash
         data = self._load_json(self.credentials_path, {})
@@ -242,14 +258,15 @@ class OwnerAuthService:
 
     def _hydrate_env_from_store(self) -> None:
         data = self._load_json(self.credentials_path, {})
-        if data.get("email") and not os.environ.get(self.owner.email_env):
-            os.environ[self.owner.email_env] = str(data["email"])
+        username = data.get("username") or data.get("email")
+        if username and not os.environ.get(self.owner.username_env):
+            os.environ[self.owner.username_env] = normalize_username(str(username))
         if data.get("secret_hash") and not os.environ.get(self.owner.secret_env):
             os.environ[self.owner.secret_env] = str(data["secret_hash"])
 
-    def _write_credentials(self, email: str, digest: str) -> None:
+    def _write_credentials(self, username: str, digest: str) -> None:
         payload = {
-            "email": email,
+            "username": username,
             "secret_hash": digest,
             "created_at": time.strftime("%Y-%m-%dT%H:%M:%SZ", time.gmtime()),
             "algo": "pbkdf2_sha256",
@@ -260,10 +277,10 @@ class OwnerAuthService:
         except OSError:
             pass
 
-    def _write_setup_lock(self, email: str) -> None:
+    def _write_setup_lock(self, username: str) -> None:
         payload = {
             "locked_at": time.strftime("%Y-%m-%dT%H:%M:%SZ", time.gmtime()),
-            "email": email,
+            "username": username,
             "note": "Owner setup permanently disabled. Recovery requires out-of-band env secrets.",
         }
         self.setup_lock_path.write_text(json.dumps(payload, indent=2), encoding="utf-8")
@@ -275,11 +292,11 @@ class OwnerAuthService:
     def _token_key(self, token: str) -> str:
         return hashlib.sha256(token.encode("utf-8")).hexdigest()
 
-    def _put_session(self, token: str, email: str) -> None:
+    def _put_session(self, token: str, username: str) -> None:
         with self._lock:
             sessions = self._load_json(self.sessions_path, {})
             sessions[self._token_key(token)] = {
-                "email": email,
+                "username": username,
                 "created_at": time.time(),
                 "expires_at": time.time() + self.session_ttl,
             }
@@ -314,7 +331,6 @@ class OwnerAuthService:
             if rec["failures"] >= MAX_FAILURES:
                 rec["locked_until"] = time.time() + LOCKOUT_SECONDS
                 rec["failures"] = 0
-                # Auto-lock: revoke all active sessions on lockout.
                 self._drop_all_sessions_unlocked()
                 self.owner._audit("AUTH_AUTO_LOCK", {"client": client_key})
             clients[client_key] = rec

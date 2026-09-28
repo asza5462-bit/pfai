@@ -176,8 +176,8 @@ class TestOrchestratorPhase7(unittest.TestCase):
 class TestPhase7API(unittest.TestCase):
     @classmethod
     def setUpClass(cls):
-        os.environ["PFAI_OWNER_EMAIL"] = "test-owner@example.invalid"
-        os.environ["PFAI_OWNER_SECRET_HASH"] = hashlib.sha256(b"test-secret").hexdigest()
+        os.environ["PFAI_OWNER_USERNAME"] = "testowner"
+        os.environ["PFAI_OWNER_PASSWORD_HASH"] = hashlib.sha256(b"test-secret").hexdigest()
         os.environ.pop("ANTHROPIC_API_KEY", None)
         from pfai.api import app, AUTONOMOUS_TRAINING
         from pfai.longevity.autonomous_training.collector import ExperienceCollector
@@ -224,7 +224,7 @@ class TestPhase7API(unittest.TestCase):
         st = self.client.get("/owner/status")
         self.assertEqual(st.status_code, 200)
         self.assertNotIn("email_otp", st.json().get("auth_methods", []))
-        self.assertIn("passcode", st.json().get("auth_methods", []))
+        self.assertIn("password", st.json().get("auth_methods", []))
         self.assertNotIn("otp_code", json.dumps(st.json()).lower())
 
     def test_schema_target_5(self):

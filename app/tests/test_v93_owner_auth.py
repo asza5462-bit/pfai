@@ -16,6 +16,7 @@ from pfai.owner_control import OwnerControl
 
 
 STRONG = "Correct-Horse-Battery-1!"
+OWNER_USER = "testowner"
 
 
 class TestOwnerAuthService(unittest.TestCase):
@@ -29,68 +30,69 @@ class TestOwnerAuthService(unittest.TestCase):
 
         oa.PBKDF2_ITERATIONS = 1000
         self.auth = OwnerAuthService(self.owner, root=str(self.root), session_ttl=2)
-        for k in ("PFAI_OWNER_EMAIL", "PFAI_OWNER_SECRET_HASH"):
+        for k in ("PFAI_OWNER_USERNAME", "PFAI_OWNER_EMAIL", "PFAI_OWNER_PASSWORD_HASH"):
             os.environ.pop(k, None)
 
     def tearDown(self):
-        for k in ("PFAI_OWNER_EMAIL", "PFAI_OWNER_SECRET_HASH"):
+        for k in ("PFAI_OWNER_USERNAME", "PFAI_OWNER_EMAIL", "PFAI_OWNER_PASSWORD_HASH"):
             os.environ.pop(k, None)
         self.tmp.cleanup()
 
     def test_setup_once_then_blocked(self):
         self.assertTrue(self.auth.setup_required())
-        ok = self.auth.run_setup("szz5462@gmail.com", STRONG, STRONG)
+        ok = self.auth.run_setup(OWNER_USER, STRONG, STRONG)
         self.assertTrue(ok["ok"])
         self.assertTrue(self.auth.setup_locked())
         self.assertFalse(self.auth.setup_required())
-        again = self.auth.run_setup("evil@example.com", STRONG, STRONG)
+        again = self.auth.run_setup("eviluser", STRONG, STRONG)
         self.assertFalse(again["ok"])
         self.assertIn("disabled", again["error"])
 
-    def test_setup_rejects_weak_and_mismatch(self):
-        self.assertFalse(self.auth.run_setup("a@b.co", "short", "short")["ok"])
-        self.assertFalse(self.auth.run_setup("a@b.co", STRONG, STRONG + "x")["ok"])
+    def test_setup_rejects_weak_mismatch_and_email(self):
+        self.assertFalse(self.auth.run_setup("ab", "short", "short")["ok"])
+        self.assertFalse(self.auth.run_setup(OWNER_USER, STRONG, STRONG + "x")["ok"])
+        self.assertFalse(self.auth.run_setup("owner@example.com", STRONG, STRONG)["ok"])
 
     def test_login_session_logout_and_expiry(self):
-        self.auth.run_setup("owner@example.com", STRONG, STRONG)
-        bad = self.auth.login("owner@example.com", "wrong-passcode!!", client_key="ip1")
+        self.auth.run_setup(OWNER_USER, STRONG, STRONG)
+        bad = self.auth.login(OWNER_USER, "wrong-password!!", client_key="ip1")
         self.assertFalse(bad["ok"])
         self.assertEqual(bad["error"], AUTH_FAIL_MESSAGE)
-        # enumeration-safe: wrong email same message
-        bad2 = self.auth.login("other@example.com", STRONG, client_key="ip1")
+        # enumeration-safe: wrong username same message
+        bad2 = self.auth.login("otheruser", STRONG, client_key="ip1")
         self.assertEqual(bad2["error"], AUTH_FAIL_MESSAGE)
 
-        good = self.auth.login("owner@example.com", STRONG, client_key="ip1")
+        good = self.auth.login(OWNER_USER, STRONG, client_key="ip1")
         self.assertTrue(good["ok"])
         token = good["token"]
-        self.assertEqual(self.auth.resolve_session(token), "owner@example.com")
+        self.assertEqual(self.auth.resolve_session(token), OWNER_USER)
         self.auth.logout(token)
         self.assertIsNone(self.auth.resolve_session(token))
 
         # expiry
         self.auth.session_ttl = 1
-        tok2 = self.auth.login("owner@example.com", STRONG, client_key="ip2")["token"]
+        tok2 = self.auth.login(OWNER_USER, STRONG, client_key="ip2")["token"]
         time.sleep(1.2)
         self.assertIsNone(self.auth.resolve_session(tok2))
 
     def test_lockout_after_repeated_failures(self):
-        self.auth.run_setup("owner@example.com", STRONG, STRONG)
-        tok = self.auth.login("owner@example.com", STRONG, client_key="legit")["token"]
-        self.assertEqual(self.auth.resolve_session(tok), "owner@example.com")
+        self.auth.run_setup(OWNER_USER, STRONG, STRONG)
+        tok = self.auth.login(OWNER_USER, STRONG, client_key="legit")["token"]
+        self.assertEqual(self.auth.resolve_session(tok), OWNER_USER)
         with mock.patch("pfai.owner_auth.MAX_FAILURES", 3), mock.patch("pfai.owner_auth.LOCKOUT_SECONDS", 60):
             for _ in range(3):
-                self.auth.login("owner@example.com", "nope-nope-nope1", client_key="attacker")
-            locked = self.auth.login("owner@example.com", STRONG, client_key="attacker")
+                self.auth.login(OWNER_USER, "nope-nope-nope1", client_key="attacker")
+            locked = self.auth.login(OWNER_USER, STRONG, client_key="attacker")
             self.assertFalse(locked["ok"])
             self.assertTrue(locked.get("locked"))
             # Auto-lock revokes existing sessions
             self.assertIsNone(self.auth.resolve_session(tok))
 
     def test_absolute_session_auto_lock(self):
-        self.auth.run_setup("owner@example.com", STRONG, STRONG)
+        self.auth.run_setup(OWNER_USER, STRONG, STRONG)
         self.auth.session_ttl = 60
         self.auth.session_abs_max = 1
-        tok = self.auth.login("owner@example.com", STRONG, client_key="ip-abs")["token"]
+        tok = self.auth.login(OWNER_USER, STRONG, client_key="ip-abs")["token"]
         time.sleep(1.2)
         self.assertIsNone(self.auth.resolve_session(tok))
 
@@ -106,8 +108,9 @@ class TestOwnerAuthService(unittest.TestCase):
 class TestOwnerAuthAPI(unittest.TestCase):
     @classmethod
     def setUpClass(cls):
-        os.environ["PFAI_OWNER_EMAIL"] = "test-owner@example.invalid"
-        os.environ["PFAI_OWNER_SECRET_HASH"] = hashlib.sha256(b"test-secret").hexdigest()
+        os.environ["PFAI_OWNER_USERNAME"] = OWNER_USER
+        os.environ.pop("PFAI_OWNER_EMAIL", None)
+        os.environ["PFAI_OWNER_PASSWORD_HASH"] = hashlib.sha256(b"test-secret").hexdigest()
         os.environ.pop("ANTHROPIC_API_KEY", None)
         # TestClient is HTTP — production Secure cookies would not be stored.
         os.environ["PFAI_ENV"] = "test"
@@ -125,6 +128,9 @@ class TestOwnerAuthAPI(unittest.TestCase):
         body = st.json()
         self.assertIn("setup_required", body)
         self.assertIn("authenticated", body)
+        self.assertIn("password", body.get("auth_methods", []))
+        self.assertEqual(body.get("email_otp"), "REMOVED")
+        self.assertEqual(body.get("email_auth"), "REMOVED")
         self.assertNotIn("passcode", body)
         self.assertNotIn("hash", str(body).lower())
         self.assertFalse(any(k in body for k in ("secret", "secret_hash", "token")))
@@ -132,17 +138,18 @@ class TestOwnerAuthAPI(unittest.TestCase):
     def test_legacy_header_still_works(self):
         r = self.client.get("/owner/identity", headers=self.headers)
         self.assertEqual(r.status_code, 200)
-        self.assertEqual(r.json()["email"], "test-owner@example.invalid")
+        self.assertEqual(r.json()["username"], OWNER_USER)
 
     def test_login_sets_httponly_cookie(self):
         r = self.client.post(
             "/owner/login",
-            json={"email": "test-owner@example.invalid", "passcode": "test-secret"},
+            json={"username": OWNER_USER, "password": "test-secret"},
         )
         self.assertEqual(r.status_code, 200, r.text)
         self.assertTrue(r.json()["authenticated"])
+        self.assertEqual(r.json()["username"], OWNER_USER)
         self.assertNotIn("token", r.json())
-        self.assertNotIn("passcode", r.json())
+        self.assertNotIn("password", r.json())
         self.assertNotIn("secret_hash", r.json())
         self.assertIn(COOKIE_NAME, r.cookies)
         # Starlette/httpx exposes set-cookie; assert security flags when present.
@@ -159,6 +166,22 @@ class TestOwnerAuthAPI(unittest.TestCase):
         self.client.cookies.clear()
         r4 = self.client.get("/owner/identity")
         self.assertEqual(r4.status_code, 401)
+
+    def test_wrong_username_401(self):
+        r = self.client.post(
+            "/owner/login",
+            json={"username": "wronguser", "password": "test-secret"},
+        )
+        self.assertEqual(r.status_code, 401)
+        self.assertEqual(r.json()["detail"], AUTH_FAIL_MESSAGE)
+
+    def test_wrong_password_401(self):
+        r = self.client.post(
+            "/owner/login",
+            json={"username": OWNER_USER, "password": "Definitely-Wrong-99!"},
+        )
+        self.assertEqual(r.status_code, 401)
+        self.assertEqual(r.json()["detail"], AUTH_FAIL_MESSAGE)
 
     def test_secure_cookie_flags_helper(self):
         from pfai import api as api_mod
@@ -274,7 +297,7 @@ class TestOwnerAuthAPI(unittest.TestCase):
             r = self.client.get(path)
             self.assertEqual(r.status_code, 200, msg=path)
             body = r.text.lower()
-            for needle in ("pbkdf2", "api_key", "passcode=", "owner_secret", "pfai_owner_session="):
+            for needle in ("pbkdf2", "api_key", "password=", "owner_secret", "pfai_owner_session="):
                 self.assertNotIn(needle, body, msg=f"{path} leaked {needle}")
             if path in ("/recovery/verify", "/research/verify"):
                 self.assertNotIn("history_path", body)
@@ -353,7 +376,7 @@ class TestOwnerAuthAPI(unittest.TestCase):
     def test_setup_disabled_when_already_configured(self):
         r = self.client.post(
             "/owner/setup",
-            json={"email": "hijack@example.com", "passcode": STRONG, "passcode_confirm": STRONG},
+            json={"username": "hijackuser", "password": STRONG, "password_confirm": STRONG},
         )
         self.assertIn(r.status_code, (400, 409))
         self.assertNotIn(STRONG, r.text)
@@ -361,7 +384,7 @@ class TestOwnerAuthAPI(unittest.TestCase):
     def test_uniform_auth_failure(self):
         r = self.client.post(
             "/owner/login",
-            json={"email": "nobody@example.com", "passcode": "Definitely-Wrong-99!"},
+            json={"username": "nobody", "password": "Definitely-Wrong-99!"},
         )
         self.assertEqual(r.status_code, 401)
         self.assertEqual(r.json()["detail"], AUTH_FAIL_MESSAGE)
@@ -370,6 +393,9 @@ class TestOwnerAuthAPI(unittest.TestCase):
         r = self.client.get("/")
         self.assertEqual(r.status_code, 200)
         self.assertIn("تسجيل دخول المالك", r.text)
+        self.assertIn("اسم المستخدم", r.text)
+        self.assertNotIn("ownerEmail", r.text)
+        self.assertNotIn("type=\"email\"", r.text)
         self.assertNotIn("test-secret", r.text)
 
 
@@ -379,9 +405,10 @@ class TestFirstTimeSetupIsolatedAPI(unittest.TestCase):
     """
 
     def test_cannot_take_over_via_setup(self):
-        os.environ.setdefault("PFAI_OWNER_EMAIL", "test-owner@example.invalid")
+        os.environ.setdefault("PFAI_OWNER_USERNAME", OWNER_USER)
+        os.environ.pop("PFAI_OWNER_EMAIL", None)
         os.environ.setdefault(
-            "PFAI_OWNER_SECRET_HASH", hashlib.sha256(b"test-secret").hexdigest()
+            "PFAI_OWNER_PASSWORD_HASH", hashlib.sha256(b"test-secret").hexdigest()
         )
         from pfai.api import app
 
@@ -389,9 +416,9 @@ class TestFirstTimeSetupIsolatedAPI(unittest.TestCase):
         r = client.post(
             "/owner/setup",
             json={
-                "email": "szz5462@gmail.com",
-                "passcode": STRONG,
-                "passcode_confirm": STRONG,
+                "username": "takeover",
+                "password": STRONG,
+                "password_confirm": STRONG,
             },
         )
         self.assertNotEqual(r.status_code, 200)

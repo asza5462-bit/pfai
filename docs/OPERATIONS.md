@@ -9,10 +9,10 @@ python3 -m venv .venv
 pip install -r requirements.txt
 
 # Required for owner-gated routes and real Anthropic calls:
-export PFAI_OWNER_EMAIL='szz5462@gmail.com'
+export PFAI_OWNER_USERNAME='your_username'
 # Prefer: python -m pfai.hash_owner_secret   (prints pbkdf2 hash; paste below)
-# Treat any previously shared passcode as compromised — use a NEW secret before deploy.
-export PFAI_OWNER_SECRET_HASH='(paste hash only — never the plaintext passcode)'
+# Treat any previously shared password as compromised — use a NEW secret before deploy.
+export PFAI_OWNER_PASSWORD_HASH='(paste hash only — never the plaintext password)'
 # export ANTHROPIC_API_KEY=...   # set in your shell/platform secrets only
 
 python run_web.py
@@ -88,15 +88,12 @@ Promotion to active **never** happens automatically. Use owner-authenticated API
 | Variable | Required | Notes |
 |---|---|---|
 | `ANTHROPIC_API_KEY` | For real Claude | Platform secret only |
-| `PFAI_OWNER_EMAIL` | For owner routes | Sole owner identity |
-| `PFAI_OWNER_SECRET_HASH` | For owner routes | Passcode hash only (pbkdf2 or legacy sha256) |
+| `PFAI_OWNER_USERNAME` | For owner routes | Sole owner username (not email) |
+| `PFAI_OWNER_PASSWORD_HASH` | For owner routes | Password hash only (pbkdf2 or legacy sha256) |
 | `PFAI_OWNER_SESSION_TTL` | Optional | Owner session seconds |
 | `PFAI_OWNER_MAX_FAILURES` | Optional | Auth lockout threshold |
 | `PFAI_OWNER_LOCKOUT_SECONDS` | Optional | Auth lockout duration |
-| `PFAI_EMAIL_PROVIDER` | Optional | `mock` (default) / `smtp` / `api` for Email OTP — see `docs/EMAIL_DELIVERY.md` |
-| `PFAI_SMTP_HOST` / `PORT` / `USER` / `PASSWORD` / `FROM` | Optional | SMTP OTP delivery (env secrets only); aliases `SMTP_HOST`, `SMTP_PORT`, `SMTP_USERNAME`, `SMTP_PASSWORD`, `SMTP_FROM`, `SMTP_TLS` |
 | `PFAI_WEB_ALLOW_NETWORK` + `PFAI_WEB_*` | Optional | Web fabric — see `docs/WEB_FABRIC.md`; stays NOT_CONFIGURED until set |
-| `PFAI_OTP_TTL_SECONDS` / `RESEND_COOLDOWN` / `MAX_ATTEMPTS` | Optional | OTP lifetime / cooldown / attempts |
 | `MODEL_PROVIDER` / `MODEL_NAME` / `MODEL_ENDPOINT` | Optional | Local/open-weight/openai_compatible selection |
 | `MODEL_TIMEOUT` / `MAX_TOKENS` / `TEMPERATURE` / `CONTEXT_LENGTH` | Optional | Local adapter generation settings |
 | `TRAINING_ENABLED` | Optional | Autonomous training master switch (default true) |
@@ -164,8 +161,8 @@ Rollback: `POST /platform/training/rollback` or `POST /platform/models/{id}/roll
 # from repo root (directory containing Dockerfile)
 docker build -t pfai:8.0.0 .
 docker run --rm -p 8000:8000 \
-  -e PFAI_OWNER_EMAIL \
-  -e PFAI_OWNER_SECRET_HASH \
+  -e PFAI_OWNER_USERNAME \
+  -e PFAI_OWNER_PASSWORD_HASH \
   -e ANTHROPIC_API_KEY \
   -v pfai-data:/app/data \
   pfai:8.0.0

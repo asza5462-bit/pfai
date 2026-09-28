@@ -6,15 +6,15 @@ from fastapi.testclient import TestClient
 class TestAPIWiring(unittest.TestCase):
     @classmethod
     def setUpClass(cls):
-        os.environ['PFAI_OWNER_EMAIL']='test-owner@example.invalid'
-        os.environ['PFAI_OWNER_SECRET_HASH']=hashlib.sha256(b'test-secret').hexdigest()
+        os.environ['PFAI_OWNER_USERNAME']='testowner'
+        os.environ['PFAI_OWNER_PASSWORD_HASH']=hashlib.sha256(b'test-secret').hexdigest()
         from pfai.api import app, runtime
         from pfai.model import EchoProvider
         runtime.model=EchoProvider(); runtime.agent.model=runtime.model; runtime.agent.rag.model=runtime.model
         cls.client=TestClient(app)
     @classmethod
     def tearDownClass(cls):
-        os.environ.pop('PFAI_OWNER_EMAIL',None); os.environ.pop('PFAI_OWNER_SECRET_HASH',None)
+        os.environ.pop('PFAI_OWNER_USERNAME',None); os.environ.pop('PFAI_OWNER_PASSWORD_HASH',None)
     def test_health_is_public(self): self.assertEqual(self.client.get('/health').status_code,200)
     def test_model_routes_require_owner(self):
         self.assertEqual(self.client.post('/ask',json={'question':'hello'}).status_code,401)

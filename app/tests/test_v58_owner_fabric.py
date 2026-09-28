@@ -6,13 +6,13 @@ from pfai.global_fabric import GlobalFabric
 class TestV58(unittest.TestCase):
     def test_owner_auth_external_secret(self):
         with tempfile.TemporaryDirectory() as d:
-            old=os.environ.get('PFAI_OWNER_SECRET_HASH'); os.environ['PFAI_OWNER_SECRET_HASH']=OwnerControl.hash_secret('test-secret')
+            old=os.environ.get('PFAI_OWNER_PASSWORD_HASH'); os.environ['PFAI_OWNER_PASSWORD_HASH']=OwnerControl.hash_secret('test-secret')
             try:
                 o=OwnerControl(str(Path(d)/'owner.jsonl'))
                 self.assertTrue(o.authenticate('test-secret')); self.assertFalse(o.authenticate('wrong')); self.assertTrue(o.verify_chain())
             finally:
-                if old is None: os.environ.pop('PFAI_OWNER_SECRET_HASH',None)
-                else: os.environ['PFAI_OWNER_SECRET_HASH']=old
+                if old is None: os.environ.pop('PFAI_OWNER_PASSWORD_HASH',None)
+                else: os.environ['PFAI_OWNER_PASSWORD_HASH']=old
     def test_owner_commands_keep_safety_gate(self):
         with tempfile.TemporaryDirectory() as d:
             o=OwnerControl(str(Path(d)/'owner.jsonl'))
