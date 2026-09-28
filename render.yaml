@@ -28,7 +28,9 @@ services:
       - key: PFAI_TRAINING_ROOT
         value: data/longevity/training_phase9_verify
       - key: PFAI_CONTINUOUS_TRAINING_ENABLED
-        value: "false"
+        value: "true"
+      - key: PFAI_OPEN_CHAT_TOOLS
+        value: "1"
       - key: PFAI_WEB_ALLOW_NETWORK
         value: "1"
       - key: PFAI_WEB_SEARCH_PROVIDER
