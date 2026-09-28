@@ -60,7 +60,9 @@ services:
       - key: TRAINING_EPOCHS
         value: "1"
       - key: TRAINING_MAX_STEPS
-        value: "60"
+        value: "30"
+      - key: PFAI_TRAINING_ASYNC
+        value: "1"
       - key: PFAI_WEB_ALLOW_NETWORK
         value: "1"
       - key: PFAI_WEB_SEARCH_PROVIDER

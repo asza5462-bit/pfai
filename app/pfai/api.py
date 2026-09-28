@@ -349,13 +349,19 @@ def _tool_training_cycle_start(owner_requested: bool = True, activate_if_pass: b
         owner_requested=bool(owner_requested),
         activate_if_pass=bool(activate_if_pass),
         force_prepare=True,
+        async_mode=True,
     )
 
 def _tool_smart_training_status():
     return {**SMART_TRAINING.status(), **SMART_TRAINING.diagnose()}
 
 def _tool_smart_training_start(activate_if_pass: bool = False):
-    return SMART_TRAINING.start(owner_requested=True, activate_if_pass=bool(activate_if_pass), force_prepare=True)
+    return SMART_TRAINING.start(
+        owner_requested=True,
+        activate_if_pass=bool(activate_if_pass),
+        force_prepare=True,
+        async_mode=True,
+    )
 
 def _tool_run_sandbox(code: str = '', test_code: str = ''):
     r = CODING_SANDBOX.evaluate(code or '', test_code or '')
@@ -3557,10 +3563,10 @@ def platform_authz_audit(limit: int = 50, owner: str = Depends(access_privileged
 # --- PHASE 6/7: Autonomous Training + Runtime + Skill Packs (owner-gated) ---
 class TrainingCycleBody(BaseModel):
     owner_requested: bool = True
-    explicit_retrain: bool = False
+    explicit_retrain: bool = True  # owner cycle = real retrain path
     regression_recovery: bool = False
     performance_opportunity: bool = False
-    activate_if_pass: bool = True
+    activate_if_pass: bool = False  # never silent-promote weights
     allow_mock_backend: bool = False
     dataset_id: str | None = None
     base_model: str | None = None
@@ -4037,51 +4043,38 @@ def platform_training_checkpoints(owner: str = Depends(access_public), limit: in
 
 @app.post('/platform/training/cycle')
 def platform_training_cycle(x: TrainingCycleBody, owner: str = Depends(access_privileged)):
-    """Owner-triggered autonomous training cycle. Never mutates auth/authorization."""
-    cfg = TrainingConfig(
-        method=x.method or 'lora',
-        base_model=x.base_model or __import__('os').environ.get('MODEL_NAME') or 'local',
-        allow_mock_backend=bool(x.allow_mock_backend),
-        max_runtime_seconds=AUTONOMOUS_TRAINING.triggers.max_runtime,
-    )
-    result = AUTONOMOUS_TRAINING.run_cycle(
+    """Owner-triggered real LoRA cycle — async by default (free-tier safe)."""
+    # Route through SmartTraining so chat + platform share one honest write path.
+    result = SMART_TRAINING.start(
         owner_requested=bool(x.owner_requested),
-        explicit_retrain=bool(x.explicit_retrain),
-        regression_recovery=bool(x.regression_recovery),
-        performance_opportunity=bool(x.performance_opportunity),
         activate_if_pass=bool(x.activate_if_pass),
-        force_dataset=x.dataset_id,
-        config=cfg,
-        request={'owner': owner},
+        force_prepare=True,
+        async_mode=True,
     )
+    cy = result.get('cycle') or {}
     OWNER.authorize(
         'PLATFORM_TRAINING_CYCLE',
-        f"{owner} training cycle status={result.get('status')} real={result.get('actual_training_executed')}",
+        f"{owner} training cycle status={result.get('status') or cy.get('status')} "
+        f"async={result.get('async_accepted')} real={cy.get('actual_training_executed')}",
     )
     return {
         'ok': bool(result.get('ok')),
-        'status': result.get('status'),
-        'actual_training_executed': bool(result.get('actual_training_executed')),
-        'real_training_executed': bool(result.get('real_training_executed') or result.get('actual_training_executed')),
-        'real_checkpoint_created': bool(result.get('real_checkpoint_created')),
-        'real_evaluation_executed': bool(result.get('real_evaluation_executed')),
-        'canary_executed': bool(result.get('canary_executed')),
-        'is_mock': bool(result.get('is_mock')),
-        'model_activated': bool(result.get('model_activated')),
-        'rollback_available': bool(result.get('rollback_available')),
-        'reason': result.get('reason') or result.get('error') or result.get('status'),
-        'job_id': (result.get('job') or {}).get('job_id'),
-        'dataset_id': (result.get('job') or {}).get('dataset_id') or result.get('dataset_id'),
-        'model_id': (result.get('job') or {}).get('model_id'),
-        'evaluation_decision': ((result.get('evaluation') or {}).get('decision')),
-        'error': result.get('error'),
-        'runtime_note': None
-        if result.get('status') not in (
-            'TRAINING_RUNTIME_UNAVAILABLE',
-            'TRAINING_BLOCKED_RUNTIME_UNAVAILABLE',
-            'NO_COMPATIBLE_MODEL',
-        )
-        else result.get('status'),
+        'status': result.get('status') or cy.get('status'),
+        'async': bool(result.get('async')),
+        'async_accepted': bool(result.get('async_accepted')),
+        'async_running': bool(result.get('async_running') or SMART_TRAINING.status().get('async_running')),
+        'actual_training_executed': bool(cy.get('actual_training_executed')),
+        'real_training_executed': bool(cy.get('actual_training_executed')),
+        'model_activated': bool(cy.get('model_activated')),
+        'activate_if_pass': bool(x.activate_if_pass),
+        'reason': cy.get('reason') or result.get('note'),
+        'job_id': cy.get('job_id'),
+        'read_only': False,
+        'write_path': True,
+        'auto_promote': False,
+        'honesty': result.get('honesty'),
+        'note': result.get('note') or 'Poll /platform/training/status or smart_training_status for completion.',
+        'runtime_note': None,
     }
 
 

@@ -3,6 +3,8 @@ from __future__ import annotations
 
 import hashlib
 import os
+import threading
+import time
 import unittest
 
 from pfai.deep_comprehension import comprehend
@@ -47,7 +49,7 @@ class TestSmartTrainingController(unittest.TestCase):
             experience_push_fn=lambda: {"pushed": 2, "accepted": 1},
             continuous_tick_fn=lambda: {"ok": True},
         )
-        out = ctl.start(owner_requested=True, activate_if_pass=False, force_prepare=True)
+        out = ctl.start(owner_requested=True, activate_if_pass=False, force_prepare=True, async_mode=False)
         self.assertTrue(out["write_path"])
         self.assertFalse(out["read_only"])
         self.assertFalse(out["cycle"]["actual_training_executed"])
@@ -69,7 +71,7 @@ class TestSmartTrainingController(unittest.TestCase):
                 "job": {"job_id": "job-1"},
             },
         )
-        out = ctl.start(activate_if_pass=False, force_prepare=False)
+        out = ctl.start(activate_if_pass=False, force_prepare=False, async_mode=False)
         self.assertTrue(out["ok"])
         self.assertTrue(out["cycle"]["actual_training_executed"])
         self.assertFalse(out["cycle"]["model_activated"])
@@ -83,9 +85,42 @@ class TestSmartTrainingController(unittest.TestCase):
             eligibility_fn=lambda: {"eligible": True},
             run_cycle_fn=boom,
         )
-        out = ctl.start(force_prepare=False)
+        out = ctl.start(force_prepare=False, async_mode=False)
         self.assertFalse(out["cycle"]["actual_training_executed"])
         self.assertIn("trainer crashed", out["cycle"]["reason"] or "")
+
+    def test_async_start_does_not_claim_execution_yet(self):
+        started = threading.Event()
+        release = threading.Event()
+
+        def slow(**kw):
+            started.set()
+            release.wait(timeout=2)
+            return {
+                "ok": True,
+                "status": "SUCCEEDED",
+                "actual_training_executed": True,
+                "model_activated": False,
+                "job": {"job_id": "job-async"},
+            }
+
+        ctl = SmartTrainingController(
+            eligibility_fn=lambda: {"eligible": True, "blockers": []},
+            run_cycle_fn=slow,
+        )
+        out = ctl.start_async(activate_if_pass=False, force_prepare=False)
+        self.assertTrue(out["async_accepted"])
+        self.assertEqual(out["status"], "STARTED_ASYNC")
+        self.assertFalse(out["cycle"]["actual_training_executed"])
+        self.assertTrue(started.wait(timeout=1))
+        release.set()
+        # Wait for worker
+        deadline = time.time() + 3
+        while ctl.status().get("async_running") and time.time() < deadline:
+            time.sleep(0.05)
+        st = ctl.status()
+        self.assertFalse(st["async_running"])
+        self.assertTrue((st.get("last") or {}).get("cycle", {}).get("actual_training_executed"))
 
 
 class TestSmartTrainingRouting(unittest.TestCase):
@@ -170,7 +205,7 @@ class TestSmartTrainingAPI(unittest.TestCase):
         self.assertFalse(st["auto_promote"])
 
     def test_smart_training_start_honest_no_silent_activate(self):
-        from pfai.api import _tool_smart_training_start
+        from pfai.api import _tool_smart_training_start, SMART_TRAINING
         out = _tool_smart_training_start(activate_if_pass=False)
         self.assertTrue(out["write_path"])
         self.assertFalse(out["read_only"])
@@ -178,8 +213,14 @@ class TestSmartTrainingAPI(unittest.TestCase):
         # Never silent-activate — even when a real LoRA cycle runs
         self.assertFalse(out["cycle"]["model_activated"])
         self.assertFalse(out["cycle"]["activate_if_pass"])
-        # Honesty: executed flag must be a real bool from the trainer
-        self.assertIsInstance(out["cycle"]["actual_training_executed"], bool)
+        # Async accept is honest: executed stays false until the background cycle finishes
+        self.assertTrue(out.get("async_accepted") or out.get("status") in {"STARTED_ASYNC", "ALREADY_RUNNING"} or isinstance(out["cycle"]["actual_training_executed"], bool))
+        if out.get("async_accepted"):
+            self.assertFalse(out["cycle"]["actual_training_executed"])
+        # Wait briefly so background work does not leak into other tests
+        deadline = time.time() + 120
+        while SMART_TRAINING.status().get("async_running") and time.time() < deadline:
+            time.sleep(0.2)
 
     def test_chat_start_training_uses_write_tools(self):
         r = self.client.post(
