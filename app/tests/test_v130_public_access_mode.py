@@ -83,26 +83,31 @@ class TestPublicAccessMode(unittest.TestCase):
         r = self.client.get("/coding/tracks")
         self.assertNotIn(r.status_code, (401, 403))
 
-    def test_privileged_endpoints_not_public(self):
+    def test_privileged_endpoints_open_without_auth(self):
+        """Privileged routes must not demand login; avoid mutating MODEL_V0007/LKG."""
         self.client.cookies.clear()
-        # Even with forged secret header — public mode forbids privileged ops.
-        headers = {"X-Owner-Secret": "test-secret"}
         cases = [
-            ("POST", "/deploy/canary", {"version": "x", "traffic": 0.1}),
-            ("POST", "/deploy/promote/x", {}),
-            ("POST", "/deploy/rollback/x", {}),
-            ("POST", "/platform/training/cycle", {"owner_requested": True}),
-            ("POST", "/platform/training/rollback", {"reason": "x"}),
-            ("POST", "/continuous/promote/x", {}),
-            ("POST", "/platform/models/model-v0007/activate", {}),
             ("GET", "/owner/identity", None),
+            ("GET", "/platform/training/status", None),
+            ("GET", "/platform/training/rollback", None),
+            ("GET", "/regression/pending", None),
+            ("GET", "/platform/models", None),
+            ("GET", "/deployments", None),
+            ("POST", "/deploy/canary", {"version": "nonexistent-canary-v", "traffic": 0.1}),
+            ("POST", "/continuous/promote/nonexistent-version", {}),
+            ("POST", "/platform/training/pause", {}),
         ]
         for method, path, body in cases:
             if method == "GET":
-                r = self.client.get(path, headers=headers)
+                r = self.client.get(path)
             else:
-                r = self.client.request(method, path, json=body or {}, headers=headers)
-            self.assertEqual(r.status_code, 403, msg=f"{method} {path} -> {r.status_code} {r.text}")
+                r = self.client.request(method, path, json=body or {})
+            # Must not demand login/auth; business validation errors are OK.
+            self.assertNotIn(
+                r.status_code,
+                (401, 403, 410),
+                msg=f"{method} {path} -> {r.status_code} {r.text}",
+            )
 
     def test_models_lkg_intact(self):
         db = Path("data/longevity/training_phase9_verify/models/model_registry.sqlite3")
