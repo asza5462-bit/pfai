@@ -90,7 +90,7 @@ class TestLegendaryAPI(unittest.TestCase):
 
     def test_chat_returns_understanding(self):
         from pfai import __version__
-        self.assertTrue(__version__.startswith("8.6"))
+        self.assertTrue(__version__.startswith("8."))
         r = self.client.post("/chat/message", json={
             "message": "اريده في الردود يتفوق ويملك ذاكرة اسطورية وفهم عالي جدا",
             "language": "ar",

@@ -64,7 +64,13 @@ class ContinuousTrainingService:
             if self.config.require_evaluation and result.get('evaluated') is not True:
                 raise RuntimeError('cycle rejected: evaluation gate was not satisfied')
             self._state['successes'] += 1; self._state['consecutive_failures']=0; self._state['last_success']=datetime.now(timezone.utc).isoformat(); self._state['last_error']=None; self._state['status']='running'
-            self._save(); self._event('cycle_success',result); return {'status':'success',**result}
+            self._save(); self._event('cycle_success',result)
+            # Keep service status last — learning candidate status must not overwrite it.
+            out = dict(result)
+            learning_status = out.pop('status', None)
+            if learning_status is not None:
+                out['learning_status'] = learning_status
+            return {'status': 'success', **out}
         except Exception as exc:
             self._state['failures'] += 1; self._state['consecutive_failures'] += 1; self._state['last_error']=str(exc)
             self._state['status']='stopped' if self._state['consecutive_failures'] >= self.config.max_consecutive_failures else 'running'

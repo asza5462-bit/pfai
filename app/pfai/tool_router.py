@@ -143,6 +143,7 @@ DEFAULT_TOOLS: list[ToolSpec] = [
     ToolSpec("metrics_snapshot", "Current metrics counters and latency", "read", False, {}),
     ToolSpec("modules_list", "List registered capability modules", "read", False, {}),
     ToolSpec("continuous_status", "Continuous learning service status + safety gate", "read", False, {}),
+    ToolSpec("smart_continuous_status", "Focused high-precision continuous training status", "read", False, {}),
     ToolSpec("deployments_list", "Deployment history (read-only)", "read", False, {}),
     ToolSpec("knowledge_search", "Search vector knowledge store", "read", False, {"q": "string", "limit": "int?"}),
     ToolSpec("memory_search", "Search durable memory", "read", False, {"q": "string", "limit": "int?"}),

@@ -79,11 +79,12 @@ RECOVERY=RecoveryDrillScheduler('data/backups')
 # separate human-approval gate required before any candidate is promoted.
 _CT_CFG = Config.load('configs/default.json').get('continuous_training', {}) or {}
 _CT_SELF = _CT_CFG.get('self_training') or {}
+_CT_SMART = _CT_CFG.get('smart_continuous') or {}
 CONTINUOUS = ContinuousLearningOrchestrator(
     'data/continuous_learning',
     evaluator_model=runtime.model,
     continuous_config=ContinuousConfig(
-        interval_seconds=int(_CT_CFG.get('interval_seconds') or 300),
+        interval_seconds=int(_CT_CFG.get('interval_seconds') or 120),
         max_consecutive_failures=int(_CT_CFG.get('max_consecutive_failures') or 5),
         checkpoint_every_cycle=bool(_CT_CFG.get('checkpoint_every_cycle', True)),
         auto_promote=False,
@@ -91,10 +92,14 @@ CONTINUOUS = ContinuousLearningOrchestrator(
         heartbeat_seconds=int(_CT_CFG.get('heartbeat_seconds') or 30),
     ),
     self_training=bool(_CT_SELF.get('enabled', True)),
-    self_training_batch_size=int(_CT_SELF.get('examples_per_track_per_cycle') or 2),
-    self_training_min_score=float(_CT_SELF.get('min_teacher_score') or 0.8),
-    # Open mode: auto-accept curated learning candidates (NOT weight promotion)
+    self_training_batch_size=int(_CT_SELF.get('examples_per_track_per_cycle') or 3),
+    self_training_min_score=float(_CT_SELF.get('min_teacher_score') or 0.75),
+    # Open mode: auto-accept curated learning candidates (NOT weight promotion).
+    # Disable improvement ratchet so continuous focused cycles keep accepting at similar precision.
     require_human_approval=not auto_accept_learning(),
+    min_improvement=(-1.0 if auto_accept_learning() else float(_CT_CFG.get('min_improvement') or 0.01)),
+    smart_config=_CT_SMART,
+    open_mode=auto_accept_learning,
 )
 OWNER=OwnerControl('data/security/owner_control.jsonl')
 OWNER_AUTH=OwnerAuthService(OWNER, root='data/security')
@@ -278,6 +283,20 @@ def _tool_continuous_tick():
     if CONTINUOUS.service.status().get('status') != 'running':
         CONTINUOUS.start()
     return CONTINUOUS.tick_once()
+
+def _tool_smart_continuous_status():
+    st = CONTINUOUS.status()
+    return {
+        'ok': True,
+        'smart': st.get('smart') or {},
+        'adaptive_interval_seconds': st.get('adaptive_interval_seconds'),
+        'pending_examples': st.get('pending_examples'),
+        'worker_alive': st.get('worker_alive'),
+        'real_loop': st.get('real_loop'),
+        'auto_promote': False,
+        'gate': continuous_gate_status(),
+        'note': 'Focused high-precision continuous curation; weight promotion stays owner-gated.',
+    }
 
 def _tool_training_cycle_start(owner_requested: bool = True, activate_if_pass: bool = False):
     """Start a weight-training cycle from chat. Never silent-promotes (activate_if_pass default False)."""
@@ -579,6 +598,7 @@ CODING_TOOL_SPECS = list(DEFAULT_TOOLS) + [
     ToolSpec('training_eligibility', 'Read next-training eligibility gates', 'read', False, {}),
     ToolSpec('training_control_status', 'Read training control-center status', 'read', False, {}),
     ToolSpec('continuous_tick', 'Run one continuous-learning cycle now (no promote)', 'write', False, {}),
+    ToolSpec('smart_continuous_status', 'Focused high-precision continuous training status', 'read', False, {}),
     ToolSpec('training_cycle_start', 'Start weight-training cycle from chat (activate_if_pass default false)', 'write', False, {'owner_requested': 'bool?', 'activate_if_pass': 'bool?'}),
     ToolSpec('coding_hint', 'Progressive coding hint with diagnostics', 'read', False, {'owner': 'string?', 'track_id': 'string?', 'lesson_id': 'string?', 'code': 'string?', 'stderr': 'string?'}),
     ToolSpec('coding_exercise_submit', 'Submit academy exercise code for sandbox grading', 'write', False, {'owner': 'string?', 'track_id': 'string', 'lesson_id': 'string', 'code': 'string'}),
@@ -616,6 +636,7 @@ TOOL_ROUTER = ToolRouter({
         'permission_gate','task_planner','skill_registry'
     ]},
     'continuous_status': lambda: {**CONTINUOUS.status(), 'gate': continuous_gate_status(), 'auto_promote': False},
+    'smart_continuous_status': _tool_smart_continuous_status,
     'deployments_list': lambda: {'items': runtime.deploy.history()},
     'knowledge_search': lambda q='', limit=5: {'results': runtime.store.search(q, int(limit or 5))},
     'memory_search': lambda q='', limit=5: {'results': COMMAND_MEMORY.relevant(q, int(limit or 5))},
@@ -734,7 +755,40 @@ def _pull_accepted_experience_rows() -> list:
     return out
 
 
+def _push_curated_to_experience(rows: list) -> dict:
+    """Push high-precision curated rows into longevity experience (dataset growth).
+
+    Never activates weights. Uses evaluation-lesson attribution (verified).
+    """
+    bridge = getattr(AUTONOMOUS_TRAINING, 'experience', None)
+    if bridge is None or not rows:
+        return {'pushed': 0, 'accepted': 0}
+    pushed = 0
+    accepted = 0
+    for i, r in enumerate(rows[:24]):
+        if not isinstance(r, dict):
+            continue
+        ins = str(r.get('instruction') or '').strip()
+        resp = str(r.get('response') or '').strip()
+        if not ins or not resp:
+            continue
+        try:
+            out = bridge.record_evaluation_lesson(
+                instruction=ins[:2000],
+                response=resp[:4000],
+                source_id=f"smart-cont-{i}-{hash(ins) & 0xffffffff:x}",
+            )
+            pushed += 1
+            elig = str((out or {}).get('eligibility') or '').lower()
+            if elig in ('accepted', 'accepted_verified'):
+                accepted += 1
+        except Exception:
+            continue
+    return {'pushed': pushed, 'accepted': accepted, 'auto_promote': False}
+
+
 CONTINUOUS.bind_experience_ingest(_pull_accepted_experience_rows)
+CONTINUOUS.bind_experience_push(_push_curated_to_experience)
 
 
 def _pfai_startup_continuous() -> None:

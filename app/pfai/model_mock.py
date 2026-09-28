@@ -124,12 +124,27 @@ class MockCommandProvider(ModelProvider):
         if re.search(r"search knowledge|ابحث.*معرف|راجع.*بيانات|بيانات", text + ar) and not web_intent:
             add("knowledge_search")
             add("memory_search")
+        if re.search(
+            r"تدريب\s*مستمر|تدريب\s*بذكاء|بدون\s*قيود|فهم\s*عالي|تركيز\s*عالي|"
+            r"دقيق\s*جدا|smart\s*continuous|high.?precision\s*train|continuous\s*without",
+            text + ar,
+            re.I,
+        ):
+            add("continuous_start")
+            add("continuous_tick")
+            add("smart_continuous_status")
+            add("continuous_status")
         if re.search(r"start continuous|شغ[لّ].*تعلم|تشغيل.*continuous|ابدأ\s*التعلم\s*المستمر", text + ar):
             add("continuous_start")
             add("continuous_status")
             add("continuous_tick")
+            add("smart_continuous_status")
         if re.search(r"tick continuous|دورة\s*تعلم|continuous\s*tick|نفّذ\s*دورة", text + ar):
             add("continuous_tick")
+            add("continuous_status")
+            add("smart_continuous_status")
+        if re.search(r"smart\s*continuous|حالة\s*التدريب\s*الذكي|precision\s*train", text + ar, re.I):
+            add("smart_continuous_status")
             add("continuous_status")
         if re.search(
             r"start\s*training\s*cycle|training_cycle|ابدأ\s*دورة\s*التدريب|شغّل\s*التدريب|run\s*training",

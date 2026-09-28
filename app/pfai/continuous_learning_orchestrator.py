@@ -5,9 +5,10 @@ human-gated learning loop into one coherent continuous-learning subsystem.
 
 Invariants:
 - Never fetches the open internet on its own.
-- Evaluation-gated cycles (score required or LLM evaluator).
+- Evaluation-gated cycles (score required, LLM evaluator, or precision fallback).
 - Promotion still goes through LearningLoop (human approve by default).
 - Background worker runs real cycles when start() is called — not a status-only flag.
+- Smart continuous focuses/seeds/scores; never auto-promotes model weights.
 """
 from __future__ import annotations
 
@@ -27,6 +28,7 @@ from .continuous_training import ContinuousTrainingService, ContinuousConfig
 from .evaluation_lab import EvaluationLab
 from .llm_evaluator import LLMEvaluator
 from .self_training import SelfTrainingEngine
+from .smart_continuous import SmartContinuousBrain, SmartContinuousConfig, smart_config_from_dict
 
 log = logging.getLogger("pfai.continuous")
 
@@ -48,6 +50,8 @@ class ContinuousLearningOrchestrator:
         self_training_batch_size: int = 2,
         self_training_min_score: float = 0.80,
         max_curated_examples: int = 10000,
+        smart_config: Optional[SmartContinuousConfig | dict] = None,
+        open_mode: Optional[Callable[[], bool]] = None,
     ):
         self.root = Path(root)
         self.root.mkdir(parents=True, exist_ok=True)
@@ -76,14 +80,26 @@ class ContinuousLearningOrchestrator:
             if self_training
             else None
         )
+        base_iv = int((continuous_config or ContinuousConfig()).interval_seconds or 120)
+        if isinstance(smart_config, SmartContinuousConfig):
+            sc = smart_config
+        else:
+            sc = smart_config_from_dict(smart_config if isinstance(smart_config, dict) else None, base_interval=base_iv)
+        self.smart = SmartContinuousBrain(sc, open_mode=open_mode)
         self._ingest_fn: Callable[[], list[dict]] | None = None
         self._worker: threading.Thread | None = None
         self._worker_stop = threading.Event()
         self._lock = threading.RLock()
+        self._last_cycle_skipped = False
+        self._push_experience_fn: Callable[[list[dict]], dict] | None = None
 
     def bind_experience_ingest(self, fn: Callable[[], list[dict]]) -> None:
         """Optional pull of accepted learning rows into the curated queue."""
         self._ingest_fn = fn
+
+    def bind_experience_push(self, fn: Callable[[list[dict]], dict]) -> None:
+        """Optional push of high-precision curated rows into longevity experience."""
+        self._push_experience_fn = fn
 
     # -- data intake -----------------------------------------------------
     def register_batch(self, rows: Iterable[dict]) -> dict:
@@ -165,10 +181,27 @@ class ContinuousLearningOrchestrator:
 
     # -- governed learning cycle ------------------------------------------
     def run_cycle(self, version: str, score: Optional[float] = None, notes: str = "") -> dict:
+        with self._lock:
+            return self._run_cycle_locked(version, score=score, notes=notes)
+
+    def _run_cycle_locked(self, version: str, score: Optional[float] = None, notes: str = "") -> dict:
         generated = {"generated": 0, "accepted": 0}
+        track_names = [t.name for t in self.curriculum.tracks]
+        track_weights = {t.name: t.weight for t in self.curriculum.tracks}
+
+        # Smart prepare: focus analysis + seed when thin (no weight promote)
+        prep = self.smart.prepare_cycle(
+            self.pending_examples(),
+            track_names=track_names,
+            track_weights=track_weights,
+            register_batch=self.register_batch,
+        )
+        focus_tracks = list(prep.get("focus_tracks") or track_names[:2])
+
         if self.self_training is not None and score is None:
-            generated = self.self_training.generate_batch([t.name for t in self.curriculum.tracks])
-            # Fold teacher-accepted examples into the curated queue for this cycle
+            # High-focus teacher generation on gap tracks only
+            gen_tracks = self.smart.focused_self_training_tracks(track_names) or focus_tracks
+            generated = self.self_training.generate_batch(gen_tracks)
             examples = generated.get("examples") or []
             if examples:
                 mapped = []
@@ -177,36 +210,72 @@ class ContinuousLearningOrchestrator:
                         "instruction": ex.get("instruction", ""),
                         "response": ex.get("response", ""),
                         "source": ex.get("source") or "autonomous_teacher",
-                        "track": (ex.get("metadata") or {}).get("track") or "ai_engineering",
-                        "metadata": ex.get("metadata") or {},
+                        "track": (ex.get("metadata") or {}).get("track") or focus_tracks[0],
+                        "metadata": {**(ex.get("metadata") or {}), "focus": True},
                     })
                 self.register_batch(mapped)
-        dataset = self.pending_examples()
+
+        pending = self.pending_examples()
+        dataset = self.smart.rank_for_focus(pending, focus_tracks) if pending else []
         if not dataset:
+            self._last_cycle_skipped = True
             return {
                 "evaluated": False,
                 "skipped": True,
                 "reason": "no curated data available for this cycle",
                 "self_training": generated,
+                "smart": prep,
             }
+
         auto_scored = False
+        score_meta: dict[str, Any] = {}
         if score is None:
-            if not self.llm_evaluator:
+            llm_score = None
+            llm_reason = ""
+            if self.llm_evaluator:
+                auto = self.llm_evaluator.score_examples(dataset)
+                llm_score = auto.get("score")
+                llm_reason = str(auto.get("reason") or "")
+            score_meta = self.smart.resolve_score(
+                dataset, llm_score=llm_score, llm_reason=llm_reason
+            )
+            score = float(score_meta["score"])
+            auto_scored = True
+            notes = (
+                notes
+                + f" [scored:{score_meta.get('method')}: {score_meta.get('reason', '')}]"
+            ).strip()
+            # Below threshold with no usable score → soft skip (not a hard failure)
+            if score_meta.get("below_threshold") and score < self.smart.config.precision_min_score:
+                self._last_cycle_skipped = True
                 return {
                     "evaluated": False,
                     "skipped": True,
-                    "reason": "score not supplied and no evaluator model configured",
+                    "reason": "precision below threshold for this cycle",
                     "self_training": generated,
+                    "smart": {**prep, "score": score_meta},
                 }
-            auto = self.llm_evaluator.score_examples(dataset)
-            score = auto["score"]
-            auto_scored = True
-            notes = (notes + f" [auto-scored: {auto.get('reason', '')}]").strip()
+
         proposal = self.loop.propose(version, dataset, lambda _rows: float(score), notes)
+        self._last_cycle_skipped = False
+
+        # Push high-precision accepted rows into longevity experience (growth path)
+        push_out: dict[str, Any] = {}
+        if (
+            self._push_experience_fn
+            and proposal.get("eligible")
+            and proposal.get("status") in ("accepted", "pending_approval")
+        ):
+            try:
+                push_out = self._push_experience_fn(dataset[:24]) or {}
+            except Exception as exc:
+                push_out = {"error": str(exc)}
+
         return {
             "evaluated": True,
             "auto_scored": auto_scored,
             "self_training": generated,
+            "smart": {**prep, "score": score_meta, "focus_dataset": len(dataset), "experience_push": push_out},
             **proposal,
         }
 
@@ -250,17 +319,22 @@ class ContinuousLearningOrchestrator:
 
                 result = self._run_service_cycle(_fn)
                 log.info(
-                    "continuous cycle done status=%s skipped=%s ingest=%s",
+                    "continuous cycle done status=%s skipped=%s ingest=%s focus=%s",
                     result.get("status"),
                     result.get("skipped"),
                     ingest.get("pulled"),
+                    ((result.get("smart") or {}).get("focus_tracks")),
                 )
             except Exception as exc:
                 log.warning("continuous worker cycle error: %s", exc)
             # Reload status — stop/pause may have happened during cycle
             if self.service.status().get("status") != "running":
                 continue
-            self._worker_stop.wait(max(15, int(self.service.config.interval_seconds or 300)))
+            wait = self.smart.adaptive_interval(
+                pending_count=len(self.pending_examples()),
+                last_skipped=self._last_cycle_skipped,
+            )
+            self._worker_stop.wait(max(15, int(wait)))
 
     def _run_service_cycle(self, cycle_fn: Callable[[], dict]) -> dict:
         """Like ContinuousTrainingService.run_cycle but treats skipped/no-data as soft."""
@@ -322,16 +396,22 @@ class ContinuousLearningOrchestrator:
 
     # -- observability -----------------------------------------------------
     def status(self) -> dict:
+        pending_n = len(self.pending_examples())
         return {
             "service": self.service.status(),
             "curriculum": self.curriculum.describe(),
-            "pending_examples": len(self.pending_examples()),
+            "pending_examples": pending_n,
             "active_candidate": self.loop.active(),
             "learning_history": self.loop.history()[-20:],
             "self_training": {
                 "enabled": self.self_training is not None,
                 "data_path": str(self.self_training.data_path) if self.self_training else None,
             },
+            "smart": self.smart.status(),
+            "adaptive_interval_seconds": self.smart.adaptive_interval(
+                pending_count=pending_n,
+                last_skipped=self._last_cycle_skipped,
+            ),
             "worker_alive": self._worker_alive(),
             "real_loop": self._worker_alive() and self.service.status().get("status") in ("running", "cycle", "paused"),
             "auto_promote": False,

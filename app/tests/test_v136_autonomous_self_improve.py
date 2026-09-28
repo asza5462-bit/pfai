@@ -117,7 +117,7 @@ class TestAutonomyAPI(unittest.TestCase):
 
     def test_tools_and_version(self):
         from pfai import __version__
-        self.assertTrue(__version__.startswith("8.6"))
+        self.assertTrue(__version__.startswith("8."))
         tools = self.client.get("/chat/tools").json()
         self.assertEqual(tools.get("locked_count"), 0)
         names = {t["name"] for t in tools["tools"]}

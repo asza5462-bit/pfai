@@ -1,5 +1,19 @@
 # Agent Context Changelog
 
+## 2026-09-28 — PFAI 8.7: Smart continuous high-precision training
+
+### Implemented
+- `pfai/smart_continuous.py`: focus analyzer, precision scorer, adaptive intervals, seed bank
+- Continuous orchestrator: prepare→focus-seed→rank→precision/LLM score→propose; push to experience
+- Config: `smart_continuous` block; interval 120s / fast 60s open; self_training batch 3
+- Chat tool `smart_continuous_status` + Arabic planner intents (تدريب بذكاء/تركيز/دقة/بدون قيود)
+- Tests: `test_v140_smart_continuous.py`
+
+### Invariants kept
+- `auto_promote=False`; weight activation still owner/API explicit
+- SSRF / secrets / security policy unchanged
+- Weight eligibility still honest when backend missing
+
 ## 2026-09-27 — PHASE 12: Elite AI Skills + Tool Fabric
 
 ### Implemented

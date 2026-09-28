@@ -256,7 +256,7 @@ class CommandAgent:
     # -- planning / compose --------------------------------------------
     _PARALLEL_READ = frozenset({
         "health_check", "system_status", "metrics_snapshot", "modules_list",
-        "continuous_status", "deployments_list", "knowledge_search", "memory_search",
+        "continuous_status", "smart_continuous_status", "deployments_list", "knowledge_search", "memory_search",
         "recovery_verify", "research_verify", "regression_pending", "chat_audit_recent",
         "propose_improvement", "learner_snapshot", "training_eligibility",
         "training_control_status", "coding_tracks", "coding_progress", "coding_projects",
@@ -523,13 +523,13 @@ def _budget_plan(planned: list[dict], *, max_tools: int = 3) -> list[dict]:
         pulse = next(p for p in planned if p.get("tool") == "unified_brain_pulse")
         companion_ok = {
             "advanced_self_develop", "self_improve_tick", "app_control_status",
-            "training_cycle_start", "continuous_tick",
+            "training_cycle_start", "continuous_tick", "continuous_start",
         }
         # If the turn is ONLY pulse + redundant status mirrors, collapse to pulse
         non_mirror = [p for p in planned if p.get("tool") in companion_ok]
         mirrors = {"system_status", "health_check", "autonomy_status", "advanced_status",
-                   "web_status", "continuous_status", "learner_snapshot", "advanced_awareness",
-                   "unified_brain_status"}
+                   "web_status", "continuous_status", "smart_continuous_status",
+                   "learner_snapshot", "advanced_awareness", "unified_brain_status"}
         if non_mirror:
             return [pulse, non_mirror[0]][:max_tools]
         if set(names) - {"unified_brain_pulse"} <= mirrors:

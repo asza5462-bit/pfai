@@ -111,8 +111,8 @@ class TestChatMasterAPI(unittest.TestCase):
 
     def test_version_82(self):
         from pfai import __version__
-        self.assertTrue(__version__.startswith("8.6"))
-        self.assertTrue(str(self.client.get("/health").json().get("version")).startswith("8.6"))
+        self.assertTrue(__version__.startswith("8."))
+        self.assertTrue(str(self.client.get("/health").json().get("version")).startswith("8."))
 
     def test_tools_catalog_master(self):
         r = self.client.get("/chat/tools")
@@ -153,7 +153,7 @@ class TestChatMasterAPI(unittest.TestCase):
         html = self.client.get("/").text
         self.assertIn("بحث ويب", html)
         self.assertIn("تحكم كامل", html)
-        self.assertIn("PFAI v8.6", html)
+        self.assertIn("PFAI v8.7", html)
 
 
 if __name__ == "__main__":

@@ -41,7 +41,7 @@
   "continuous_training": {
     "enabled": true,
     "_enable_note": "Base switch is true. Force disable/enable at runtime with PFAI_CONTINUOUS_TRAINING_ENABLED. auto_promote is never honored from JSON — promotion stays owner-gated.",
-    "interval_seconds": 300,
+    "interval_seconds": 120,
     "max_consecutive_failures": 5,
     "checkpoint_every_cycle": true,
     "auto_promote": false,
@@ -58,10 +58,22 @@
       "network_collection": "policy_gated",
       "deduplicate": true
     },
+    "smart_continuous": {
+      "enabled": true,
+      "fast_interval_seconds": 60,
+      "base_interval_seconds": 120,
+      "thin_queue_threshold": 8,
+      "seed_per_focus_track": 3,
+      "precision_min_score": 0.55,
+      "focus_top_tracks": 2,
+      "use_precision_fallback": true,
+      "max_focus_examples_per_cycle": 48,
+      "_note": "Focused high-precision curation loop. Seeds when thin; scores without teacher. Never auto-promotes weights."
+    },
     "self_training": {
       "enabled": true,
-      "examples_per_track_per_cycle": 2,
-      "min_teacher_score": 0.8,
+      "examples_per_track_per_cycle": 3,
+      "min_teacher_score": 0.75,
       "weight_training": {
         "enabled": true,
         "every_n_cycles": 5,

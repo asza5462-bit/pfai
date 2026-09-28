@@ -1,6 +1,6 @@
 # PFAI Project Memory
 
-Last updated: 2026-09-28 (PFAI 8.6.0 — integrity harden · web latency bound)
+Last updated: 2026-09-28 (PFAI 8.7.0 — smart continuous high-precision loop)
 
 ## Snapshot
 
@@ -39,6 +39,16 @@ Last updated: 2026-09-28 (PFAI 8.6.0 — integrity harden · web latency bound)
 - Deep comprehension before plan/compose
 - Legendary memory: facts + digests + ranked recall + desire ingest
 - Elite replies: فهمتك → memory → live → next step
+
+## Smart continuous training (8.7)
+
+- Focus curriculum + precision scoring + adaptive intervals (60–120s open)
+- Seeds high-precision examples when queue thin; no empty-cycle stall
+- Precision fallback when teacher/LLM evaluator unavailable
+- Pushes curated rows into longevity experience for dataset growth
+- Chat: `smart_continuous_status` + Arabic intents for تدريب بذكاء/تركيز/دقة
+- Still never auto-promotes weights; SSRF/security unchanged
+- Weight eligibility may still report TRAINING_BACKEND_UNAVAILABLE on hosts without torch
 
 ## Honesty
 

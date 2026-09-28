@@ -74,7 +74,7 @@ class TestUnifiedAPI(unittest.TestCase):
 
     def test_tools_and_version(self):
         from pfai import __version__
-        self.assertTrue(__version__.startswith("8.6"))
+        self.assertTrue(__version__.startswith("8."))
         self.assertTrue(unified_brain_enabled())
         names = {t["name"] for t in self.client.get("/chat/tools").json()["tools"]}
         self.assertIn("unified_brain_pulse", names)

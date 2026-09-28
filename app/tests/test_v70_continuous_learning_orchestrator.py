@@ -2,12 +2,13 @@ import tempfile, unittest
 from pathlib import Path
 from pfai.continuous_learning_orchestrator import ContinuousLearningOrchestrator
 from pfai.continuous_training import ContinuousConfig
+from pfai.smart_continuous import SmartContinuousConfig
 
 
 class TestContinuousLearningOrchestrator(unittest.TestCase):
     def test_ingest_curates_and_allocates_by_curriculum(self):
         with tempfile.TemporaryDirectory() as d:
-            orch = ContinuousLearningOrchestrator(root=d)
+            orch = ContinuousLearningOrchestrator(root=d, smart_config=SmartContinuousConfig(enabled=False))
             rows = [
                 {'instruction': 'Write a Python function to reverse a list', 'response': 'def reverse(x): return x[::-1]', 'source': 'unit-test'},
                 {'instruction': 'hi', 'response': '', 'source': 'unit-test'},  # empty response, rejected by quality gate
@@ -22,13 +23,18 @@ class TestContinuousLearningOrchestrator(unittest.TestCase):
 
     def test_run_cycle_fails_closed_without_data(self):
         with tempfile.TemporaryDirectory() as d:
-            orch = ContinuousLearningOrchestrator(root=d)
+            # Smart seeding disabled — empty queue must fail closed.
+            orch = ContinuousLearningOrchestrator(
+                root=d, smart_config=SmartContinuousConfig(enabled=False)
+            )
             result = orch.run_cycle('v1', score=0.9)
             self.assertFalse(result['evaluated'])
 
     def test_run_cycle_requires_human_approval_by_default(self):
         with tempfile.TemporaryDirectory() as d:
-            orch = ContinuousLearningOrchestrator(root=d)
+            orch = ContinuousLearningOrchestrator(
+                root=d, smart_config=SmartContinuousConfig(enabled=False)
+            )
             orch.register_batch([
                 {'instruction': 'Debug this SQL query for a slow join', 'response': 'Add an index on the join column and re-run EXPLAIN.', 'source': 'unit-test'},
             ])
@@ -42,7 +48,9 @@ class TestContinuousLearningOrchestrator(unittest.TestCase):
 
     def test_model_cannot_bypass_approval_gate(self):
         with tempfile.TemporaryDirectory() as d:
-            orch = ContinuousLearningOrchestrator(root=d)
+            orch = ContinuousLearningOrchestrator(
+                root=d, smart_config=SmartContinuousConfig(enabled=False)
+            )
             orch.register_batch([
                 {'instruction': 'Explain how RLHF differs from supervised fine-tuning', 'response': 'RLHF optimizes a policy against a learned reward model instead of fixed labels.', 'source': 'unit-test'},
             ])

@@ -58,6 +58,10 @@ class TestContinuousEnableGate(unittest.TestCase):
             path = self._write_config(d, True)
             with mock.patch.dict(os.environ, {}, clear=False):
                 os.environ.pop(ENV_NAME, None)
+                os.environ.pop("PFAI_AUTO_ACCEPT_LEARNING", None)
+                os.environ.pop("PFAI_OPEN_CHAT_TOOLS", None)
+                os.environ.pop("PFAI_PUBLIC_ACCESS_MODE", None)
+                os.environ.pop("PFAI_ENV", None)
                 status = continuous_gate_status(path)
                 self.assertTrue(status["enabled"])
                 self.assertFalse(status["auto_promote"])

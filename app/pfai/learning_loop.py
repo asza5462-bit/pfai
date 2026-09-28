@@ -21,9 +21,19 @@ class LearningLoop:
         os.makedirs(os.path.dirname(registry_path) or '.', exist_ok=True)
         if not os.path.exists(registry_path): self._save([])
     def _load(self):
-        with open(self.registry_path,'r',encoding='utf-8') as f: return json.load(f)
+        try:
+            with open(self.registry_path,'r',encoding='utf-8') as f:
+                raw = f.read().strip()
+            if not raw:
+                return []
+            data = json.loads(raw)
+            return data if isinstance(data, list) else []
+        except (json.JSONDecodeError, OSError):
+            return []
     def _save(self,x):
-        with open(self.registry_path,'w',encoding='utf-8') as f: json.dump(x,f,ensure_ascii=False,indent=2)
+        tmp = self.registry_path + '.tmp'
+        with open(tmp,'w',encoding='utf-8') as f: json.dump(x,f,ensure_ascii=False,indent=2)
+        os.replace(tmp, self.registry_path)
     @staticmethod
     def fingerprint(items: List[Dict[str,Any]]) -> str:
         raw=json.dumps(items,sort_keys=True,ensure_ascii=False).encode(); return hashlib.sha256(raw).hexdigest()
