@@ -2,7 +2,7 @@
 <html lang="ar" dir="rtl">
 <head>
 <meta charset="utf-8"><meta name="viewport" content="width=device-width,initial-scale=1">
-<meta name="theme-color" content="#07111f"><title>PFAI v8.2.2 — Master Chat Control</title>
+<meta name="theme-color" content="#07111f"><title>PFAI v8.2.3 — Master Chat Control</title>
 <style>
 :root{--bg:#050a12;--panel:#0a1421;--panel2:#0e1b2b;--line:#1b3047;--text:#eef7ff;--muted:#8fa6ba;--accent:#66b7ff;--ok:#35d39a;--warn:#ffd166;--bad:#ff6677;--shadow:0 18px 50px #0007}
 *{box-sizing:border-box}html,body{margin:0;min-height:100%;background:radial-gradient(circle at 10% 0,#123050 0,#050a12 38%);color:var(--text);font-family:Inter,system-ui,-apple-system,"Segoe UI",Tahoma,Arial,sans-serif}button,input,textarea,select{font:inherit}button{cursor:pointer}
@@ -16,7 +16,7 @@
 </style></head>
 <body>
 <div class="app">
-<aside class="side"><div class="brand"><strong>PFAI v8.2.2</strong><small>Master Chat · Code · Web</small></div><nav class="nav" id="nav"></nav><div class="side-foot"><div class="pill"><i class="dot" id="sideDot"></i><span id="sideStatus">جاري الاتصال</span></div></div></aside>
+<aside class="side"><div class="brand"><strong>PFAI v8.2.3</strong><small>Master Chat · Code · Web</small></div><nav class="nav" id="nav"></nav><div class="side-foot"><div class="pill"><i class="dot" id="sideDot"></i><span id="sideStatus">جاري الاتصال</span></div></div></aside>
 <main class="main">
 <header class="top"><div class="title"><h1 id="pageTitle">AI Command Chat</h1><p id="pageSubtitle">العقل المركزي للتعامل مع قلب PFAI</p></div><div class="actions"><span class="pill"><i class="dot" id="topDot"></i><span id="topStatus">غير متصل</span></span><button class="btn" onclick="refreshAll()">↻ تحديث</button></div></header>
 
@@ -53,7 +53,7 @@
 <div id="toast" class="toast"></div>
 <script>
 const NAV=[['chat','✦','AI Command Chat'],['academy','</>','Coding Academy'],['dashboard','⌂','الرئيسية'],['live','◉','Live System'],['learning','↻','التعلم المستمر'],['training','Δ','تدريب النماذج'],['code','</>','Code Learning'],['autofix','⚙','Auto-Fix'],['knowledge','◈','Knowledge & Memory'],['analytics','▥','Metrics & Analytics'],['logs','≡','Logs & Audit'],['recovery','↺','Recovery Center'],['deploy','⇧','Deployments'],['security','◇','Security Center'],['api','{}','API Console'],['modules','▦','Modules'],['settings','⚙','الإعدادات']];
-const TITLES={chat:['AI Command Chat','PFAI 8.2.2 — تحكم كامل · أكواد قوية · ويب حي · تعلم/تدريب'],academy:['Coding Academy','تعليم · تدريب · مشاريع · مراجعة · Sandbox'],dashboard:['لوحة القيادة','مركز التحكم التشغيلي لـ PFAI v8.2.2'],live:['Live System','مراقبة حية للنظام والـBackend'],learning:['التعلم المستمر','Continuous Learning + Governed Promotion'],training:['تدريب النماذج','Autonomous Training · Datasets · Checkpoints · Rollback'],code:['Code Learning','Ground-truth execution + Best-of-N + Solve'],autofix:['Auto-Fix','Regression Capture والتحقق الفعلي'],knowledge:['Knowledge & Memory','الذاكرة وقاعدة المعرفة'],analytics:['Metrics & Analytics','إحصاءات من PFAI Runtime'],logs:['Logs & Audit','سجل التدقيق المتاح من الـBackend'],recovery:['Recovery Center','سلامة السجل واختبارات الاسترداد'],deploy:['Deployments','Canary / Promote / Rollback'],security:['Security Center','Owner Gate وطبقات الأمان'],api:['API Console','استدعاء مسارات PFAI الحقيقية'],modules:['Modules','Capability Inventory'],settings:['Settings','إعدادات الاتصال والواجهة']};
+const TITLES={chat:['AI Command Chat','PFAI 8.2.3 — تحكم كامل · أكواد قوية · ويب حي · تعلم/تدريب'],academy:['Coding Academy','تعليم · تدريب · مشاريع · مراجعة · Sandbox'],dashboard:['لوحة القيادة','مركز التحكم التشغيلي لـ PFAI v8.2.3'],live:['Live System','مراقبة حية للنظام والـBackend'],learning:['التعلم المستمر','Continuous Learning + Governed Promotion'],training:['تدريب النماذج','Autonomous Training · Datasets · Checkpoints · Rollback'],code:['Code Learning','Ground-truth execution + Best-of-N + Solve'],autofix:['Auto-Fix','Regression Capture والتحقق الفعلي'],knowledge:['Knowledge & Memory','الذاكرة وقاعدة المعرفة'],analytics:['Metrics & Analytics','إحصاءات من PFAI Runtime'],logs:['Logs & Audit','سجل التدقيق المتاح من الـBackend'],recovery:['Recovery Center','سلامة السجل واختبارات الاسترداد'],deploy:['Deployments','Canary / Promote / Rollback'],security:['Security Center','Owner Gate وطبقات الأمان'],api:['API Console','استدعاء مسارات PFAI الحقيقية'],modules:['Modules','Capability Inventory'],settings:['Settings','إعدادات الاتصال والواجهة']};
 let BASE=localStorage.getItem('pfai_base_url')||location.origin; let OWNER_AUTHED=true; let PUBLIC_ACCESS=true; let timer=null; let systemCache=null; let OWNER_SETUP_REQUIRED=false;
 const $=id=>document.getElementById(id); const esc=x=>String(x??'').replace(/[&<>"']/g,m=>({'&':'&amp;','<':'&lt;','>':'&gt;','"':'&quot;',"'":'&#39;'}[m]));
 function nav(){ $('nav').innerHTML=NAV.map(([id,icon,label])=>`<button data-id="${id}" onclick="show('${id}',this)"><b>${icon}</b> <span>${label}</span></button>`).join(''); }

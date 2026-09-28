@@ -14,9 +14,12 @@ class TestWebPlannerLatencyGuard(unittest.TestCase):
             "coding_teach", "coding_tracks", "system_status", "app_control_status",
         ]
         tools = [t["tool"] for t in m.plan_tools("ابحث في الويب عن FastAPI best practices", allowed)]
-        self.assertEqual(tools.count("web_research"), 1)
-        self.assertNotIn("web_search", tools)
-        self.assertTrue(set(tools).issubset({"web_status", "web_research"}))
+        self.assertEqual(tools.count("web_search"), 1)
+        self.assertNotIn("web_research", tools)
+        self.assertTrue(set(tools).issubset({"web_status", "web_search"}))
+        deep = [t["tool"] for t in m.plan_tools("deep research Python typing on the web", allowed)]
+        self.assertIn("web_research", deep)
+        self.assertNotIn("web_search", deep)
 
 
 class TestWebTimeoutHelper(unittest.TestCase):
@@ -68,7 +71,7 @@ class TestIntegrityAPI(unittest.TestCase):
     def test_cohesive_core(self):
         h = self.client.get("/health").json()
         self.assertEqual(h.get("status"), "ok")
-        self.assertEqual(h.get("version"), "8.2.2")
+        self.assertEqual(h.get("version"), "8.2.3")
         tools = self.client.get("/chat/tools").json()
         self.assertTrue(tools.get("open_chat_tools"))
         self.assertEqual(tools.get("locked_count"), 0)

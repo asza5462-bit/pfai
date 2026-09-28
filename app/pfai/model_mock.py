@@ -75,8 +75,11 @@ class MockCommandProvider(ModelProvider):
                 add("web_fetch")
             elif re.search(r"web\s*status|حالة\s*الويب|internet\s*status", text + ar, re.I) and not re.search(r"ابحث|search|research", text + ar, re.I):
                 pass  # status only
-            else:
+            elif re.search(r"research|بحث\s*عميق|تحليل\s*ويب|deep\s*research|synthesize", text + ar, re.I):
                 add("web_research")
+            else:
+                # Simple "search the web" → fast search path (no page fetch pipeline)
+                add("web_search")
         elif re.search(r"research_verify|ledger\s*research", text + ar, re.I):
             add("research_verify")
         if re.search(r"regression|انحدار", text + ar):
