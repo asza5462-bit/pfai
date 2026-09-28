@@ -1511,6 +1511,14 @@ def _pfai_startup_free_sovereign() -> None:
         log.info('startup: free sovereign repair ok=%s', out.get('ok'))
     except Exception as exc:
         log.warning('startup: free sovereign failed: %s', exc)
+    try:
+        healed = COMMAND_MEMORY.heal_conflicts(owner='')
+        log.info(
+            'startup: memory guardian superseded=%s conflicts_before=%s ok=%s',
+            healed.get('superseded'), (healed.get('conflicts_before')), (healed.get('audit') or {}).get('ok'),
+        )
+    except Exception as exc:
+        log.warning('startup: memory heal failed: %s', exc)
 
 app.router.add_event_handler('startup', _pfai_startup_free_sovereign)
 
