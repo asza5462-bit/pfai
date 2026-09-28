@@ -35,6 +35,8 @@ services:
         value: "1"
       - key: PFAI_AUTO_SAFE_HEAL
         value: "1"
+      - key: PFAI_UNIFIED_BRAIN
+        value: "1"
       - key: PFAI_WEB_ALLOW_NETWORK
         value: "1"
       - key: PFAI_WEB_SEARCH_PROVIDER

@@ -1,6 +1,6 @@
 # PFAI Project Memory
 
-Last updated: 2026-09-28 (PFAI 8.4.0 — integrity harden · web latency bound)
+Last updated: 2026-09-28 (PFAI 8.5.0 — integrity harden · web latency bound)
 
 ## Snapshot
 
@@ -21,12 +21,18 @@ Last updated: 2026-09-28 (PFAI 8.4.0 — integrity harden · web latency bound)
 | MODEL_QUALITY_PRODUCTION_VALIDATED | **false** |
 | Anthropic required | false |
 
-## Advanced self-develop (8.4)
+## Advanced self-develop (8.5)
 
 - Maturity stages: emerging → capable → advanced → sovereign_safe
 - Multi-pass code build (review×3, repair≤6), sandbox-only accept
 - Chat: advanced_status / awareness / self_develop / code_build
 - Still never auto-promotes weights
+
+## Unified Super Brain (8.5)
+
+- One mind: `unified_brain_pulse` parallel local lanes
+- Command Chat sole runtime when PFAI_UNIFIED_BRAIN=1
+- Soft-degrade lanes; never invent; never silent weight promote
 
 ## Honesty
 

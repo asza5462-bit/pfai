@@ -129,43 +129,12 @@ class CommandAgent:
         tool_results: list[dict] = []
         pending_payload = None
 
-        for step in planned:
-            tool = step.get("tool")
-            args = step.get("args") or {}
-            if not tool:
-                continue
-            mark("calling_tool", f"Selected tool {tool}", tool=tool)
-            if self.router.requires_approval(tool):
-                pid = self.memory.create_pending(cid, tool, args, reason=step.get("reason") or message)
-                pending_payload = {
-                    "pending_id": pid,
-                    "tool": tool,
-                    "args": args,
-                    "reason": step.get("reason") or f"Owner approval required for {tool}",
-                }
-                mark("waiting_for_approval", pending_payload["reason"], pending_id=pid, tool=tool)
-                self.audit.record(
-                    actor=owner, command=message, tool=tool, status="waiting_for_approval",
-                    required_approval=True, approved=False, conversation_id=cid, pending_id=pid,
-                )
-                tool_results.append({"ok": False, "needs_approval": True, "tool": tool, "args": args, "pending_id": pid})
-                # Stop before executing any further mutating tools in the same turn
-                break
-
-            mark("executing", f"Executing {tool} via heart", tool=tool)
-            result = self.router.execute(tool, args, approved=False, actor=owner)
-            tool_results.append(result)
-            self.audit.record(
-                actor=owner, command=message, tool=tool,
-                status="completed" if result.get("ok") else "failed",
-                result=result.get("result") if result.get("ok") else None,
-                required_approval=False, approved=None, conversation_id=cid,
-                error=result.get("error"),
-            )
-            if result.get("ok"):
-                self._record_tool_learning(owner, tool, message, result)
-            if not result.get("ok"):
-                mark("failed", result.get("error") or "tool failed", tool=tool)
+        # One-mind budget: prefer unified pulse; cap fan-out to cut lag
+        planned = _budget_plan(planned)
+        mark("executing", f"Unified execution plan tools={len(planned)}")
+        tool_results, pending_payload = self._execute_plan(
+            planned, owner=owner, cid=cid, message=message, mark=mark
+        )
 
         if pending_payload:
             reply = _approval_reply(lang, pending_payload)
@@ -173,13 +142,16 @@ class CommandAgent:
         else:
             mark("thinking", "Composing answer from tool results + memory")
             reply = self._compose(message, tool_results, mem_ctx, lang)
-            final_status = "completed" if all(t.get("ok") or t.get("needs_approval") for t in tool_results) or not tool_results else (
-                "completed" if any(t.get("ok") for t in tool_results) else "failed"
-            )
+            # Soft-complete: local brain stays responsive even if one lane degrades
+            final_status = "completed" if (
+                not tool_results
+                or any(t.get("ok") for t in tool_results)
+                or all(t.get("needs_approval") for t in tool_results)
+            ) else "failed"
             if final_status == "completed":
                 mark("completed", "Turn finished")
             else:
-                mark("failed", "One or more tools failed")
+                mark("failed", "Critical tools failed")
 
         self.memory.add_message(
             cid, "assistant", reply, status=final_status,
@@ -262,13 +234,124 @@ class CommandAgent:
             log.debug("tool learning bridge skipped: %s", exc)
 
     # -- planning / compose --------------------------------------------
+    _PARALLEL_READ = frozenset({
+        "health_check", "system_status", "metrics_snapshot", "modules_list",
+        "continuous_status", "deployments_list", "knowledge_search", "memory_search",
+        "recovery_verify", "research_verify", "regression_pending", "chat_audit_recent",
+        "propose_improvement", "learner_snapshot", "training_eligibility",
+        "training_control_status", "coding_tracks", "coding_progress", "coding_projects",
+        "coding_knowledge", "coding_next_lesson", "web_status", "app_control_status",
+        "autonomy_status", "advanced_status", "advanced_awareness", "self_check_run",
+        "unified_brain_status",
+    })
+
+    def _execute_plan(
+        self,
+        planned: list[dict],
+        *,
+        owner: str,
+        cid: str,
+        message: str,
+        mark,
+    ) -> tuple[list[dict], dict | None]:
+        """Execute reads in parallel; writes/serial tools in order. Soft-fail lanes."""
+        from concurrent.futures import ThreadPoolExecutor, as_completed
+        import time
+
+        tool_results: list[dict] = []
+        pending_payload = None
+        reads = []
+        writes = []
+        for step in planned:
+            tool = step.get("tool")
+            if not tool:
+                continue
+            if self.router.requires_approval(tool):
+                writes.append(step)  # approval path stays serial
+            elif tool in self._PARALLEL_READ:
+                reads.append(step)
+            else:
+                writes.append(step)
+
+        # Parallel read lanes
+        if reads:
+            mark("calling_tool", f"Parallel read lanes n={len(reads)}")
+            with ThreadPoolExecutor(max_workers=min(6, len(reads))) as pool:
+                futs = {}
+                for step in reads:
+                    tool = step["tool"]
+                    args = step.get("args") or {}
+                    futs[pool.submit(self.router.execute, tool, args, approved=False, actor=owner)] = step
+                for fut in as_completed(futs):
+                    step = futs[fut]
+                    tool = step["tool"]
+                    try:
+                        result = fut.result(timeout=8)
+                    except Exception as exc:
+                        result = {"ok": False, "tool": tool, "error": f"lane_timeout_or_error:{exc}", "degraded": True}
+                    if "tool" not in result:
+                        result = {**result, "tool": tool}
+                    tool_results.append(result)
+                    self.audit.record(
+                        actor=owner, command=message, tool=tool,
+                        status="completed" if result.get("ok") else "failed",
+                        result=result.get("result") if result.get("ok") else None,
+                        required_approval=False, approved=None, conversation_id=cid,
+                        error=result.get("error"),
+                    )
+                    if result.get("ok"):
+                        self._record_tool_learning(owner, tool, message, result)
+
+        # Serial write / heavy tools
+        for step in writes:
+            tool = step.get("tool")
+            args = step.get("args") or {}
+            mark("calling_tool", f"Selected tool {tool}", tool=tool)
+            if self.router.requires_approval(tool):
+                pid = self.memory.create_pending(cid, tool, args, reason=step.get("reason") or message)
+                pending_payload = {
+                    "pending_id": pid,
+                    "tool": tool,
+                    "args": args,
+                    "reason": step.get("reason") or f"Owner approval required for {tool}",
+                }
+                mark("waiting_for_approval", pending_payload["reason"], pending_id=pid, tool=tool)
+                self.audit.record(
+                    actor=owner, command=message, tool=tool, status="waiting_for_approval",
+                    required_approval=True, approved=False, conversation_id=cid, pending_id=pid,
+                )
+                tool_results.append({"ok": False, "needs_approval": True, "tool": tool, "args": args, "pending_id": pid})
+                break
+            mark("executing", f"Executing {tool} via heart", tool=tool)
+            t0 = time.time()
+            try:
+                result = self.router.execute(tool, args, approved=False, actor=owner)
+            except Exception as exc:
+                result = {"ok": False, "tool": tool, "error": str(exc), "degraded": True}
+            if "tool" not in result:
+                result = {**result, "tool": tool}
+            result.setdefault("_ms", int((time.time() - t0) * 1000))
+            tool_results.append(result)
+            self.audit.record(
+                actor=owner, command=message, tool=tool,
+                status="completed" if result.get("ok") else "failed",
+                result=result.get("result") if result.get("ok") else None,
+                required_approval=False, approved=None, conversation_id=cid,
+                error=result.get("error"),
+            )
+            if result.get("ok"):
+                self._record_tool_learning(owner, tool, message, result)
+            if not result.get("ok"):
+                mark("failed", result.get("error") or "tool failed", tool=tool)
+        return tool_results, pending_payload
+
     def _plan(self, message: str, mem_ctx: str, dialog: list[dict]) -> list[dict]:
         allowed = [t["name"] for t in self.router.catalog()]
         if self._model_generate_ready():
             catalog = json.dumps(self.router.catalog(), ensure_ascii=False)
             prompt = (
-                "You are the PFAI Advanced Command Agent brain — precise, analytical, education-aware. "
-                "Choose zero or more tools to accomplish the request. "
+                "You are the PFAI Unified Super Brain — one mind, precise, fast. "
+                "Prefer unified_brain_pulse for whole-system asks. Max 3 tools. "
                 "Return ONLY JSON: {\"tools\":[{\"tool\":\"name\",\"args\":{},\"reason\":\"...\"}],\"reply_hint\":\"...\"}. "
                 "Never invent tool names. Prefer academy/training-status tools for learning questions. "
                 "Never select weight training / model activate / secrets tools. "
@@ -402,6 +485,42 @@ def _looks_like_web_intent(message: str) -> bool:
         message or "",
         re.I,
     ))
+
+
+def _budget_plan(planned: list[dict], *, max_tools: int = 3) -> list[dict]:
+    """Collapse redundant stacks; prefer unified_brain_pulse as single mind."""
+    if not planned:
+        return planned
+    names = [p.get("tool") for p in planned if p.get("tool")]
+    if "unified_brain_pulse" in names and len(names) >= 1:
+        # Prefer pure one-mind pulse; keep one companion action if present
+        pulse = next(p for p in planned if p.get("tool") == "unified_brain_pulse")
+        companion_ok = {
+            "advanced_self_develop", "self_improve_tick", "app_control_status",
+            "training_cycle_start", "continuous_tick",
+        }
+        # If the turn is ONLY pulse + redundant status mirrors, collapse to pulse
+        non_mirror = [p for p in planned if p.get("tool") in companion_ok]
+        mirrors = {"system_status", "health_check", "autonomy_status", "advanced_status",
+                   "web_status", "continuous_status", "learner_snapshot", "advanced_awareness",
+                   "unified_brain_status"}
+        if non_mirror:
+            return [pulse, non_mirror[0]][:max_tools]
+        if set(names) - {"unified_brain_pulse"} <= mirrors:
+            return [pulse]
+        return [pulse]
+    # Dedupe while preserving order
+    seen = set()
+    out = []
+    for p in planned:
+        t = p.get("tool")
+        if not t or t in seen:
+            continue
+        seen.add(t)
+        out.append(p)
+        if len(out) >= max_tools:
+            break
+    return out
 
 
 def _looks_like_autonomy_intent(message: str) -> bool:

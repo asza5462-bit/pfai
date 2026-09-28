@@ -90,7 +90,7 @@ class MockCommandProvider(ModelProvider):
         if re.search(r"improv|تحسين|اقترح", text + ar):
             add("propose_improvement")
         if re.search(
-            r"تحكم\s*كامل|master\s*control|حالة\s*التطبيق|app\s*control|لوحة\s*التحكم\s*الكاملة",
+            r"ال?تحكم\s*ال?كامل|master\s*control|حالة\s*التطبيق|app\s*control|لوحة\s*التحكم\s*ال?كاملة",
             text + ar,
             re.I,
         ):
@@ -150,8 +150,17 @@ class MockCommandProvider(ModelProvider):
             add("forget_memory")
         if re.search(r"correct|تصحيح|هذا التحليل غير صحيح", text + ar):
             add("save_owner_correction")
-        # Self-heal / self-improve / advanced self-develop
+        # Unified one-mind asks — single pulse (speed + coherence)
         if re.search(
+            r"عقل\s*واحد|unified\s*brain|كل\s*شيء\s*يعمل|سلاسة|سرعة\s*متناه|"
+            r"بدون\s*ا?خطاء|بدون\s*تأخير|ذكاء\s*خارق|قوة\s*و\s*دقة|طوره|وطوره|"
+            r"و\s*طوره|super\s*brain|one\s*mind",
+            text + ar,
+            re.I,
+        ):
+            add("unified_brain_pulse")
+        # Self-heal / self-improve / advanced self-develop
+        elif re.search(
             r"أصلح\s*نفس|صلح\s*نفس|self[_\s-]?heal|self[_\s-]?check|self[_\s-]?improve|"
             r"طور\s*نفس|حدّث\s*نفس|حدث\s*نفس|يطور\s*نفس|يصلح\s*نفس|يحل\s*مشاكل|"
             r"استقلال|autonom|فك\s*القيود|بدون\s*قيود|طور\s*ذات|تحسين\s*ذاتي|"
@@ -165,8 +174,10 @@ class MockCommandProvider(ModelProvider):
             add("advanced_self_develop")
             add("autonomy_status")
             add("self_improve_tick")
+            add("unified_brain_pulse")
 
         if not picks:
+            add("unified_brain_pulse")
             add("app_control_status")
             add("system_status")
             add("learner_snapshot")
@@ -204,6 +215,13 @@ class MockCommandProvider(ModelProvider):
                 }
             if name == "learner_snapshot":
                 args = {}
+            if name == "unified_brain_pulse":
+                act = "status"
+                if re.search(r"طور|develop|build|ibn|ابن", message or "", re.I):
+                    act = "auto"
+                elif re.search(r"أصلح|heal|improve|صلح", message or "", re.I):
+                    act = "improve"
+                args = {"action": act, "message": message, "include_action": act != "status"}
             tools.append({"tool": name, "args": args})
         return tools
 
@@ -301,6 +319,18 @@ class MockCommandProvider(ModelProvider):
                         "passes": len((res.get("build") or {}).get("passes") or res.get("passes") or []),
                         "weight_promotion": res.get("weight_promotion") or "never_auto",
                     }, 280)
+                )
+            elif name == "unified_brain_pulse" and isinstance(res, dict):
+                insights.append(
+                    ("unified mind: " if en else "العقل الواحد: ")
+                    + _brief({
+                        "snapshot": res.get("snapshot"),
+                        "elapsed_ms": res.get("elapsed_ms"),
+                        "latency_class": res.get("latency_class"),
+                        "degraded": res.get("degraded_lanes"),
+                        "action": res.get("action"),
+                        "weight_promotion": res.get("weight_promotion") or "never_auto",
+                    }, 320)
                 )
             elif name in {"continuous_start", "continuous_resume", "continuous_pause", "continuous_stop"}:
                 insights.append(f"{name} → {_brief(res, 160)}")

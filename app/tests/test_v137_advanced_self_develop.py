@@ -1,4 +1,4 @@
-"""PFAI 8.4 — advanced aware self-develop with multi-pass code build."""
+"""PFAI 8.5 — advanced aware self-develop with multi-pass code build."""
 import hashlib
 import os
 import unittest
@@ -130,7 +130,7 @@ class TestAdvancedAPI(unittest.TestCase):
 
     def test_version_and_tools(self):
         from pfai import __version__
-        self.assertTrue(__version__.startswith("8.4"))
+        self.assertTrue(__version__.startswith("8.5"))
         tools = {t["name"] for t in self.client.get("/chat/tools").json()["tools"]}
         for n in ("advanced_self_develop", "advanced_status", "advanced_awareness", "advanced_code_build"):
             self.assertIn(n, tools)

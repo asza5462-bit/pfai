@@ -123,6 +123,7 @@ ADVANCED = AdvancedSelfDevelop(
     review_passes=int(_CODE_CFG.get('review_passes') or 3),
     max_repairs=int(_CODE_CFG.get('max_repairs') or 6),
 )
+from .unified_brain import UnifiedBrain, unified_brain_enabled  # noqa: E402
 STATIC=Path(__file__).parent/'static'
 
 # --- Command Chat brain (Agent) ↔ heart (core services) -----------------
@@ -218,6 +219,20 @@ def _tool_advanced_code_build(instruction: str = '', test_code: str = ''):
     if not (instruction or '').strip() or not (test_code or '').strip():
         return {'ok': False, 'error': 'instruction and test_code are required', 'weight_promotion': 'never_auto'}
     return ADVANCED.multi_pass_build(instruction.strip(), test_code.strip())
+
+# UNIFIED is constructed after AUTONOMY handlers exist — placeholder filled below
+UNIFIED = None  # type: ignore
+
+def _tool_unified_brain_pulse(action: str = 'status', message: str = '', include_action: bool = True):
+    brain = UNIFIED
+    if brain is None:
+        return {'ok': False, 'error': 'unified brain not ready', 'unified': False}
+    return brain.pulse(action=action or 'status', message=message or '', include_action=bool(include_action))
+
+def _tool_unified_brain_status():
+    if UNIFIED is None:
+        return {'ok': False, 'unified_brain': False, 'enabled': unified_brain_enabled()}
+    return UNIFIED.status()
 
 def _tool_remember_knowledge(kind: str = 'approved_knowledge', content: str = ''):
     if not str(content).strip():
@@ -1022,12 +1037,51 @@ TOOL_ROUTER.handlers['advanced_status'] = _tool_advanced_status
 TOOL_ROUTER.handlers['advanced_awareness'] = _tool_advanced_awareness
 TOOL_ROUTER.handlers['advanced_self_develop'] = _tool_advanced_self_develop
 TOOL_ROUTER.handlers['advanced_code_build'] = _tool_advanced_code_build
+
+# One-mind unified brain (parallel local lanes)
+def _ub_health():
+    return runtime.health(extra={'continuous': continuous_gate_status()})
+
+def _ub_continuous():
+    return CONTINUOUS.status()
+
+def _ub_advanced():
+    return ADVANCED.status()
+
+def _ub_autonomy():
+    return AUTONOMY.status()
+
+def _ub_web():
+    from .elite.web_fabric import web_config_report
+    return web_config_report()
+
+def _ub_academy():
+    return {'ok': True, 'tracks': len(CODING_CURRICULUM.list_tracks()), 'count': len(CODING_CURRICULUM.list_tracks())}
+
+UNIFIED = UnifiedBrain(
+    health_fn=_ub_health,
+    continuous_fn=_ub_continuous,
+    advanced_fn=_ub_advanced,
+    autonomy_fn=_ub_autonomy,
+    web_fn=_ub_web,
+    academy_fn=_ub_academy,
+    improve_fn=lambda: AUTONOMY.run_cycle(include_continuous_tick=False),
+    develop_fn=lambda: ADVANCED.autonomous_cycle(force=True, include_continuous_tick=False),
+)
+for _spec in (
+    ToolSpec('unified_brain_pulse', 'One-mind parallel pulse (+ optional improve/develop)', 'write', False, {'action': 'string?', 'message': 'string?', 'include_action': 'bool?'}),
+    ToolSpec('unified_brain_status', 'Unified brain enablement status', 'read', False, {}),
+):
+    TOOL_ROUTER.specs[_spec.name] = _spec
+TOOL_ROUTER.handlers['unified_brain_pulse'] = _tool_unified_brain_pulse
+TOOL_ROUTER.handlers['unified_brain_status'] = _tool_unified_brain_status
 log.info(
-    'autonomy ready open=%s auto_learn=%s auto_heal=%s advanced_stage=%s',
+    'autonomy ready open=%s auto_learn=%s auto_heal=%s advanced_stage=%s unified=%s',
     open_execution_status().get('open_chat_tools'),
     auto_accept_learning(),
     auto_safe_heal(),
     (ADVANCED.maturity() or {}).get('stage'),
+    unified_brain_enabled(),
 )
 ELITE = EliteOrchestrator(
     root='data/longevity/elite',
@@ -1719,9 +1773,14 @@ def _should_use_production_runtime(message: str) -> bool:
     text = (message or '').strip()
     if not text:
         return False
+    # Unified Super Brain: Command Chat is the single mind (avoid dual-runtime lag/errors)
+    if unified_brain_enabled():
+        return False
     lowered = text.lower()
     # Autonomy / self-heal must stay on ToolRouter (safe bounded loop)
     if _looks_like_autonomy_intent(text):
+        return False
+    if re.search(r'عقل\s*واحد|unified|سلاسة|سرعة|بدون\s*ا?خطاء|بدون\s*تأخير', text, re.I):
         return False
     operational = (
         'health check', 'health_check', 'فحص الصحة', 'system status', 'حالة النظام',
