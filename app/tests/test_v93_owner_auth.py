@@ -178,10 +178,25 @@ class TestOwnerAuthAPI(unittest.TestCase):
             "server": ("test", 443),
         }
         req = Request(scope)
-        flags = api_mod._secure_cookie_flags(req)
-        self.assertTrue(flags["httponly"])
-        self.assertTrue(flags["secure"])
-        self.assertEqual(flags["samesite"], "strict")
+        prev_env = os.environ.get("PFAI_ENV")
+        prev_cookie = os.environ.get("PFAI_COOKIE_SECURE")
+        try:
+            # HTTPS request with no cookie override → Secure must be true.
+            os.environ.pop("PFAI_COOKIE_SECURE", None)
+            os.environ["PFAI_ENV"] = "test"
+            flags = api_mod._secure_cookie_flags(req)
+            self.assertTrue(flags["httponly"])
+            self.assertTrue(flags["secure"])
+            self.assertEqual(flags["samesite"], "strict")
+        finally:
+            if prev_cookie is None:
+                os.environ.pop("PFAI_COOKIE_SECURE", None)
+            else:
+                os.environ["PFAI_COOKIE_SECURE"] = prev_cookie
+            if prev_env is None:
+                os.environ.pop("PFAI_ENV", None)
+            else:
+                os.environ["PFAI_ENV"] = prev_env
 
     def test_secure_cookie_production_forces_secure(self):
         from pfai import api as api_mod
