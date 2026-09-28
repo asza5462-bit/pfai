@@ -153,7 +153,7 @@ class CommandAgent:
                 break
 
             mark("executing", f"Executing {tool} via heart", tool=tool)
-            result = self.router.execute(tool, args, approved=False)
+            result = self.router.execute(tool, args, approved=False, actor=owner)
             tool_results.append(result)
             self.audit.record(
                 actor=owner, command=message, tool=tool,
@@ -162,6 +162,8 @@ class CommandAgent:
                 required_approval=False, approved=None, conversation_id=cid,
                 error=result.get("error"),
             )
+            if result.get("ok"):
+                self._record_tool_learning(owner, tool, message, result)
             if not result.get("ok"):
                 mark("failed", result.get("error") or "tool failed", tool=tool)
 
@@ -245,46 +247,78 @@ class CommandAgent:
         self.memory.add_message(item["conversation_id"], "assistant", reply, status="completed", meta={"pending_id": pending_id, "rejected": True})
         return {"ok": True, "conversation_id": item["conversation_id"], "reply": reply, "status": "rejected", "pending_id": pending_id}
 
+    def _record_tool_learning(self, owner: str, tool: str, message: str, result: dict) -> None:
+        """Feed continuous-learning bridge from successful tool turns (never trains weights)."""
+        bridge = getattr(self, "experience_bridge", None)
+        if bridge is None or not hasattr(bridge, "record_tool_success"):
+            return
+        try:
+            bridge.record_tool_success(
+                instruction=f"[{tool}] {(message or '')[:400]}",
+                result_summary=json.dumps(result.get("result"), ensure_ascii=False, default=str)[:800],
+                source_id=f"command_chat:{owner}:{tool}",
+            )
+        except Exception as exc:
+            log.debug("tool learning bridge skipped: %s", exc)
+
     # -- planning / compose --------------------------------------------
     def _plan(self, message: str, mem_ctx: str, dialog: list[dict]) -> list[dict]:
         allowed = [t["name"] for t in self.router.catalog()]
-        if self._anthropic_ready():
+        if self._model_generate_ready():
             catalog = json.dumps(self.router.catalog(), ensure_ascii=False)
             prompt = (
-                "You are the PFAI Command Agent brain. Choose zero or more tools to accomplish the owner request. "
+                "You are the PFAI Advanced Command Agent brain — precise, analytical, education-aware. "
+                "Choose zero or more tools to accomplish the request. "
                 "Return ONLY JSON: {\"tools\":[{\"tool\":\"name\",\"args\":{},\"reason\":\"...\"}],\"reply_hint\":\"...\"}. "
-                "Never invent tool names. Sensitive tools will still require owner approval after you select them. "
-                "Do not request weight training or secret access.\n"
+                "Never invent tool names. Prefer academy/training-status tools for learning questions. "
+                "Never select weight training / model activate / secrets tools. "
+                "Open-execution mode may run mutating chat tools without a second approval click.\n"
                 f"Allowed tools: {catalog}\n"
                 f"Durable memory:\n{mem_ctx}\n"
                 f"Recent dialog: {json.dumps(dialog[-4:], ensure_ascii=False)}\n"
                 f"Owner message: {message}\n"
             )
-            raw = self.model.generate(prompt, system="PFAI secure command planner. JSON only.")
-            data = _extract_json_obj(raw)
-            if data and isinstance(data.get("tools"), list):
-                out = []
-                for t in data["tools"]:
-                    name = (t or {}).get("tool")
-                    if name in allowed:
-                        out.append({"tool": name, "args": (t or {}).get("args") or {}, "reason": (t or {}).get("reason") or ""})
-                if out:
-                    return out
+            try:
+                raw = self.model.generate(prompt, system="PFAI advanced command planner. JSON only.")
+                data = _extract_json_obj(raw)
+                if data and isinstance(data.get("tools"), list):
+                    out = []
+                    for t in data["tools"]:
+                        name = (t or {}).get("tool")
+                        if name in allowed:
+                            out.append({"tool": name, "args": (t or {}).get("args") or {}, "reason": (t or {}).get("reason") or ""})
+                    if out:
+                        return out
+            except Exception as exc:
+                log.warning("model plan failed, using mock: %s", exc)
         return self.mock.plan_tools(message, allowed)
 
     def _compose(self, message: str, tool_results: list[dict], mem_ctx: str, lang: str) -> str:
-        if self._anthropic_ready():
+        if self._model_generate_ready():
             prompt = (
-                "Compose a concise bilingual-capable operator reply for PFAI Command Chat. "
-                "Use the tool results; do not invent metrics. Prefer the owner's language.\n"
+                "Compose a high-signal operator reply for PFAI Advanced Command Chat. "
+                "Sound like a real AI systems brain: structured findings, clear next steps, "
+                "link education/training when relevant. Use tool results only; do not invent metrics. "
+                "Prefer the owner's language. Keep it powerful but honest.\n"
                 f"Language hint: {lang}\nMessage: {message}\nMemory:\n{mem_ctx}\n"
-                f"Tool results: {json.dumps(tool_results, ensure_ascii=False, default=str)[:6000]}\n"
+                f"Tool results: {json.dumps(tool_results, ensure_ascii=False, default=str)[:8000]}\n"
             )
             try:
-                return self.model.generate(prompt, system="PFAI operator assistant. Be precise and safety-aware.")
+                return self.model.generate(
+                    prompt,
+                    system="PFAI advanced operator assistant. Precise, analytical, safety-aware.",
+                )
             except Exception as exc:
-                log.warning("anthropic compose failed: %s", exc)
+                log.warning("model compose failed: %s", exc)
         return self.mock.compose_reply(message, tool_results, mem_ctx, language=lang)
+
+    def _model_generate_ready(self) -> bool:
+        if self._anthropic_ready():
+            return True
+        if self.model is None or not hasattr(self.model, "generate"):
+            return False
+        # EchoProvider is too weak for planning/compose — keep mock path.
+        return type(self.model).__name__ not in {"EchoProvider", "MockCommandProvider"}
 
     def _handle_correction_capture(self, cid, owner, message, lang, timeline, mark) -> dict:
         mark("thinking", "Owner correction flow")

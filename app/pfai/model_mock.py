@@ -1,6 +1,7 @@
 """Deterministic Mock provider for Command Chat when Anthropic is unavailable.
 
 Never claims to be Claude. Used for offline UI/agent/tool tests without secrets.
+Produces structured, analytical operator replies from real tool results.
 """
 from __future__ import annotations
 
@@ -10,7 +11,7 @@ from .model import ModelProvider
 
 
 class MockCommandProvider(ModelProvider):
-    """Rule/heuristic planner + reply composer for development and tests."""
+    """Rule/heuristic planner + high-signal reply composer for development and tests."""
 
     name = "mock-command"
 
@@ -18,7 +19,7 @@ class MockCommandProvider(ModelProvider):
         # Used only as a fallback composer; planning uses plan_tools().
         return (
             "[PFAI-MOCK] I can inspect system health, metrics, continuous status, "
-            "memory, and request owner approval for sensitive actions. "
+            "academy progress, training eligibility, memory, and execute open tools. "
             f"Prompt summary: {prompt[:180]}"
         )
 
@@ -32,17 +33,6 @@ class MockCommandProvider(ModelProvider):
             if name in allowed and name not in picks:
                 picks.append(name)
 
-        # bilingual keyword routing
-        if re.search(r"health|صح[ةه]|فحص.*صح", text + ar):
-            add("health_check")
-        if re.search(r"system|حال[ةه].*نظام|حل[ل].*نظام|status", text + ar):
-            add("system_status")
-        if re.search(r"metric|مؤشر|أخطاء|error|fail", text + ar):
-            add("metrics_snapshot")
-            if "system_status" in allowed:
-                add("system_status")
-        if re.search(r"module|وحدات|مكون", text + ar):
-            add("modules_list")
         if re.search(
             r"eligib|أهلية|حالة\s*التدريب|training\s*status|جاهزية\s*التدريب|"
             r"هل\s*(التدريب|النموذج)|next\s*training|can\s*we\s*train|متى\s*نتدرب",
@@ -56,6 +46,16 @@ class MockCommandProvider(ModelProvider):
         elif re.search(r"\btraining\b|تدريب\s*النموذج|تدريب\s*النماذج", text + ar):
             add("training_control_status")
             add("training_eligibility")
+        if re.search(r"health|صح[ةه]|فحص.*صح", text + ar):
+            add("health_check")
+        if re.search(r"system|حال[ةه].*نظام|حل[ل].*نظام|status|حل[ل]\s*النظام", text + ar):
+            add("system_status")
+        if re.search(r"metric|مؤشر|أخطاء|error|fail", text + ar):
+            add("metrics_snapshot")
+            if "system_status" in allowed:
+                add("system_status")
+        if re.search(r"module|وحدات|مكون", text + ar):
+            add("modules_list")
         if re.search(r"deploy|نشر", text + ar):
             add("deployments_list")
         if re.search(r"recover|استرداد", text + ar):
@@ -88,10 +88,15 @@ class MockCommandProvider(ModelProvider):
         if re.search(r"search knowledge|ابحث.*معرف|راجع.*بيانات|بيانات", text + ar):
             add("knowledge_search")
             add("memory_search")
-        if re.search(r"start continuous|شغ[لّ].*تعلم|تشغيل.*continuous", text + ar):
+        if re.search(r"start continuous|شغ[لّ].*تعلم|تشغيل.*continuous|ابدأ\s*التعلم\s*المستمر", text + ar):
             add("continuous_start")
+            add("continuous_status")
         if re.search(r"stop continuous|أوقف.*تعلم|ايقاف.*تعلم", text + ar):
             add("continuous_stop")
+        if re.search(r"resume continuous|استأنف.*تعلم", text + ar):
+            add("continuous_resume")
+        if re.search(r"pause continuous|إيقاف\s*مؤقت|ايقاف\s*مؤقت", text + ar):
+            add("continuous_pause")
         if re.search(r"remember|احفظ|حفظ.*(معرف|تفضيل|قرار)", text + ar):
             add("remember_knowledge")
         if re.search(r"forget|انسَ|انسى|احذف.*ذاكر", text + ar):
@@ -101,12 +106,13 @@ class MockCommandProvider(ModelProvider):
 
         if not picks:
             add("system_status")
+            add("learner_snapshot")
 
         tools = []
         for name in picks:
             args: dict = {}
             if name in {"knowledge_search", "memory_search"}:
-                args = {"q": message, "limit": 5}
+                args = {"q": message, "limit": 8}
             if name == "propose_improvement":
                 args = {"topic": message}
             if name == "remember_knowledge":
@@ -115,6 +121,12 @@ class MockCommandProvider(ModelProvider):
                 args = {"content": message}
             if name == "chat_audit_recent":
                 args = {"limit": 20}
+            if name == "coding_teach":
+                args = {"track_id": "python", "goal": message}
+            if name == "coding_next_lesson":
+                args = {"track_id": "python"}
+            if name == "learner_snapshot":
+                args = {}
             tools.append({"tool": name, "args": args})
         return tools
 
@@ -122,23 +134,94 @@ class MockCommandProvider(ModelProvider):
         ok = [t for t in tool_results if t.get("ok")]
         pending = [t for t in tool_results if t.get("needs_approval")]
         failed = [t for t in tool_results if not t.get("ok") and not t.get("needs_approval")]
-        if language.startswith("en"):
-            parts = ["PFAI Command Agent (mock brain) summary:"]
+        en = language.startswith("en")
+
+        def _brief(obj, limit=420):
+            try:
+                s = json.dumps(obj, ensure_ascii=False, default=str)
+            except Exception:
+                s = str(obj)
+            s = re.sub(r"\s+", " ", s).strip()
+            return s if len(s) <= limit else s[: limit - 1] + "…"
+
+        insights: list[str] = []
+        for t in ok:
+            name = t.get("tool") or "?"
+            res = t.get("result")
+            if name == "health_check":
+                st = (res or {}).get("status") if isinstance(res, dict) else res
+                insights.append(f"health={st}" if en else f"الصحة={st}")
+            elif name == "system_status" and isinstance(res, dict):
+                h = (res.get("health") or {}).get("status") if isinstance(res.get("health"), dict) else res.get("health")
+                insights.append(f"system health={h}" if en else f"حالة النظام={h}")
+            elif name == "metrics_snapshot" and isinstance(res, dict):
+                insights.append(("metrics: " if en else "المؤشرات: ") + _brief(res, 220))
+            elif name == "training_eligibility" and isinstance(res, dict):
+                elig = res.get("eligible")
+                insights.append(
+                    f"training eligible={elig} (chat cannot start training)"
+                    if en else
+                    f"أهلية التدريب={elig} (الشات لا يبدأ التدريب)"
+                )
+            elif name == "training_control_status" and isinstance(res, dict):
+                insights.append(("training control: " if en else "مركز التدريب: ") + _brief({
+                    "paused": res.get("paused"),
+                    "autonomous_enabled": res.get("autonomous_enabled"),
+                    "can_start_from_chat": res.get("can_start_from_chat"),
+                }, 200))
+            elif name == "learner_snapshot" and isinstance(res, dict):
+                prof = res.get("profile") or {}
+                insights.append(
+                    f"academy level={prof.get('display_level')} mode={prof.get('mode')} done={prof.get('completed_lessons')}"
+                    if en else
+                    f"الأكاديمية مستوى={prof.get('display_level')} وضع={prof.get('mode')} دروس={prof.get('completed_lessons')}"
+                )
+            elif name == "continuous_status" and isinstance(res, dict):
+                insights.append(("continuous: " if en else "التعلم المستمر: ") + _brief(res, 220))
+            elif name in {"continuous_start", "continuous_resume", "continuous_pause", "continuous_stop"}:
+                insights.append(f"{name} → {_brief(res, 160)}")
+            elif name in {"coding_teach", "coding_tracks", "coding_progress", "coding_next_lesson", "coding_assess"}:
+                insights.append(f"{name}: {_brief(res, 240)}")
+            elif name in {"remember_knowledge", "save_owner_correction", "correct_memory", "forget_memory"}:
+                insights.append(f"{name}: {_brief(res, 160)}")
+            else:
+                insights.append(f"{name}: {_brief(res, 180)}")
+
+        if en:
+            parts = [
+                "PFAI Advanced Brain — analytical summary from live tools:",
+            ]
+            if insights:
+                parts.append("Findings:")
+                parts.extend(f"• {x}" for x in insights[:10])
             if ok:
-                parts.append(f"Completed tools: {', '.join(t.get('tool','?') for t in ok)}.")
+                parts.append("Executed: " + ", ".join(t.get("tool", "?") for t in ok) + ".")
             if pending:
-                parts.append("Sensitive action(s) await your owner approval before execution.")
+                parts.append("Sensitive action(s) still await approval (locked mode).")
             if failed:
-                parts.append("Some tools failed — see timeline/details.")
-            parts.append("Memory context considered: " + (memory_context[:240] if memory_context else "none"))
+                parts.append("Some tools failed — see timeline for detail.")
+            if memory_context and "no durable" not in memory_context.lower():
+                parts.append("Durable memory considered: " + memory_context[:220])
+            parts.append(
+                "Education & training: academy tools teach; eligibility is read-only; "
+                "model promotion never auto-starts from chat."
+            )
             return "\n".join(parts)
-        parts = ["ملخص عقل PFAI (وضع Mock للتطوير):"]
+
+        parts = ["عقل PFAI المتقدم — ملخص تحليلي من أدوات حية:"]
+        if insights:
+            parts.append("النتائج:")
+            parts.extend(f"• {x}" for x in insights[:10])
         if ok:
             parts.append("الأدوات المنفذة: " + ", ".join(t.get("tool", "?") for t in ok))
         if pending:
-            parts.append("هناك إجراء حسّاس بانتظار موافقة المالك قبل التنفيذ.")
+            parts.append("ما زال هناك إجراء بانتظار الموافقة (وضع الأقفال).")
         if failed:
-            parts.append("بعض الأدوات فشلت — راجع التفاصيل في المخطط الزمني.")
-        if memory_context and "no durable" not in memory_context:
-            parts.append("تم أخذ الذاكرة ذات الصلة بالاعتبار.")
+            parts.append("بعض الأدوات فشلت — راجع المخطط الزمني.")
+        if memory_context and "no durable" not in memory_context.lower():
+            parts.append("تم أخذ الذاكرة الدائمة بالاعتبار.")
+        parts.append(
+            "التعليم والتدريب: أدوات الأكاديمية تعلّم؛ الأهلية للقراءة فقط؛ "
+            "ترقية أوزان النموذج لا تبدأ تلقائيًا من الشات."
+        )
         return "\n".join(parts)

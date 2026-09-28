@@ -377,6 +377,7 @@ from pfai.longevity.autonomous_training.experience_bridge import set_global_expe
 
 # Continuous experience bridge — real operational events only
 set_global_experience_bridge(AUTONOMOUS_TRAINING.experience)
+COMMAND_AGENT.experience_bridge = AUTONOMOUS_TRAINING.experience
 
 # Migration runner: backup longevity learning DB before apply
 _LONGEVITY_BACKUP_SRC = Path('data/longevity/learning.sqlite3')
@@ -3241,7 +3242,14 @@ class ChatMemoryCorrect(BaseModel):
 
 @app.get('/chat/tools')
 def chat_tools(owner: str = Depends(access_public)):
-    return {'provider': COMMAND_AGENT.provider_name(), 'tools': TOOL_ROUTER.catalog()}
+    from .open_execution import open_chat_tools, open_execution_status
+    return {
+        'provider': COMMAND_AGENT.provider_name(),
+        'tools': TOOL_ROUTER.catalog(),
+        'open_chat_tools': open_chat_tools(),
+        'open_execution': open_execution_status(),
+        'locked_count': sum(1 for t in TOOL_ROUTER.catalog() if t.get('requires_approval')),
+    }
 
 @app.get('/chat/conversations')
 def chat_conversations(owner: str = Depends(access_public), limit: int = 30):

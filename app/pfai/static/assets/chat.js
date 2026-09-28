@@ -462,14 +462,16 @@
     const box = $('chatLog');
     if (box) box.innerHTML = '';
     appendBubble('assistant',
-      'مرحباً — أنا عقل PFAI المتقدم.\n'
-      + '• أوامر تشغيلية · أدوات · ذاكرة · موافقة المالك\n'
-      + '• مرتبط بأكاديمية البرمجة: علمني / تمرين / اختبر مستواي\n'
-      + '• مرتبط بالتدريب: اسأل عن أهلية التدريب (قراءة فقط — لا يبدأ التدريب من الشات)\n\n'
-      + 'Hello — Advanced PFAI brain.\n'
-      + '• Ops commands · tools · memory · owner approval\n'
-      + '• Linked to Coding Academy: teach / exercise / assess\n'
-      + '• Linked to training eligibility (read-only — never auto-trains from chat)',
+      'مرحباً — أنا عقل PFAI المتقدم المفتوح.\n'
+      + '• تنفيذ مباشر للأدوات (بدون أقفال في وضع الوصول العام)\n'
+      + '• تعليم مستمر عبر الأكاديمية + جسر خبرة حقيقي من نجاح الأدوات\n'
+      + '• أهلية التدريب للقراءة فقط — ترقية الأوزان لا تبدأ من الشات\n'
+      + '• ردود تحليلية من نتائج حية (صحة · مقاييس · معرفة · تعلّم)\n\n'
+      + 'Hello — Open Advanced PFAI brain.\n'
+      + '• Direct tool execution (unlocked in public access)\n'
+      + '• Continuous learning via academy + real tool-success experience bridge\n'
+      + '• Training eligibility is read-only — weight promotion never starts from chat\n'
+      + '• Analytical replies grounded in live tool results',
       { status: 'completed', provider: 'ready' }
     );
     refreshLearningRail();
@@ -493,12 +495,23 @@
       const el = $('chatTools');
       if (!el) return;
       const tools = r.tools || [];
-      const edu = tools.filter(t => /coding_|training_|learner_|run_sandbox/.test(t.name || ''));
-      el.innerHTML = `<div class="muted">provider: ${esc(r.provider)} · ${tools.length} tools</div>`
+      const open = !!r.open_chat_tools;
+      const locked = Number(r.locked_count || 0);
+      const edu = tools.filter(t => /coding_|training_|learner_|run_sandbox|continuous_/.test(t.name || ''));
+      const banner = open
+        ? `<div class="chat-chip ok">النظام مفتوح · Open execution · ${tools.length} tools · 0 locks</div>`
+        : `<div class="chat-chip warn">أقفال نشطة · ${locked} locked</div>`;
+      el.innerHTML = `<div class="muted">provider: ${esc(r.provider)}</div>`
+        + `<div class="chat-learn-strip" style="margin:8px 0">${banner}</div>`
         + `<div class="chat-learn-strip" style="margin:8px 0">${edu.map(t =>
-          `<span class="chat-chip">${esc(t.name)}${t.requires_approval ? ' 🔒' : ''}</span>`
+          `<span class="chat-chip">${esc(t.name)}${(!open && t.requires_approval) ? ' 🔒' : ''}</span>`
         ).join('')}</div>`
-        + tools.map(t => `<span class="tag">${esc(t.name)}${t.requires_approval ? ' 🔒' : ''}</span>`).join('');
+        + tools.map(t => `<span class="tag">${esc(t.name)}${(!open && t.requires_approval) ? ' 🔒' : ''}</span>`).join('');
+      const lockEl = $('chatOpenStatus');
+      if (lockEl) {
+        lockEl.textContent = open ? 'مفتوح بالكامل / Fully open' : `مقفل جزئيًا (${locked})`;
+        lockEl.className = 'chat-chip ' + (open ? 'ok' : 'warn');
+      }
     } catch (e) {
       const el = $('chatTools');
       if (el) el.textContent = e.message;

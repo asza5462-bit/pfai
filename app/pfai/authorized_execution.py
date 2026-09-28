@@ -41,7 +41,11 @@ def risk_to_permission(risk: str, *, name: str = "", requires_approval: bool = F
         return ToolPermission.SECRETS
     if any(x in n for x in ("forget", "delete", "purge")):
         return ToolPermission.DATA_DELETE
-    if any(x in n for x in ("deploy", "promote", "rollback_prod", "production")):
+    # Production *mutations* only — read-only deploy lists/history/status stay READ.
+    prod_read = any(x in n for x in ("list", "history", "status", "snapshot", "catalog"))
+    if any(x in n for x in ("promote", "rollback_prod")) or (
+        "deploy" in n and not prod_read
+    ) or (n == "production" or n.endswith("_production")):
         return ToolPermission.PRODUCTION
     if r in ("sensitive", "high", "production"):
         return ToolPermission.HIGH_RISK_WRITE

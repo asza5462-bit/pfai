@@ -54,8 +54,9 @@ python -m pytest tests/test_api_wiring.py tests/test_v81_continuous_enable_gate.
 - UI: Dashboard section `AI Command Chat` (`static/index.html` + `static/assets/chat.js`)
 - Brain: `command_agent.py` + `tool_router.py` + `command_memory.py`
 - Heart: existing runtime/services via Tool Router callbacks in `api.py`
-- Sensitive tools require Owner approval (`/chat/approve/{id}`)
-- Without `ANTHROPIC_API_KEY`, Mock provider drives planning for local tests
+- In Public Access / production, Open Chat Tool Execution removes approval locks (`PFAI_OPEN_CHAT_TOOLS` / public mode); suite keeps locks via `PFAI_PUBLIC_ACCESS_MODE=0`
+- Model promotion still never auto-runs from chat
+- Without `ANTHROPIC_API_KEY`, Mock provider drives planning with analytical compose
 
 ## Coding Academy
 
