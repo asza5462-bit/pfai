@@ -61,7 +61,7 @@ class LoginBody(BaseModel):
 class Mt5LoginBody(BaseModel):
     mt5_login: str
     mt5_password: str
-    mt5_server: str = "Exness-MT5Trial"
+    mt5_server: str = "Exness-MT5Trial15"
     symbol: str = "XAUUSD"
     auto_start: bool = True
     metaapi_token: str | None = None  # optional — paste once to unlock cloud trading
@@ -205,7 +205,9 @@ async def exness_servers():
 
     return {
         "servers": EXNESS_SERVERS,
-        "default": "Exness-MT5Trial",
+        "default": "Exness-MT5Trial15",
+        "allow_custom": True,
+        "hint_ar": "انسخ اسم السيرفر حرفياً من منطقة العميل في Exness (مثل Exness-MT5Trial15).",
         "symbols": list(EXNESS_GOLD_SYMBOLS),
         "default_symbol": "XAUUSDm",
     }

@@ -86,18 +86,30 @@
   }
 
   async function loadServers() {
+    const input = $("mt5Server");
+    const list = $("mt5ServerList");
     try {
       const j = await api("/api/exness/servers");
-      const sel = $("mt5Server");
-      sel.innerHTML = "";
-      (j.servers || []).forEach((s) => {
-        const o = document.createElement("option");
-        o.value = s; o.textContent = s;
-        if (s === (j.default || "Exness-MT5Trial")) o.selected = true;
-        sel.appendChild(o);
-      });
+      if (list) {
+        list.innerHTML = "";
+        (j.servers || []).forEach((s) => {
+          const o = document.createElement("option");
+          o.value = s;
+          list.appendChild(o);
+        });
+      }
+      // Keep whatever the user typed; only set default if empty
+      if (input && !input.value.trim()) {
+        input.value = j.default || "Exness-MT5Trial15";
+      }
     } catch (_) {
-      $("mt5Server").innerHTML = "<option>Exness-MT5Trial</option><option>Exness-MT5Real</option>";
+      if (list) {
+        ["Exness-MT5Trial15", "Exness-MT5Trial", "Exness-MT5Real"].forEach((s) => {
+          const o = document.createElement("option");
+          o.value = s;
+          list.appendChild(o);
+        });
+      }
     }
   }
 
@@ -258,8 +270,13 @@
         $("connectMsg").textContent = j.message || "تم الحفظ";
         $("connectMsg").classList.add("ok");
         $("cloudMetaToken").value = "";
-        await refreshCloudStatusOnly();
-        try { await refreshBridge(); } catch (_) {}
+        setBridgeUI(j.bridge || j.cloud, null, null, true, null);
+        if (j.account) {
+          $("equity").textContent = Number(j.account.equity || 0).toFixed(2);
+          $("modePill").textContent = j.account.mode || "mt5";
+        }
+        if (j.started && j.started.scan) render(j.started.scan);
+        await loadWays();
       } catch (e) {
         $("connectMsg").textContent = e.message || "فشل حفظ التوكن";
         $("connectMsg").classList.remove("ok");

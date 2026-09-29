@@ -10,30 +10,16 @@ from pathlib import Path
 
 from goldbot.config import settings
 
-EXNESS_SERVERS = [
-    "Exness-MT5Trial",
-    "Exness-MT5Trial2",
-    "Exness-MT5Trial3",
-    "Exness-MT5Trial4",
-    "Exness-MT5Trial5",
-    "Exness-MT5Trial6",
-    "Exness-MT5Trial7",
-    "Exness-MT5Trial8",
-    "Exness-MT5Trial9",
-    "Exness-MT5Trial10",
-    "Exness-MT5Real",
-    "Exness-MT5Real2",
-    "Exness-MT5Real3",
-    "Exness-MT5Real4",
-    "Exness-MT5Real5",
-    "Exness-MT5Real6",
-    "Exness-MT5Real7",
-    "Exness-MT5Real8",
-    "Exness-MT5Real9",
-    "Exness-MT5Real10",
-    "Exness-MT5Real11",
-    "Exness-MT5Real12",
-]
+def _exness_servers() -> list[str]:
+    """Generate common Exness MT5 trial/real server names (incl. Trial15+)."""
+    out: list[str] = ["Exness-MT5Trial"]
+    out.extend(f"Exness-MT5Trial{i}" for i in range(2, 31))
+    out.append("Exness-MT5Real")
+    out.extend(f"Exness-MT5Real{i}" for i in range(2, 61))
+    return out
+
+
+EXNESS_SERVERS = _exness_servers()
 
 
 class RemoteHub:

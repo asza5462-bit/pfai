@@ -31,8 +31,9 @@
         <label>كلمة مرور MT5 (تداول)
           <input id="mt5Pass" type="password" required minlength="4" placeholder="كلمة مرور الحساب" />
         </label>
-        <label>سيرفر Exness
-          <select id="mt5Server"></select>
+        <label>سيرفر Exness (كما يظهر في حسابك)
+          <input id="mt5Server" list="mt5ServerList" required placeholder="مثال: Exness-MT5Trial15" value="Exness-MT5Trial15" autocomplete="off" />
+          <datalist id="mt5ServerList"></datalist>
         </label>
         <label>رمز الذهب على Exness
           <select id="mt5Symbol">
