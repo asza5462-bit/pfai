@@ -37,10 +37,11 @@ class UnifiedTrainLearnLoop:
         training_diagnose_fn: Optional[Callable[[], dict]] = None,
         training_start_fn: Optional[Callable[[], dict]] = None,
         training_status_fn: Optional[Callable[[], dict]] = None,
-        train_cooldown_seconds: int = 600,
-        tick_timeout_seconds: float = 45.0,
-        min_tick_interval_seconds: float = 25.0,
-        heartbeat_seconds: float = 45.0,
+        train_cooldown_seconds: int = 900,
+        tick_timeout_seconds: float = 30.0,
+        min_tick_interval_seconds: float = 40.0,
+        heartbeat_seconds: float = 90.0,
+        heartbeat_train_every: int = 8,
     ) -> None:
         self.continuous_ensure_fn = continuous_ensure_fn
         self.continuous_tick_fn = continuous_tick_fn
@@ -52,12 +53,14 @@ class UnifiedTrainLearnLoop:
         self.train_cooldown_seconds = max(120, int(train_cooldown_seconds))
         self.tick_timeout_seconds = max(10.0, float(tick_timeout_seconds))
         self.min_tick_interval_seconds = max(5.0, float(min_tick_interval_seconds))
-        self.heartbeat_seconds = max(15.0, float(heartbeat_seconds))
+        self.heartbeat_seconds = max(20.0, float(heartbeat_seconds))
+        self.heartbeat_train_every = max(0, int(heartbeat_train_every))
         self._lock = threading.RLock()
         self._cycle_lock = threading.Lock()
         self._last_train_ts = 0.0
         self._last_tick_ts = 0.0
         self._cycles = 0
+        self._hb_beats = 0
         self._last: dict[str, Any] = {}
         self._errors: list[str] = []
         self._hb_thread: threading.Thread | None = None
@@ -138,7 +141,50 @@ class UnifiedTrainLearnLoop:
         t0 = time.time()
         steps: list[dict[str, Any]] = []
 
-        ensure = self._safe("continuous_ensure", self.continuous_ensure_fn, timeout=20)
+        # If LoRA already holds the CPU, return a light snapshot (keeps chat snappy)
+        busy_early = self._training_busy()
+        if busy_early and not force_train:
+            ensure = self._safe("continuous_ensure", self.continuous_ensure_fn, timeout=8)
+            cont_st = self._safe("continuous_status", self.continuous_status_fn, timeout=4)
+            train_st = self._safe("training_status", self.training_status_fn, timeout=4)
+            summary = {
+                "ok": True,
+                "version": self.VERSION,
+                "elapsed_ms": int((time.time() - t0) * 1000),
+                "learn": {
+                    "worker_alive": bool(cont_st.get("worker_alive") or ensure.get("worker_alive")),
+                    "tick_ok": True,
+                    "tick_debounced": True,
+                    "pending_examples": cont_st.get("pending_examples"),
+                    "real_loop": cont_st.get("real_loop"),
+                },
+                "experience": {"pushed": 0, "accepted": 0, "skipped": True},
+                "train": {
+                    "eligible": True,
+                    "triggered": False,
+                    "skipped": True,
+                    "reason": "already_running",
+                    "async_accepted": False,
+                    "async_running": True,
+                    "actual_training_executed": bool(
+                        ((train_st.get("last") or {}).get("cycle") or {}).get("actual_training_executed")
+                    ),
+                    "status": train_st.get("status") or "RUNNING",
+                },
+                "steps_ok": 1,
+                "steps_total": 1,
+                "heartbeat_alive": self._hb_alive,
+                "weight_promotion": "never_auto",
+                "unified": True,
+                "light": True,
+                "note": "LoRA already running — light status only (no pile-up).",
+            }
+            with self._lock:
+                self._cycles += 1
+                self._last = summary
+            return summary
+
+        ensure = self._safe("continuous_ensure", self.continuous_ensure_fn, timeout=12)
         steps.append(ensure)
 
         # Debounce continuous tick — worker already loops; avoid double work / delay
@@ -162,22 +208,22 @@ class UnifiedTrainLearnLoop:
             }
         steps.append(tick)
 
-        push = self._safe("experience_push", self.experience_push_fn, timeout=20)
+        push = self._safe("experience_push", self.experience_push_fn, timeout=12)
         steps.append(push)
 
-        diag = self._safe("training_diagnose", self.training_diagnose_fn, timeout=15)
+        diag = self._safe("training_diagnose", self.training_diagnose_fn, timeout=10)
         steps.append(diag)
         eligible = bool(diag.get("eligible"))
 
         train_out: dict[str, Any] = {"ok": True, "skipped": True, "reason": "not_requested"}
-        busy = self._training_busy()
+        busy = busy_early or self._training_busy()
         cooldown_ok = (time.time() - self._last_train_ts) >= self.train_cooldown_seconds
 
         if train_if_eligible or force_train:
             if busy:
                 train_out = {"ok": True, "skipped": True, "reason": "already_running", "busy": True}
             elif (eligible or force_train) and (cooldown_ok or force_train):
-                train_out = self._safe("training_start", self.training_start_fn, timeout=25)
+                train_out = self._safe("training_start", self.training_start_fn, timeout=20)
                 status = str(train_out.get("status") or "").upper()
                 accepted = bool(
                     train_out.get("ok")
@@ -204,8 +250,8 @@ class UnifiedTrainLearnLoop:
                 }
         steps.append({**train_out, "_label": "training_decision"})
 
-        cont_st = self._safe("continuous_status", self.continuous_status_fn, timeout=10)
-        train_st = self._safe("training_status", self.training_status_fn, timeout=10)
+        cont_st = self._safe("continuous_status", self.continuous_status_fn, timeout=6)
+        train_st = self._safe("training_status", self.training_status_fn, timeout=6)
 
         summary = {
             "ok": True,
@@ -269,17 +315,27 @@ class UnifiedTrainLearnLoop:
             def _loop() -> None:
                 self._hb_alive = True
                 log.info(
-                    "unified_train_learn heartbeat started every %ss",
+                    "unified_train_learn heartbeat started every %ss train_every=%s",
                     self.heartbeat_seconds,
+                    self.heartbeat_train_every,
                 )
-                # Soft first cycle: learn only — avoid LoRA stampede on boot
+                # Let boot settle before first soft cycle (free-tier CPU)
+                if self._hb_stop.wait(12.0):
+                    self._hb_alive = False
+                    return
                 try:
                     self.cycle(force_train=False, train_if_eligible=False)
                 except Exception as exc:
                     log.warning("unified first soft cycle failed: %s", exc)
                 while not self._hb_stop.wait(self.heartbeat_seconds):
                     try:
-                        self.cycle(force_train=False, train_if_eligible=True)
+                        self._hb_beats += 1
+                        # Learn every beat; LoRA only every N beats (0 = never from heartbeat)
+                        train_now = (
+                            self.heartbeat_train_every > 0
+                            and (self._hb_beats % self.heartbeat_train_every) == 0
+                        )
+                        self.cycle(force_train=False, train_if_eligible=train_now)
                     except Exception as exc:
                         log.warning("unified heartbeat cycle failed: %s", exc)
                         with self._lock:
@@ -293,6 +349,7 @@ class UnifiedTrainLearnLoop:
                 "ok": True,
                 "alive": True,
                 "heartbeat_seconds": self.heartbeat_seconds,
+                "heartbeat_train_every": self.heartbeat_train_every,
                 "version": self.VERSION,
                 "weight_promotion": "never_auto",
             }
@@ -311,9 +368,18 @@ class UnifiedTrainLearnLoop:
             cycles = self._cycles
             errors = list(self._errors)
             hb = self._hb_alive and bool(self._hb_thread and self._hb_thread.is_alive())
-        cont = self._safe("continuous_status", self.continuous_status_fn, timeout=8)
-        train = self._safe("training_status", self.training_status_fn, timeout=8)
-        diag = self._safe("training_diagnose", self.training_diagnose_fn, timeout=8)
+        # Short timeouts — never stall chat while LoRA holds the CPU
+        cont = self._safe("continuous_status", self.continuous_status_fn, timeout=4)
+        train = self._safe("training_status", self.training_status_fn, timeout=4)
+        # Skip heavy diagnose while async LoRA is running (use last snapshot)
+        if train.get("async_running"):
+            diag = {
+                "eligible": ((last.get("train") or {}).get("eligible")),
+                "reason": "async_training_running",
+                "skipped": True,
+            }
+        else:
+            diag = self._safe("training_diagnose", self.training_diagnose_fn, timeout=6)
         return {
             "ok": True,
             "version": self.VERSION,
@@ -322,6 +388,8 @@ class UnifiedTrainLearnLoop:
             "recent_errors": errors,
             "heartbeat_alive": hb,
             "heartbeat_seconds": self.heartbeat_seconds,
+            "heartbeat_train_every": self.heartbeat_train_every,
+            "heartbeat_beats": self._hb_beats,
             "continuous": {
                 "worker_alive": cont.get("worker_alive"),
                 "real_loop": cont.get("real_loop"),

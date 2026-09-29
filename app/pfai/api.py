@@ -891,14 +891,17 @@ UNIFIED_TRAIN_LEARN = UnifiedTrainLearnLoop(
     continuous_status_fn=lambda: CONTINUOUS.status(),
     experience_push_fn=lambda: _push_curated_to_experience(CONTINUOUS.pending_examples(limit=32)),
     training_diagnose_fn=lambda: SMART_TRAINING.diagnose(),
+    # force_prepare=False — cycle already did tick+push; avoid double work under LoRA
     training_start_fn=lambda: SMART_TRAINING.start(
-        owner_requested=True, activate_if_pass=False, force_prepare=True, async_mode=True,
+        owner_requested=True, activate_if_pass=False, force_prepare=False, async_mode=True,
     ),
     training_status_fn=lambda: SMART_TRAINING.status(),
-    train_cooldown_seconds=int(os.environ.get('PFAI_UNIFIED_TRAIN_COOLDOWN') or 600),
-    tick_timeout_seconds=float(os.environ.get('PFAI_UNIFIED_TICK_TIMEOUT') or 45),
-    min_tick_interval_seconds=float(os.environ.get('PFAI_UNIFIED_MIN_TICK') or 25),
-    heartbeat_seconds=float(os.environ.get('PFAI_UNIFIED_HEARTBEAT') or 45),
+    train_cooldown_seconds=int(os.environ.get('PFAI_UNIFIED_TRAIN_COOLDOWN') or 900),
+    tick_timeout_seconds=float(os.environ.get('PFAI_UNIFIED_TICK_TIMEOUT') or 30),
+    min_tick_interval_seconds=float(os.environ.get('PFAI_UNIFIED_MIN_TICK') or 40),
+    heartbeat_seconds=float(os.environ.get('PFAI_UNIFIED_HEARTBEAT') or 90),
+    # Heartbeat learns continuously; LoRA only every N beats (chat/hour can still force)
+    heartbeat_train_every=int(os.environ.get('PFAI_UNIFIED_HEARTBEAT_TRAIN_EVERY') or 8),
 )
 
 def _tool_unified_train_learn_status():
@@ -968,8 +971,8 @@ def _evolve_minute_tick() -> dict:
     try:
         utl = globals().get('UNIFIED_TRAIN_LEARN')
         if utl is not None:
-            # One smooth learn→grow→train heartbeat every minute (async LoRA, cooldown)
-            unified = utl.cycle(force_train=False, train_if_eligible=True)
+            # Minute: learn→grow only (no LoRA stampede). Train via heartbeat cadence / hour / chat.
+            unified = utl.cycle(force_train=False, train_if_eligible=False)
         elif is_continuous_enabled():
             CONTINUOUS.start()
             unified = CONTINUOUS.tick_once()
@@ -979,7 +982,7 @@ def _evolve_minute_tick() -> dict:
     try:
         mon = globals().get('LIVE_MONITOR')
         if mon is not None:
-            # Heal/ensure only — training handled by unified loop above
+            # Heal/ensure only — training handled by unified heartbeat / hour / chat
             monitor = mon.pulse(deep=False, train_if_eligible=False)
     except Exception as exc:
         monitor = {'ok': False, 'error': str(exc)[:160]}

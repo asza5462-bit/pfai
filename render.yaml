@@ -52,11 +52,15 @@ services:
       - key: PFAI_AUTO_TRAIN_WHEN_ELIGIBLE
         value: "1"
       - key: PFAI_UNIFIED_HEARTBEAT
-        value: "45"
+        value: "90"
       - key: PFAI_UNIFIED_TRAIN_COOLDOWN
-        value: "600"
+        value: "900"
       - key: PFAI_UNIFIED_MIN_TICK
-        value: "25"
+        value: "40"
+      - key: PFAI_UNIFIED_HEARTBEAT_TRAIN_EVERY
+        value: "8"
+      - key: PFAI_UNIFIED_TICK_TIMEOUT
+        value: "30"
       - key: MODEL_PATH
         value: "data/models/distilgpt2"
       - key: TRAINING_METHOD

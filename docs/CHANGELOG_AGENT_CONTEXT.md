@@ -11,6 +11,12 @@
 - Chat tools `unified_train_learn_*`; planner routes continuous/training/دورة/أكمل → unified
 - Tests: `test_v148_unified_train_learn.py`
 
+### Stability (free tier)
+- Heartbeat learn every beat; LoRA only every N beats (default 8) + cooldown
+- Minute evolution = learn only; hour/chat still train when eligible
+- `force_prepare=False` in unified start (cycle already grew data)
+- Status skips heavy diagnose while async LoRA runs
+
 ### Honesty
 - Still never silent-promotes weights; LoRA starts async when eligible only
 

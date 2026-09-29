@@ -119,21 +119,32 @@ class TestUnifiedLoopUnit(unittest.TestCase):
         self.assertTrue(out2["learn"].get("tick_debounced") or ticks["n"] == 1)
 
     def test_heartbeat_start_stop(self):
+        trains = {"n": 0}
+
+        def train():
+            trains["n"] += 1
+            return {"ok": True, "async_accepted": True, "status": "STARTED_ASYNC"}
+
         loop = UnifiedTrainLearnLoop(
             continuous_ensure_fn=lambda: {"ok": True, "worker_alive": True},
             continuous_tick_fn=lambda: {"ok": True},
             continuous_status_fn=lambda: {"worker_alive": True, "real_loop": True},
             experience_push_fn=lambda: {"pushed": 0},
-            training_diagnose_fn=lambda: {"eligible": False},
-            training_start_fn=lambda: {"ok": True},
-            training_status_fn=lambda: {},
-            heartbeat_seconds=15,
+            training_diagnose_fn=lambda: {"eligible": True},
+            training_start_fn=train,
+            training_status_fn=lambda: {"async_running": False},
+            heartbeat_seconds=20,
             min_tick_interval_seconds=5,
+            heartbeat_train_every=8,
+            train_cooldown_seconds=120,
         )
         st = loop.start()
         self.assertTrue(st.get("alive"))
-        time.sleep(0.15)
+        self.assertEqual(st.get("heartbeat_train_every"), 8)
+        time.sleep(0.2)
         self.assertTrue(loop.status().get("heartbeat_alive"))
+        # Soft first beat must not train
+        self.assertEqual(trains["n"], 0)
         loop.stop("test")
         self.assertFalse(loop.status().get("heartbeat_alive"))
 
