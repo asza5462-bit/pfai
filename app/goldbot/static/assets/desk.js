@@ -193,10 +193,12 @@
     const pulse = data.pulse || {};
     const ready = data.readiness || {};
     $("readyPill").textContent = ready.summary_ar || ready.grade || "—";
-    $("readyPill").classList.toggle("on", !!ready.paper_ready || !!ready.exness_mt5_ready);
+    $("readyPill").classList.toggle("on", !!ready.exness_mt5_ready);
     $("statePill").textContent = data.state || "—";
-    $("modePill").textContent = acc.mode || "—";
-    $("symbolPill").textContent = data.symbol || "XAUUSD";
+    const live = !!(ready.live_execution || ready.exness_mt5_ready || (acc.mode === "mt5" && acc.connected && acc.server && acc.server !== "AURUM-PAPER"));
+    $("modePill").textContent = live ? `Exness حي · ${acc.server || "MT5"}` : (acc.mode === "paper" ? "ورقي (تجربة)" : (acc.mode || "—"));
+    $("modePill").classList.toggle("on", live);
+    $("symbolPill").textContent = data.symbol || "XAUUSDm";
     $("latencyPill").textContent = data.latency_ms != null ? `${data.latency_ms}ms` : "—";
     $("price").textContent = tick.bid || "—";
     $("conf").textContent = sig.confluence != null ? `${Math.round(sig.confluence * 100)}%` : "—";

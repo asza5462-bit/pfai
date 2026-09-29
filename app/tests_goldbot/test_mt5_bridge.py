@@ -90,3 +90,25 @@ def test_windows_bridge_agent_protocol(tmp_path, monkeypatch):
         json={"command_id": cmds[0]["id"], "result": {"ok": True, "ticket": 99, "price": 4100, "mode": "mt5"}},
     )
     assert done.status_code == 200
+
+
+def test_mt5_mode_never_paper_fills_without_executor(monkeypatch):
+    """Live MT5 mode must refuse orders instead of faking paper fills."""
+    from goldbot.mt5.bridge import bridge
+    from goldbot.config import settings
+
+    monkeypatch.setenv("METAAPI_TOKEN", "")
+    settings.metaapi_token = ""
+    settings.prefer_metaapi = True
+    settings.prefer_mt5_linux = False
+    bridge.mode = "mt5"
+    bridge.execution = ""
+    bridge.metaapi_account_id = ""
+    bridge.remote_user_id = None
+    bridge._mt5 = None
+
+    result = bridge.order_market("buy", 0.01, 2600, 2700, comment="NO-FAKE")
+    assert result["ok"] is False
+    assert result.get("error") == "no_live_executor"
+    assert result.get("mode") == "mt5"
+    assert "وهمي" in (result.get("detail") or "") or "حقيقي" in (result.get("detail") or "")

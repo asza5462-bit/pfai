@@ -25,7 +25,7 @@ services:
       - key: METAAPI_REGION
         value: "new-york"
       - key: AURUM_SYMBOL
-        value: "XAUUSD"
+        value: "XAUUSDm"
       - key: AURUM_TIMEFRAME
         value: "M15"
       - key: AURUM_AUTO_TRADE

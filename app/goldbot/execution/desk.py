@@ -64,13 +64,37 @@ class TradingDesk:
         store.log_event("auto_trade", {"enabled": bool(enabled)})
 
     def start_desk(self) -> dict:
+        self._refresh_account()
+        live = bridge.is_live_execution() and self.account.connected and self.account.mode == "mt5"
+        # If MT5 credentials/mode are active, refuse to arm on paper/fake fills
+        if settings.mode == "mt5" and not live:
+            self.set_auto_trade(False)
+            self.armed = False
+            self.state = "IDLE"
+            snap = self.scan(full=True)
+            return {
+                "ok": False,
+                "armed": False,
+                "auto_trade": False,
+                "mode": self.account.mode,
+                "execution": bridge.execution or "none",
+                "live": False,
+                "state": self.state,
+                "scan": snap,
+                "executed": None,
+                "error": "not_live",
+                "message": (
+                    "التداول الحقيقي غير متصل بعد — لن نفتح صفقات وهمية. "
+                    "أكمل ربط MetaApi/Exness حتى يظهر «متصل Exness» ثم اضغط ابدأ."
+                ),
+            }
         self.armed = True
         self.set_auto_trade(True)
         self.state = "ARMED"
         self.start_background()
         snap = self.scan(full=True)
         executed = None
-        if snap["execution_gate"]["allowed"] and snap["signal"]["action"] != "flat":
+        if live and snap["execution_gate"]["allowed"] and snap["signal"]["action"] != "flat":
             if snap.get("pulse_confirm", True):
                 executed = self.execute_signal(force=False)
         return {
@@ -78,10 +102,16 @@ class TradingDesk:
             "armed": True,
             "auto_trade": True,
             "mode": self.account.mode,
+            "execution": bridge.execution or ("paper" if self.account.mode == "paper" else "pending"),
+            "live": live,
             "state": self.state,
             "scan": snap,
             "executed": executed,
-            "message": "المكتب السريع يعمل — تحليل بأجزاء الثانية + إدارة ذكية للفتح والإغلاق.",
+            "message": (
+                "التنفيذ الحقيقي على Exness يعمل — تحليل بأجزاء الثانية + إدارة ذكية."
+                if live
+                else "المكتب الورقي يعمل للتجربة فقط — ليس تنفيذاً على Exness."
+            ),
         }
 
     def _refresh_account(self) -> None:

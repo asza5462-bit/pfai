@@ -596,12 +596,29 @@ class Bridge:
             return result
         if self.mode == "mt5" and self._mt5 is not None:
             return self._order_mt5(side, lot, sl, tp, comment)
-        # paper fill at bid/ask
+        # CRITICAL: never silently paper-fill when user asked for live Exness/MT5
+        if self.mode == "mt5":
+            return {
+                "ok": False,
+                "mode": "mt5",
+                "execution": self.execution or "none",
+                "side": side,
+                "lot": lot,
+                "sl": sl,
+                "tp": tp,
+                "error": "no_live_executor",
+                "detail": (
+                    "لا يوجد منفّذ حقيقي متصل (MetaApi/Linux). "
+                    "لن يُنفَّذ أمر ورقي وهمي. أعد الربط السحابي أولاً."
+                ),
+            }
+        # Explicit paper mode only
         tick = self.tick()
         price = tick["ask"] if side == "buy" else tick["bid"]
         return {
             "ok": True,
             "mode": "paper",
+            "execution": "paper",
             "side": side,
             "lot": lot,
             "price": price,
@@ -610,6 +627,25 @@ class Bridge:
             "ticket": int(time.time()),
             "comment": comment,
         }
+
+    def is_live_execution(self) -> bool:
+        """True only when orders would hit a real broker path (not paper)."""
+        if self.mode != "mt5":
+            return False
+        if self.execution == "metaapi" and self.metaapi_account_id:
+            from goldbot.mt5.metaapi_cloud import metaapi
+
+            return bool(metaapi.configured)
+        if self.execution == "mt5_linux":
+            from goldbot.mt5.mt5_linux import mt5_linux
+
+            mt5_linux.refresh()
+            return bool(mt5_linux.configured)
+        if self.execution == "windows_bridge" and self.remote_user_id:
+            return True
+        if self._mt5 is not None:
+            return True
+        return False
 
     def _order_mt5(self, side: str, lot: float, sl: float, tp: float, comment: str) -> dict:
         mt5 = self._mt5

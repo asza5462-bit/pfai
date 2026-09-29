@@ -300,6 +300,7 @@ async def download_agent():
 async def health():
     metaapi.refresh_token()
     mt5_linux.refresh()
+    live = bridge.is_live_execution() and desk.account.connected and desk.account.mode == "mt5"
     return {
         "ok": True,
         "product": PRODUCT_NAME,
@@ -312,6 +313,8 @@ async def health():
         "metaapi_configured": metaapi.configured,
         "mt5_linux_configured": mt5_linux.configured,
         "execution": bridge.execution or desk.account.mode,
+        "live_execution": live,
+        "real_orders_only": True,
         "auth": {"needs_setup": auth.needs_setup(), "users": auth.user_count()},
     }
 
@@ -621,6 +624,8 @@ def _readiness(snap: dict) -> dict:
         or feed.endswith("_live")
         or feed.endswith("_synth")
     )
+    acc = snap.get("account") or {}
+    live_exec = bridge.is_live_execution() and acc.get("mode") == "mt5" and bool(acc.get("connected"))
     checks = {
         "service_up": True,
         "product_aurum": True,
@@ -629,32 +634,35 @@ def _readiness(snap: dict) -> dict:
         "candles_ok": int(snap.get("candle_count") or 0) >= 50,
         "auto_trade": bool(snap.get("auto_trade")),
         "risk_active": not bool((snap.get("risk") or {}).get("halted")),
-        "mt5_live": (snap.get("account") or {}).get("mode") == "mt5",
-        "mt5_connected": bool((snap.get("account") or {}).get("connected")),
+        "mt5_live": acc.get("mode") == "mt5",
+        # Paper "connected" must NOT count as live Exness
+        "mt5_connected": live_exec,
         "metaapi_configured": metaapi.configured,
-        "cloud_execution": bridge.execution == "metaapi",
+        "cloud_execution": bridge.execution == "metaapi" and live_exec,
         "auth_configured": auth.user_count() > 0,
+        "real_orders_only": True,
     }
     paper_ready = all(checks[k] for k in ("service_up", "price_live", "feed_ok", "candles_ok", "risk_active", "auth_configured"))
-    live_ready = paper_ready and checks["mt5_live"] and checks["mt5_connected"]
+    live_ready = paper_ready and live_exec and checks["metaapi_configured"]
     grade = "live_ready" if live_ready else "paper_ready" if paper_ready else "not_ready"
     return {
         "grade": grade,
         "paper_ready": paper_ready,
         "exness_mt5_ready": live_ready,
+        "live_execution": live_exec,
         "checks": checks,
         "summary_ar": (
-            "جاهز للتداول الورقي على الذهب"
-            if grade == "paper_ready"
-            else "جاهز للتنفيذ السحابي على Exness"
+            "متصل للتنفيذ الحقيقي على Exness (ليس ورقي)"
             if grade == "live_ready"
-            else "أكمل تسجيل Exness من التطبيق"
+            else "وضع ورقي للتجربة فقط — أكمل ربط Exness للتنفيذ الحقيقي"
+            if grade == "paper_ready"
+            else "أكمل توكن MetaApi + حساب Exness من شاشة الدخول"
         ),
         "next_for_exness": [
-            "أدخل رقم حساب Exness/MT5 + كلمة المرور + السيرفر من التطبيق",
-            "تأكد أن METAAPI_TOKEN مضبوط على Render",
-            "انتظر حالة «متصل سحابياً» ثم ابدأ التداول",
-            "ابدأ بـ Demo (Exness-MT5Trial) قبل Real",
+            "الصق توكن MetaApi (ويفضّل أيضاً METAAPI_TOKEN في Render حتى لا يُمسح بعد النشر)",
+            "أدخل رقم Exness + كلمة مرور التداول + السيرفر (مثل Exness-MT5Trial15)",
+            "انتظر «MetaApi: متصل Exness» والرصيد الحقيقي (ليس 10000 ورقي)",
+            "ثم اضغط ابدأ التداول — لن تُفتح صفقات وهمية",
         ],
     }
 
@@ -756,9 +764,24 @@ async def start_desk(authorization: str | None = Header(default=None), aurum_ses
             "message": "التداول متوقف لحد الخسارة اليومي. اضغط «إعادة تعيين المخاطر» للمتابعة.",
             "risk": desk.risk.state.to_dict(),
         }
+    # Hard gate: MT5 users cannot arm until MetaApi/Linux is truly connected
+    if settings.mode == "mt5" and not (bridge.is_live_execution() and desk.account.connected):
+        return {
+            "ok": False,
+            "error": "not_live",
+            "message": (
+                "الحساب غير متصل بسحابة Exness بعد — لن نبدأ تداولاً وهمياً. "
+                "من تبويب الربط اضغط «إعادة ربط كامل» وانتظر الرصيد الحقيقي."
+            ),
+            "bridge": _cloud_status_for_user(user["id"]),
+            "account": desk.account.to_dict(),
+            "execution": bridge.execution or "pending",
+            "live": False,
+        }
     out = desk.start_desk()
     out["bridge"] = _cloud_status_for_user(user["id"])
     out["execution"] = bridge.execution
+    out["live"] = bool(out.get("live"))
     return out
 
 
