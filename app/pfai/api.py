@@ -1596,7 +1596,8 @@ def _tool_live_monitor_status():
     return LIVE_MONITOR.status()
 
 def _tool_live_monitor_pulse(deep: bool = False):
-    return LIVE_MONITOR.pulse(deep=bool(deep), train_if_eligible=True)
+    # Train is owned by UNIFIED_TRAIN_LEARN — monitor ensures/ticks/heals only
+    return LIVE_MONITOR.pulse(deep=bool(deep), train_if_eligible=False)
 
 for _spec in (
     ToolSpec('live_monitor_status', '24/7 live supervisor status (learn/train/heal)', 'read', False, {}),
