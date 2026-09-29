@@ -18,7 +18,7 @@ log = logging.getLogger("pfai.smart_training")
 
 
 class SmartTrainingController:
-    VERSION = "8.10.0"
+    VERSION = "8.15.0"
 
     def __init__(
         self,

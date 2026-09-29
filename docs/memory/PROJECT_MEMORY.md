@@ -1,6 +1,6 @@
 # PFAI Project Memory
 
-Last updated: 2026-09-29 (PFAI 8.14.0 — cold-start wake/retry + Claude-grade ops)
+Last updated: 2026-09-29 (PFAI 8.15.0 — unified 24/7 learn→grow→train + dedicated heartbeat)
 
 ## Snapshot
 

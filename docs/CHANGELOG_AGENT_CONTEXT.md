@@ -1,5 +1,19 @@
 # Agent Context Changelog
 
+## 2026-09-29 — PFAI 8.15: unified 24/7 learn→grow→train loop
+
+### Implemented
+- `unified_train_learn.py`: one smooth cycle — ensure continuous → tick → push experience → async LoRA when eligible
+- Dedicated heartbeat thread (default 45s) independent of evolution — real 24/7 mind
+- Overlap guard (no pile-up from chat+minute+hour); tick debounce; step timeouts
+- Train cooldown; ALREADY_RUNNING treated as ok; honest executed flags
+- Boot starts unified heartbeat; evolution minute/hour also call unified cycle
+- Chat tools `unified_train_learn_*`; planner routes continuous/training/دورة/أكمل → unified
+- Tests: `test_v148_unified_train_learn.py`
+
+### Honesty
+- Still never silent-promotes weights; LoRA starts async when eligible only
+
 ## 2026-09-29 — PFAI 8.14: cold-start resilience + Claude-grade ops
 
 ### Implemented

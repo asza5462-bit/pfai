@@ -54,17 +54,18 @@ class MockCommandProvider(ModelProvider):
         # Continuous 24/7 first — must beat bare "هل التدريب" eligibility branch
         early_continuous = bool(re.search(
             r"ال?تدريب\s*ال?مستمر|ال?تعل[يّ]م\s*ال?مستمر|continuous\s*(training|learning)|"
-            r"على\s*مدار\s*ال?ساعة|24/?7|مراقب\s*حي|live\s*monitor",
+            r"على\s*مدار\s*ال?ساعة|24/?7|مراقب\s*حي|live\s*monitor|"
+            r"دورة\s*(?:ال)?تدريب|طور\s*(?:دورة|التدريب)|unified\s*train|"
+            r"تعل[يّ]م\s*.*تدريب|تدريب\s*.*تعل[يّ]م",
             text + ar,
             re.I,
         ))
         if early_continuous:
+            add("unified_train_learn_cycle")
+            add("unified_train_learn_status")
             add("live_monitor_pulse")
             add("continuous_start")
-            add("continuous_tick")
-            add("live_monitor_status")
             add("continuous_status")
-            add("smart_continuous_status")
             add("evolution_status")
         elif re.search(
             r"ابدأ\s*التدريب|شغ[ّل]\s*التدريب|درّب|درب\s*الان|run\s*training|"
@@ -177,45 +178,37 @@ class MockCommandProvider(ModelProvider):
             re.I,
         ))
         if continuous_ask:
-            add("live_monitor_pulse")
-            add("continuous_start")
-            add("continuous_tick")
+            add("unified_train_learn_cycle")
+            add("unified_train_learn_status")
             add("live_monitor_status")
             add("continuous_status")
-            add("smart_continuous_status")
-            add("evolution_status")
         if re.search(r"start continuous|شغ[لّ].*تعلم|تشغيل.*continuous|ابدأ\s*ال?تعلم\s*ال?مستمر", text + ar):
+            add("unified_train_learn_cycle")
             add("continuous_start")
-            add("live_monitor_pulse")
-            add("continuous_status")
-            add("continuous_tick")
-            add("smart_continuous_status")
-        if re.search(r"tick continuous|دورة\s*تعلم|continuous\s*tick|نفّذ\s*دورة", text + ar):
-            add("continuous_tick")
-            add("continuous_status")
-            add("smart_continuous_status")
+            add("unified_train_learn_status")
+        if re.search(r"tick continuous|دورة\s*تعلم|continuous\s*tick|نفّذ\s*دورة|دورة\s*ال?تدريب", text + ar):
+            add("unified_train_learn_cycle")
+            add("unified_train_learn_status")
         if re.search(r"smart\s*continuous|حالة\s*ال?تدريب\s*ال?ذكي|precision\s*train", text + ar, re.I):
+            add("unified_train_learn_status")
             add("smart_continuous_status")
             add("continuous_status")
-            add("live_monitor_status")
         if re.search(
             r"start\s*training\s*cycle|training_cycle|ابدأ\s*دورة\s*ال?تدريب|شغّل\s*ال?تدريب|"
             r"run\s*training|ابدأ\s*ال?تدريب|تدرب|درّب|درب\s*على|تدرب\s*على",
             text + ar,
             re.I,
         ):
+            add("unified_train_learn_cycle")
             add("smart_training_start")
-            add("continuous_start")
-            add("live_monitor_pulse")
-            add("training_cycle_start")
+            add("unified_train_learn_status")
             add("training_eligibility")
         # Continue / أكمل — match original message only (text+ar duplicates break \b)
         if re.search(r"^(?:اكمل|أكمل|استمر|continue|go\s*on|keep\s*going)\s*[.!?؟]*$", (message or "").strip(), re.I):
+            add("unified_train_learn_cycle")
             add("live_monitor_pulse")
-            add("continuous_tick")
-            add("smart_training_start")
             add("evolution_tick")
-            add("continuous_status")
+            add("unified_train_learn_status")
         if re.search(r"stop continuous|أوقف.*تعلم|ايقاف.*تعلم", text + ar):
             add("continuous_stop")
         if re.search(r"resume continuous|استأنف.*تعلم", text + ar):
@@ -348,6 +341,8 @@ class MockCommandProvider(ModelProvider):
                 args = {"kind": "minute"}
             if name == "live_monitor_pulse":
                 args = {"deep": bool(re.search(r"عميق|deep|أصلح|طور|sovereign", message or "", re.I))}
+            if name == "unified_train_learn_cycle":
+                args = {"force_train": bool(re.search(r"الآن|now|فوري|force|اجبر", message or "", re.I))}
             tools.append({"tool": name, "args": args})
         return tools
 

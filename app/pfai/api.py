@@ -30,6 +30,7 @@ from .evolution_cadence import EvolutionCadence, evolution_enabled
 from .free_sovereign import FreeSovereignIntegrity
 from .live_monitor import LiveSystemMonitor
 from .smart_training import SmartTrainingController
+from .unified_train_learn import UnifiedTrainLearnLoop
 from .logging_setup import setup_logging
 from .command_audit import CommandAuditLog
 from .command_memory import CommandMemoryService
@@ -880,6 +881,32 @@ SMART_TRAINING = SmartTrainingController(
     experience_push_fn=lambda: _push_curated_to_experience(CONTINUOUS.pending_examples(limit=24)),
 )
 
+UNIFIED_TRAIN_LEARN = UnifiedTrainLearnLoop(
+    continuous_ensure_fn=lambda: (
+        CONTINUOUS.start() if is_continuous_enabled() else {'ok': True, 'skipped': True, 'reason': 'gate_off'}
+    ),
+    continuous_tick_fn=lambda: (
+        CONTINUOUS.tick_once() if is_continuous_enabled() else {'ok': True, 'skipped': True, 'reason': 'gate_off'}
+    ),
+    continuous_status_fn=lambda: CONTINUOUS.status(),
+    experience_push_fn=lambda: _push_curated_to_experience(CONTINUOUS.pending_examples(limit=32)),
+    training_diagnose_fn=lambda: SMART_TRAINING.diagnose(),
+    training_start_fn=lambda: SMART_TRAINING.start(
+        owner_requested=True, activate_if_pass=False, force_prepare=True, async_mode=True,
+    ),
+    training_status_fn=lambda: SMART_TRAINING.status(),
+    train_cooldown_seconds=int(os.environ.get('PFAI_UNIFIED_TRAIN_COOLDOWN') or 600),
+    tick_timeout_seconds=float(os.environ.get('PFAI_UNIFIED_TICK_TIMEOUT') or 45),
+    min_tick_interval_seconds=float(os.environ.get('PFAI_UNIFIED_MIN_TICK') or 25),
+    heartbeat_seconds=float(os.environ.get('PFAI_UNIFIED_HEARTBEAT') or 45),
+)
+
+def _tool_unified_train_learn_status():
+    return UNIFIED_TRAIN_LEARN.status()
+
+def _tool_unified_train_learn_cycle(force_train: bool = False):
+    return UNIFIED_TRAIN_LEARN.cycle(force_train=bool(force_train), train_if_eligible=True)
+
 
 def _pfai_startup_continuous() -> None:
     """Auto-start real continuous worker when gate is enabled (no auto-promote)."""
@@ -902,8 +929,30 @@ def _pfai_shutdown_continuous() -> None:
         log.warning('shutdown: continuous stop failed: %s', exc)
 
 
+def _pfai_startup_unified_train_learn() -> None:
+    """Dedicated 24/7 learn→grow→train heartbeat (async LoRA; never auto-promote)."""
+    try:
+        st = UNIFIED_TRAIN_LEARN.start()
+        log.info(
+            'startup: unified train+learn heartbeat alive=%s every=%ss',
+            st.get('alive'), st.get('heartbeat_seconds'),
+        )
+    except Exception as exc:
+        log.warning('startup: unified train+learn failed: %s', exc)
+
+
+def _pfai_shutdown_unified_train_learn() -> None:
+    try:
+        UNIFIED_TRAIN_LEARN.stop('app_shutdown')
+        log.info('shutdown: unified train+learn stopped')
+    except Exception as exc:
+        log.warning('shutdown: unified train+learn stop failed: %s', exc)
+
+
 app.router.add_event_handler('startup', _pfai_startup_continuous)
 app.router.add_event_handler('shutdown', _pfai_shutdown_continuous)
+app.router.add_event_handler('startup', _pfai_startup_unified_train_learn)
+app.router.add_event_handler('shutdown', _pfai_shutdown_unified_train_learn)
 
 # --- Quantum-inspired ultra-fast core + IoT mind + evolution cadence -------
 IOT_MIND = IoTMind()
@@ -915,27 +964,32 @@ QUANTUM = QuantumInspiredCore(
 
 def _evolve_minute_tick() -> dict:
     q = QUANTUM.pulse('minute evolution', include_iot=False)
-    cont = {'ok': False, 'skipped': True}
-    if is_continuous_enabled():
-        try:
-            # Keep continuous worker alive every minute
+    unified = {'ok': True, 'skipped': True}
+    try:
+        utl = globals().get('UNIFIED_TRAIN_LEARN')
+        if utl is not None:
+            # One smooth learn→grow→train heartbeat every minute (async LoRA, cooldown)
+            unified = utl.cycle(force_train=False, train_if_eligible=True)
+        elif is_continuous_enabled():
             CONTINUOUS.start()
-            cont = CONTINUOUS.tick_once()
-        except Exception as exc:
-            cont = {'ok': False, 'error': str(exc)[:160]}
+            unified = CONTINUOUS.tick_once()
+    except Exception as exc:
+        unified = {'ok': False, 'error': str(exc)[:160]}
     monitor = {'ok': True, 'skipped': True}
     try:
-        # Soft pulse via live monitor when wired (may be rebound after init)
         mon = globals().get('LIVE_MONITOR')
         if mon is not None:
-            monitor = mon.pulse(deep=False, train_if_eligible=True)
+            # Heal/ensure only — training handled by unified loop above
+            monitor = mon.pulse(deep=False, train_if_eligible=False)
     except Exception as exc:
         monitor = {'ok': False, 'error': str(exc)[:160]}
     return {
         'ok': True,
         'quantum_us': ((q.get('timing') or {}).get('elapsed_us')),
         'quantum_band': ((q.get('timing') or {}).get('target_band')),
-        'continuous_ok': bool((cont or {}).get('ok')),
+        'unified_train_learn_ok': bool((unified or {}).get('ok')),
+        'learn_alive': bool(((unified or {}).get('learn') or {}).get('worker_alive')),
+        'train_triggered': bool(((unified or {}).get('train') or {}).get('triggered')),
         'live_monitor_ok': bool((monitor or {}).get('ok')),
         'weight_promotion': 'never_auto',
     }
@@ -1373,7 +1427,7 @@ def _conflict_scan() -> dict:
     for mod in (
         'pfai.smart_continuous', 'pfai.quantum_core', 'pfai.iot_mind',
         'pfai.evolution_cadence', 'pfai.free_sovereign', 'pfai.advanced_self_develop',
-        'pfai.live_monitor', 'pfai.elite_reply',
+        'pfai.live_monitor', 'pfai.elite_reply', 'pfai.unified_train_learn',
     ):
         try:
             __import__(mod)
@@ -1523,11 +1577,9 @@ LIVE_MONITOR = LiveSystemMonitor(
         EVOLUTION.start() if evolution_enabled() else {'ok': True, 'skipped': True, 'reason': 'disabled'}
     ),
     evolution_status_fn=lambda: EVOLUTION.status(),
-    training_eligibility_fn=lambda: _tool_training_eligibility(),
-    training_start_fn=lambda: SMART_TRAINING.start_async(
-        owner_requested=True, activate_if_pass=False, force_prepare=True,
-    ) if hasattr(SMART_TRAINING, 'start_async') else SMART_TRAINING.start(
-        owner_requested=True, activate_if_pass=False, force_prepare=True,
+    training_eligibility_fn=lambda: SMART_TRAINING.diagnose(),
+    training_start_fn=lambda: SMART_TRAINING.start(
+        owner_requested=True, activate_if_pass=False, force_prepare=True, async_mode=True,
     ),
     training_status_fn=lambda: SMART_TRAINING.status(),
     heal_fn=lambda: AUTONOMY.run_cycle(include_continuous_tick=False),
@@ -1546,17 +1598,25 @@ def _tool_live_monitor_pulse(deep: bool = False):
 for _spec in (
     ToolSpec('live_monitor_status', '24/7 live supervisor status (learn/train/heal)', 'read', False, {}),
     ToolSpec('live_monitor_pulse', 'Run one live-monitor heartbeat (optional deep heal/develop)', 'write', False, {'deep': 'bool?'}),
+    ToolSpec('unified_train_learn_status', 'Unified 24/7 learn+train loop status', 'read', False, {}),
+    ToolSpec('unified_train_learn_cycle', 'One smooth learn→grow→train heartbeat (async LoRA)', 'write', False, {'force_train': 'bool?'}),
 ):
     TOOL_ROUTER.specs[_spec.name] = _spec
 TOOL_ROUTER.handlers['live_monitor_status'] = _tool_live_monitor_status
 TOOL_ROUTER.handlers['live_monitor_pulse'] = _tool_live_monitor_pulse
+TOOL_ROUTER.handlers['unified_train_learn_status'] = _tool_unified_train_learn_status
+TOOL_ROUTER.handlers['unified_train_learn_cycle'] = _tool_unified_train_learn_cycle
 
 def _pfai_startup_live_monitor() -> None:
     """Start monitor worker without blocking bind; first heavy pulse runs in-thread."""
     try:
         st = LIVE_MONITOR.start()
-        # Soft ensure only — skip LoRA on cold boot so free-tier wake stays fast
+        # Soft unified cycle (learn only) + monitor pulse — no LoRA on cold boot
         def _soft():
+            try:
+                UNIFIED_TRAIN_LEARN.cycle(force_train=False, train_if_eligible=False)
+            except Exception as exc:
+                log.warning('startup: unified train/learn soft cycle failed: %s', exc)
             try:
                 LIVE_MONITOR.pulse(deep=False, train_if_eligible=False)
             except Exception as exc:
@@ -1621,20 +1681,19 @@ def _evolve_hour_with_sovereign() -> dict:
         auto_train = bool(open_execution_status().get('open_chat_tools') or is_continuous_enabled())
     if auto_train:
         try:
-            # Owner-style start: prepare + real cycle. Orchestrator enforces honesty/gates.
-            # activate_if_pass stays False — never silent weight promote.
-            train_out = SMART_TRAINING.start(owner_requested=True, activate_if_pass=False, force_prepare=True)
+            train_out = UNIFIED_TRAIN_LEARN.cycle(force_train=False, train_if_eligible=True)
         except Exception as exc:
             train_out = {'ok': False, 'error': str(exc)[:160]}
     return {
         'ok': bool((base or {}).get('ok')) and bool(sov.get('ok')),
         'autonomy': base,
         'sovereign': {'ok': sov.get('ok'), 'improved': sov.get('improved'), 'after': sov.get('after')},
-        'smart_training': {
+        'unified_train_learn': {
             'ok': train_out.get('ok'),
-            'executed': (train_out.get('cycle') or {}).get('actual_training_executed'),
-            'status': (train_out.get('cycle') or {}).get('status') or train_out.get('status'),
-            'skipped': train_out.get('skipped'),
+            'learn_alive': ((train_out.get('learn') or {}).get('worker_alive')),
+            'train_triggered': ((train_out.get('train') or {}).get('triggered')),
+            'executed': ((train_out.get('train') or {}).get('actual_training_executed')),
+            'status': ((train_out.get('train') or {}).get('status')),
             'auto_promote': False,
         },
     }

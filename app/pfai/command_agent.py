@@ -191,7 +191,7 @@ class CommandAgent:
         from .ops_pulse import is_ops_status_question, ops_status_reply
         if is_ops_status_question(message) or understanding.get("intent") == "ops_status":
             mark("executing", "Gathering live system pulse")
-            health = cont = mon = evo = {}
+            health = cont = mon = evo = uni = {}
             try:
                 health = self.router.execute("health_check", {}, approved=False, actor=owner) or {}
                 if health.get("ok") and isinstance(health.get("result"), dict):
@@ -213,6 +213,11 @@ class CommandAgent:
                 evo = evo_r.get("result") if evo_r.get("ok") and isinstance(evo_r.get("result"), dict) else evo_r
             except Exception:
                 evo = {}
+            try:
+                uni_r = self.router.execute("unified_train_learn_status", {}, approved=False, actor=owner) or {}
+                uni = uni_r.get("result") if uni_r.get("ok") and isinstance(uni_r.get("result"), dict) else uni_r
+            except Exception:
+                uni = {}
             from . import __version__ as _ver
             mark("completed", "Ops pulse ready")
             reply = ops_status_reply(
@@ -220,6 +225,7 @@ class CommandAgent:
                 continuous=cont if isinstance(cont, dict) else {},
                 monitor=mon if isinstance(mon, dict) else {},
                 evolution=evo if isinstance(evo, dict) else {},
+                unified=uni if isinstance(uni, dict) else {},
                 version=str(_ver),
             )
             return self._finalize_direct(
@@ -369,6 +375,7 @@ class CommandAgent:
         "unified_brain_status", "quantum_status", "quantum_pulse", "iot_status", "iot_understand",
         "evolution_status", "free_ai_status", "free_sovereign_audit",
         "live_monitor_status", "memory_status", "memory_audit",
+        "unified_train_learn_status",
     })
 
     def _execute_plan(
@@ -480,9 +487,9 @@ class CommandAgent:
             )
             if re.search(r"تدريب|تعل[يّ]م|continuous|تدرب|lora|مراقب", prior, re.I):
                 forced = []
-                for name in ("live_monitor_pulse", "continuous_tick", "smart_training_start", "continuous_status"):
+                for name in ("unified_train_learn_cycle", "unified_train_learn_status", "live_monitor_pulse"):
                     if name in allowed:
-                        forced.append({"tool": name, "args": {"deep": False} if name == "live_monitor_pulse" else {}, "reason": "continue prior train/learn"})
+                        forced.append({"tool": name, "args": {}, "reason": "continue unified train/learn"})
                 if forced:
                     return forced[:3]
         if self._model_generate_ready():
@@ -691,6 +698,7 @@ def _budget_plan(planned: list[dict], *, max_tools: int = 3) -> list[dict]:
             "memory_heal", "memory_audit", "memory_status",
             "live_monitor_pulse", "live_monitor_status",
             "continuous_start", "continuous_tick", "smart_training_start",
+            "unified_train_learn_cycle", "unified_train_learn_status",
         }
         # If the turn is ONLY pulse + redundant status mirrors, collapse to pulse
         non_mirror = [p for p in planned if p.get("tool") in companion_ok]

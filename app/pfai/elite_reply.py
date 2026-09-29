@@ -254,6 +254,38 @@ def humanize_tool(name: str, res: Any, *, en: bool) -> str | None:
             return f"Continuous tick done — cycle ok={cy.get('ok', res.get('ok'))}."
         return f"نفّذت دورة تعلّم مستمر — نجاح={cy.get('ok', res.get('ok'))}."
 
+    if name in {"unified_train_learn_cycle", "unified_train_learn_status"}:
+        if name == "unified_train_learn_status":
+            cont = res.get("continuous") or {}
+            tr = res.get("training") or {}
+            hb = res.get("heartbeat_alive")
+            if en:
+                return (
+                    f"Unified learn+train cycles={res.get('cycles')} · heartbeat={'ON' if hb else 'off'} · "
+                    f"continuous={'alive' if cont.get('worker_alive') else 'down'} · "
+                    f"eligible={tr.get('eligible')} · async_running={tr.get('async_running')}."
+                )
+            return (
+                f"الحلقة الموحّدة دورات={res.get('cycles')} · نبض={'يعمل' if hb else 'متوقف'} · "
+                f"مستمر={'حي' if cont.get('worker_alive') else 'متوقف'} · "
+                f"أهلية={tr.get('eligible')} · تدريب_خلفي={tr.get('async_running')}."
+            )
+        learn = res.get("learn") or {}
+        train = res.get("train") or {}
+        if en:
+            return (
+                f"Unified cycle ok in {res.get('elapsed_ms')}ms — "
+                f"learn_alive={learn.get('worker_alive')} tick={learn.get('tick_ok')} · "
+                f"train_triggered={train.get('triggered')} status={train.get('status')} "
+                f"(weights never auto-promoted)."
+            )
+        return (
+            f"الدورة الموحّدة تمت خلال {res.get('elapsed_ms')}ms — "
+            f"تعلّم_حي={learn.get('worker_alive')} نبضة={learn.get('tick_ok')} · "
+            f"تدريب_مُشغَّل={train.get('triggered')} الحالة={train.get('status')} "
+            f"(ترقية الأوزان لا تتم صامتة)."
+        )
+
     if name in {"live_monitor_status", "live_monitor_pulse"}:
         if name == "live_monitor_status" and hasattr(res, "get"):
             alive = res.get("alive")
@@ -356,7 +388,10 @@ def compose_elite(
 
     # If live continuous tools ran, treat as train_learn even on weak followup intent
     tool_names = {t.get("tool") for t in ok}
-    if tool_names & {"live_monitor_pulse", "continuous_start", "continuous_tick", "smart_training_start"}:
+    if tool_names & {
+        "live_monitor_pulse", "continuous_start", "continuous_tick", "smart_training_start",
+        "unified_train_learn_cycle", "unified_train_learn_status",
+    }:
         if intent in {"followup", "general"}:
             intent = "train_learn"
 
@@ -405,10 +440,10 @@ def _lead_for_intent(intent: str, latent: str, message: str, *, en: bool) -> str
             return "I'll keep what matters and answer from verified memory — nothing invented."
         return "سأحتفظ بما يهم وأجيب من ذاكرة موثّقة — بلا اختراع."
     if intent == "train_learn":
-        if re.search(r"مستمر|continuous|24/?7|مدار|مراقب", message or "", re.I):
+        if re.search(r"مستمر|continuous|24/?7|مدار|مراقب|دورة|موحّد|موحد", message or "", re.I):
             if en:
-                return "Continuous learn+train is supervised 24/7 by the live monitor — real ticks, real LoRA when eligible."
-            return "التعلّم والتدريب المستمران تحت المراقب الحي 24/7 — دورات حقيقية وLoRA عند الأهلية."
+                return "Unified learn→grow→train loop runs 24/7 — real curation ticks and async LoRA when eligible."
+            return "حلقة التعلّم←النمو←التدريب الموحّدة تعمل 24/7 — دورات حقيقية وLoRA غير متزامن عند الأهلية."
         if en:
             return "Real training path is open from chat — LoRA runs when eligible, never silent weight promotion."
         return "مسار التدريب الحقيقي مفتوح من الشات — LoRA يعمل عند الأهلية، بلا ترقية أوزان صامتة."
