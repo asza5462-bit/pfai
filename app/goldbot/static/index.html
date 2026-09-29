@@ -1,0 +1,71 @@
+<!DOCTYPE html>
+<html lang="ar" dir="rtl">
+<head>
+  <meta charset="utf-8" />
+  <meta name="viewport" content="width=device-width, initial-scale=1" />
+  <title>AURUM — Elite Gold Desk</title>
+  <link rel="preconnect" href="https://fonts.googleapis.com" />
+  <link rel="preconnect" href="https://fonts.gstatic.com" crossorigin />
+  <link href="https://fonts.googleapis.com/css2?family=Syne:wght@600;700;800&family=IBM+Plex+Sans+Arabic:wght@300;400;500;600&display=swap" rel="stylesheet" />
+  <link rel="stylesheet" href="/assets/desk.css" />
+</head>
+<body>
+  <canvas id="chart" aria-hidden="true"></canvas>
+  <div class="veil"></div>
+
+  <header class="top">
+    <div class="brand-lock">AURUM</div>
+    <div class="meta">
+      <span id="modePill">paper</span>
+      <span id="symbolPill">XAUUSD</span>
+      <span id="sessionPill">—</span>
+    </div>
+  </header>
+
+  <main class="hero">
+    <p class="eyebrow">Elite Gold Desk · MetaTrader 5 · Exness-ready</p>
+    <h1 id="headline">يقرأ الذهب قبل أن يتحرّك الجميع</h1>
+    <p class="sub" id="narrative">جاري مسح السوق…</p>
+    <div class="cta">
+      <button id="btnScan" type="button">مسح الآن</button>
+      <button id="btnExec" type="button" class="ghost">تنفيذ إشارة (يدوي)</button>
+      <button id="btnAuto" type="button" class="ghost">تفعيل تلقائي</button>
+    </div>
+  </main>
+
+  <section class="desk" id="deskPanel" aria-label="لوحة المكتب">
+    <div class="strip">
+      <div><label>السعر</label><strong id="price">—</strong></div>
+      <div><label>التقارب</label><strong id="conf">—</strong></div>
+      <div><label>الإشارة</label><strong id="action">—</strong></div>
+      <div><label>RR</label><strong id="rr">—</strong></div>
+      <div><label>الرصيد</label><strong id="equity">—</strong></div>
+      <div><label>المخاطرة</label><strong id="riskState">—</strong></div>
+    </div>
+
+    <div class="cols">
+      <article>
+        <h2>مدارس التداول</h2>
+        <ul id="schools"></ul>
+      </article>
+      <article>
+        <h2>قراءة المؤسسات / السيولة</h2>
+        <pre id="inst"></pre>
+      </article>
+      <article>
+        <h2>الصفقات</h2>
+        <ul id="trades"></ul>
+      </article>
+    </div>
+
+    <p class="disclaimer">
+      تحذير: لا يوجد بوت بنسبة خسارة صفر. الأسواق تتحرك ضد الجميع أحياناً.
+      AURUM يرفض الصفقات الضعيفة، يوقف التداول عند حد الخسارة اليومي، ويدير اللوت بصرامة —
+      هذا تقليل ضرر وليس ضمان ربح.
+    </p>
+    <p class="connect"><a href="/api/connect-guide" target="_blank" rel="noopener">دليل ربط Exness / MT5</a></p>
+  </section>
+
+  <script src="/assets/desk.js"></script>
+</body>
+</html>

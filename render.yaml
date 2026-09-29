@@ -1,15 +1,10 @@
-# Approved PFAI Render Blueprint (pfai-v8)
-# Repository / branch are set on the Render service (see create_web_service).
-# Secrets (sync:false) are configured in Render env — never committed.
-# MODEL_V0007 + MODEL_V0001 LKG are seeded into the Docker image at build time
-# (base distilgpt2 weights downloaded during image build; adapters/registry in repo).
+# AURUM — Elite Gold Desk on Render (control plane + paper mode)
+# Live Exness execution requires Windows VPS with MetaTrader 5 (see /api/connect-guide).
 
 services:
   - type: web
     name: pfai-v8
     runtime: docker
-    # Standard = 2GB RAM / 1 CPU, no spin-down. Free sleeps after idle.
-    # Upgrade live service in Dashboard → Instance Type if still on free.
     plan: standard
     region: oregon
     dockerfilePath: ./Dockerfile
@@ -19,85 +14,33 @@ services:
     autoDeploy: true
     numInstances: 1
     envVars:
-      - key: PFAI_HOST
+      - key: AURUM_HOST
         value: "0.0.0.0"
       - key: PORT
         value: "8000"
-      - key: PFAI_LOG_LEVEL
-        value: INFO
-      - key: PFAI_ENV
-        value: production
-      - key: PFAI_TRAINING_ROOT
-        value: data/longevity/training_phase9_verify
-      - key: PFAI_CONTINUOUS_TRAINING_ENABLED
-        value: "true"
-      - key: PFAI_OPEN_CHAT_TOOLS
-        value: "1"
-      - key: PFAI_AUTO_ACCEPT_LEARNING
-        value: "1"
-      - key: PFAI_AUTO_SAFE_HEAL
-        value: "1"
-      - key: PFAI_UNIFIED_BRAIN
-        value: "1"
-      - key: PFAI_QUANTUM_CORE
-        value: "1"
-      - key: PFAI_EVOLUTION_CADENCE
-        value: "1"
-      - key: PFAI_EVOLVE_MINUTE_SECONDS
-        value: "60"
-      - key: TRAINING_ALLOW_CPU
-        value: "true"
-      - key: TRAINING_MIN_FREE_MEMORY
-        value: "0.5"
-      - key: TRAINING_MAX_RAM_GB
-        value: "8"
-      - key: PFAI_AUTO_TRAIN_WHEN_ELIGIBLE
-        value: "1"
-      - key: PFAI_UNIFIED_HEARTBEAT
-        value: "90"
-      - key: PFAI_UNIFIED_TRAIN_COOLDOWN
-        value: "900"
-      - key: PFAI_UNIFIED_MIN_TICK
-        value: "40"
-      - key: PFAI_UNIFIED_HEARTBEAT_TRAIN_EVERY
-        value: "8"
-      - key: PFAI_UNIFIED_TICK_TIMEOUT
+      - key: AURUM_MODE
+        value: "paper"
+      - key: AURUM_SYMBOL
+        value: "XAUUSD"
+      - key: AURUM_TIMEFRAME
+        value: "M15"
+      - key: AURUM_AUTO_TRADE
+        value: "false"
+      - key: AURUM_RISK_PCT
+        value: "0.35"
+      - key: AURUM_MAX_DAILY_LOSS_PCT
+        value: "1.25"
+      - key: AURUM_MIN_RR
+        value: "2.2"
+      - key: AURUM_MIN_CONFLUENCE
+        value: "0.72"
+      - key: AURUM_MAX_SPREAD
+        value: "35"
+      - key: AURUM_LOOP_SECONDS
         value: "30"
-      - key: MODEL_PATH
-        value: "data/models/distilgpt2"
-      - key: TRAINING_METHOD
-        value: "lora"
-      - key: TRAINING_BATCH_SIZE
-        value: "1"
-      - key: TRAINING_EPOCHS
-        value: "1"
-      - key: TRAINING_MAX_STEPS
-        value: "30"
-      - key: PFAI_TRAINING_ASYNC
-        value: "1"
-      - key: PFAI_WEB_ALLOW_NETWORK
-        value: "1"
-      - key: PFAI_WEB_SEARCH_PROVIDER
-        value: auto
-      - key: PFAI_WEB_FETCH_PROVIDER
-        value: http_fetch
-      - key: PFAI_WEB_TIMEOUT
-        value: "20"
-      - key: PFAI_WEB_ALLOW_PRIVATE
-        value: "0"
-      - key: PFAI_COOKIE_SECURE
-        value: "true"
-      - key: PFAI_OWNER_USERNAME
-        sync: false
-      - key: PFAI_OWNER_PASSWORD_HASH
-        sync: false
-      - key: ANTHROPIC_API_KEY
-        sync: false
-      - key: PFAI_LOCAL_MODEL_ID
-        sync: false
-      - key: PFAI_CORS_ORIGINS
-        sync: false
-    disk:
-      name: pfai-data
-      mountPath: /app/data
-      sizeGB: 10
+      - key: AURUM_DATA_DIR
+        value: "data/goldbot"
+      - key: AURUM_PAPER_BALANCE
+        value: "10000"
+      # Secrets — set in Render dashboard, never commit:
+      # AURUM_OWNER_TOKEN, MT5_LOGIN, MT5_PASSWORD, MT5_SERVER, MT5_PATH
