@@ -271,6 +271,7 @@ class UserAuth:
 
     def login_with_mt5(self, mt5_login: str, mt5_password: str, mt5_server: str, symbol: str = "XAUUSDm") -> dict:
         """Primary Exness/MT5 login — creates account bound to trading number if needed."""
+        from goldbot.mt5.metaapi_cloud import normalize_exness_server
         from goldbot.mt5.symbols import normalize_symbol
 
         login = str(mt5_login or "").strip()
@@ -278,9 +279,9 @@ class UserAuth:
             raise AuthError("رقم حساب MT5/Exness غير صالح")
         if not mt5_password or len(mt5_password) < 4:
             raise AuthError("كلمة مرور MT5 مطلوبة")
-        server = (mt5_server or "").strip()
+        server = normalize_exness_server(mt5_server) or (mt5_server or "").strip()
         if not server:
-            raise AuthError("اختر سيرفر Exness (مثل Exness-MT5Trial)")
+            raise AuthError("اختر سيرفر Exness (مثل Exness-MT5Real32)")
 
         uid = self.find_by_mt5_login(login)
         if uid is None:

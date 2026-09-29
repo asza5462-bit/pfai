@@ -118,7 +118,7 @@
       }
     } catch (_) {
       if (list) {
-        ["Exness-MT5Trial15", "Exness-MT5Trial", "Exness-MT5Real"].forEach((s) => {
+        ["Exness-MT5Real32", "Exness-MT5Trial15", "Exness-MT5Real"].forEach((s) => {
           const o = document.createElement("option");
           o.value = s;
           list.appendChild(o);
@@ -506,21 +506,47 @@
           metaapi_token: metaTok || null,
         }),
       });
-      showAuth(j.message || "تم الربط السحابي", !!(j.account && j.account.connected) || !!(j.cloud && j.cloud.ok));
+      const live = !!(j.account && j.account.connected) || !!(j.live_execution) || !!(j.cloud_ok);
+      const softFail = !live && j.cloud && j.cloud.ok === false;
+      showAuth(j.message || (live ? "تم الربط السحابي" : "الحساب محفوظ — بانتظار اتصال Exness"), live && !softFail);
       await enterLoggedIn(j.user, j);
-      if (!(j.account && j.account.connected)) {
+      if (!live) {
         document.querySelector('.tabs button[data-tab="connect"]')?.click();
-        // Poll background MetaApi deploy without blocking login again
-        for (let i = 0; i < 8; i++) {
-          await new Promise((r) => setTimeout(r, 4000));
+        // Real servers can take up to ~2 minutes to reach CONNECTED
+        let online = false;
+        for (let i = 0; i < 24; i++) {
+          await new Promise((r) => setTimeout(r, 5000));
           try {
             const st = await refreshCloudStatusOnly();
-            const online = st && st.bridge && st.bridge.online;
+            online = !!(st && ((st.bridge && st.bridge.online) || st.live_execution));
             if (online) {
               showAuth("اكتمل الربط السحابي — جاهز للتداول", true);
               break;
             }
+            const prov = (st && st.provision) || {};
+            const cool = (st && st.cooldown) || null;
+            if (cool && cool.message) {
+              showAuth(cool.message, false);
+              break;
+            }
+            if (prov.status === "error" && prov.message) {
+              showAuth(prov.message, false);
+              if ($("connectMsg")) {
+                $("connectMsg").textContent = prov.message;
+                $("connectMsg").classList.remove("ok");
+              }
+              break;
+            }
+            if ($("connectMsg") && prov.message) {
+              $("connectMsg").textContent = prov.message;
+            }
           } catch (_) {}
+        }
+        if (!online) {
+          showAuth(
+            (j.message || "لم يكتمل اتصال Exness بعد") + " — من تبويب الربط اضغط «إعادة ربط كامل»",
+            false
+          );
         }
       }
     } catch (err) {

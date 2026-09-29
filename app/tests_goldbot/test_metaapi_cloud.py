@@ -81,6 +81,29 @@ def test_account_id_validation():
     assert normalize_account_id("1215") == ""
 
 
+def test_normalize_exness_server_real32():
+    from goldbot.mt5.metaapi_cloud import normalize_exness_server
+
+    assert normalize_exness_server("Exness-MT5Real32") == "Exness-MT5Real32"
+    assert normalize_exness_server("exness-mt5real32") == "Exness-MT5Real32"
+    assert normalize_exness_server("Exness MT5 Real32") == "Exness-MT5Real32"
+
+
+def test_ensure_account_real32_server(monkeypatch):
+    monkeypatch.setattr("time.sleep", lambda *_: None)
+    fake = FakeMetaHttp()
+    client = MetaApiCloud(token="test-token", region="new-york", http=fake)
+    out = client.ensure_account(
+        "55667788",
+        "TradePass1",
+        "Exness MT5 Real32",
+        wait=True,
+    )
+    assert out["ok"] is True
+    assert out["connected"] is True
+    assert fake.accounts[FAKE_ACCOUNT_ID]["server"] == "Exness-MT5Real32"
+
+
 def test_ensure_account_ignores_stale_numeric_id(monkeypatch):
     monkeypatch.setattr("time.sleep", lambda *_: None)
     fake = FakeMetaHttp()

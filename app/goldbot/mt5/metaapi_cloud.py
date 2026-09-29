@@ -57,17 +57,87 @@ def is_validation_cooldown_error(exc: MetaApiError | Exception | str) -> bool:
     return "rejected too many times" in msg or "retry in 1 hour" in msg or "validation for trading account" in msg and "rejected" in msg
 
 
+def normalize_exness_server(server: str | None) -> str:
+    """Normalize Exness MT5 server names (trim, collapse spaces, fix common typos)."""
+    s = str(server or "").strip()
+    if not s:
+        return ""
+    # Common paste variants: spaces / underscores → Exness-MT5Real32
+    s = re.sub(r"[\s_]+", "-", s)
+    s = re.sub(r"-{2,}", "-", s)
+    # ExnessMT5Real32 / exnessmt5real32
+    s = re.sub(r"(?i)^exness-?mt5-?", "Exness-MT5", s)
+    low = s.lower()
+    if low.startswith("exness-mt5"):
+        tail = s[len("Exness-MT5") :]
+        # Drop leftover hyphen after MT5
+        if tail.startswith("-"):
+            tail = tail[1:]
+        if tail.lower().startswith("trial"):
+            num = re.sub(r"(?i)^trial-?", "", tail)
+            return "Exness-MT5Trial" + num
+        if tail.lower().startswith("real"):
+            num = re.sub(r"(?i)^real-?", "", tail)
+            return "Exness-MT5Real" + num
+        return "Exness-MT5" + tail
+    return s.replace("-", "") if " " in str(server or "") else s
+
+
+def _suggested_servers_from_error(details: Any) -> list[str]:
+    """Pull MetaApi E_SRV_NOT_FOUND suggested server names."""
+    out: list[str] = []
+    if not isinstance(details, dict):
+        return out
+    nested = details.get("details") if isinstance(details.get("details"), dict) else details
+    if not isinstance(nested, dict):
+        return out
+    by_broker = nested.get("serversByBrokers") or {}
+    if isinstance(by_broker, dict):
+        for names in by_broker.values():
+            if isinstance(names, list):
+                for n in names:
+                    if n and str(n) not in out:
+                        out.append(str(n))
+    for n in nested.get("suggestedServerNames") or nested.get("servers") or []:
+        if n and str(n) not in out:
+            out.append(str(n))
+    return out
+
+
 def arabic_metaapi_error(exc: MetaApiError | Exception) -> str:
     msg = str(getattr(exc, "message", None) or exc)
     code = str(getattr(exc, "code", "") or "")
     low = msg.lower()
+    details = getattr(exc, "details", None)
     # Rate-limited by MetaApi after repeated bad credentials / wrong server
-    if is_validation_cooldown_error(exc):
+    if is_validation_cooldown_error(exc) or code == "E_VALIDATION_COOLDOWN":
         return (
             "MetaApi أوقف التحقق من هذا الحساب مؤقتاً بعد محاولات فاشلة كثيرة. "
             "تأكد من: كلمة مرور التداول (ليس Investor) + السيرفر حرفياً من Exness "
-            "(مثل Exness-MT5Trial15) ثم انتظر ساعة كاملة قبل «إعادة ربط كامل»."
+            "(مثل Exness-MT5Real32) ثم انتظر ساعة كاملة قبل «إعادة ربط كامل»."
         )
+    if code == "E_SRV_NOT_FOUND" or ".dat file for server" in low:
+        suggestions = _suggested_servers_from_error(details)
+        hint = (" المقترحات: " + "، ".join(suggestions[:6])) if suggestions else ""
+        return (
+            "اسم السيرفر غير موجود في MetaApi — انسخه حرفياً من تطبيق Exness "
+            f"(مثال Exness-MT5Real32).{hint}"
+        )
+    if code in {"E_AUTH", "UnauthorizedError"} or "authenticate" in low or "invalid account" in low or "wrong password" in low:
+        return (
+            "رفض Exness بيانات الدخول — تحقق من: رقم الحساب + كلمة مرور التداول "
+            "(وليس Investor) + السيرفر حرفياً (مثل Exness-MT5Real32)."
+        )
+    if code == "ERR_OTP_REQUIRED" or "one-time password" in low or "otp" in low:
+        return "الحساب يطلب OTP — عطّل كلمة المرور لمرة واحدة من تطبيق MetaTrader ثم أعد الربط."
+    if code == "E_TRADING_ACCOUNT_DISABLED" or "account is disabled" in low:
+        return "الوسيط يقول إن الحساب معطّل — فعّله من Exness أو استخدم حساباً آخر."
+    if code == "E_PASSWORD_CHANGE_REQUIRED" or ("password" in low and "change" in low):
+        return "Exness يطلب تغيير كلمة المرور — غيّرها من التطبيق الرسمي ثم أعد الربط."
+    if code == "E_SERVER_TIMEZONE" or "retrieve server settings" in low:
+        return "تعذّر اكتشاف إعدادات السيرفر — أعد المحاولة بعد دقيقة أو تحقق من اسم السيرفر."
+    if code == "E_NO_SYMBOLS" or "no symbols" in low:
+        return "لا رموز تداول على هذا الحساب — تأكد أنه حساب MT5 نشط لدى Exness."
     # "Trading account with id: 1215 not found (...)" and similar MetaApi payloads
     if (
         "not found" in low
@@ -78,20 +148,21 @@ def arabic_metaapi_error(exc: MetaApiError | Exception) -> str:
             "حساب MetaApi السحابي غير موجود أو تالف. "
             "اضغط «إعادة ربط كامل» من تبويب الربط ليُنشأ من جديد."
         )
+    if code == "E_NOT_CONNECTED":
+        return (
+            "الطرفية السحابية أُنشئت لكن لم تتصل بـ Exness. "
+            "غالباً كلمة مرور التداول أو السيرفر (مثل Exness-MT5Real32) غير صحيحة — صحّحها ثم «إعادة ربط كامل»."
+        )
     if code == "E_PROVISION_PENDING" or "قيد التجهيز" in msg or "جاري تجهيز" in msg:
-        return "الطرفية السحابية قيد التجهيز — انتظر نصف دقيقة ثم اضغط «تحديث / إعادة ربط»."
-    if code in {"E_AUTH"} or "authenticate" in low or "invalid account" in low or "wrong password" in low:
-        return "رفض Exness بيانات الدخول — تحقق من الرقم وكلمة مرور التداول (وليس Investor) والسيرفر (مثل Exness-MT5Trial15)."
+        return "الطرفية السحابية قيد التجهيز — انتظر دقيقة ثم اضغط «تحديث / إعادة ربط»."
     if "investor" in low:
         return "كلمة مرور Investor لا تكفي — استخدم كلمة مرور التداول من Exness."
     if "server" in low and ("not found" in low or "unknown" in low or "invalid" in low):
-        return "اسم السيرفر غير مطابق — انسخه حرفياً من Exness (مثال Exness-MT5Trial15)."
+        return "اسم السيرفر غير مطابق — انسخه حرفياً من Exness (مثال Exness-MT5Real32)."
     if code == "NO_TOKEN" or "metaapi_token" in low or ("لا يوجد" in msg and "token" in low) or "unauthorized" in low:
         return "توكن MetaApi غير صالح أو غير محفوظ — الصقه مجدداً من تبويب الربط أو شاشة الدخول."
     if "timeout" in low or code == "NETWORK":
         return "انتهت مهلة الاتصال بـ MetaApi — أعد المحاولة بعد ثوانٍ."
-    if "password" in low and "change" in low:
-        return "Exness يطلب تغيير كلمة المرور — غيّرها من التطبيق الرسمي ثم أعد الربط."
     if "resource" in low or code == "E_RESOURCE_SLOTS":
         return "حساب MetaApi يحتاج موارد إضافية — أعد المحاولة أو رقِّ خطة MetaApi."
     return f"تعذّر الربط السحابي: {msg}"
@@ -328,18 +399,25 @@ class MetaApiCloud:
         fast: bool = False,
     ) -> dict:
         """Create cloud-g2 MT5 account with retries for broker detection / 202."""
+        server_n = normalize_exness_server(server) or str(server).strip()
         body: dict[str, Any] = {
             "login": str(login).strip(),
             "password": str(password),
             "name": name or f"AURUM-{login}",
-            "server": str(server).strip(),
+            "server": server_n,
             "platform": "mt5",
             "magic": self.magic,
             "type": "cloud-g2",
             "region": self.region,
             "reliability": "high",
             "manualTrades": False,
-            "keywords": keywords or ["Exness", "Exness Technologies"],
+            "keywords": keywords
+            or [
+                "Exness",
+                "Exness Technologies",
+                "Exness Technologies Ltd",
+                "Exness Ltd",
+            ],
             "metadata": {"product": "AURUM", "symbol": symbol},
         }
         if resource_slots:
@@ -347,7 +425,8 @@ class MetaApiCloud:
 
         tx = secrets.token_hex(16)
         last_err: MetaApiError | None = None
-        attempts = 3 if fast else 8
+        attempts = 4 if fast else 10
+        tried_servers = {server_n.lower()}
         for attempt in range(attempts):
             try:
                 data = self._http(
@@ -355,7 +434,7 @@ class MetaApiCloud:
                     self._prov_url("/users/current/accounts"),
                     body,
                     transaction_id=tx,
-                    timeout=35 if fast else 90,
+                    timeout=40 if fast else 100,
                 )
                 if isinstance(data, dict) and is_metaapi_account_id(str(data.get("id") or "")):
                     data = dict(data)
@@ -380,27 +459,58 @@ class MetaApiCloud:
                     body["resourceSlots"] = slots
                     tx = secrets.token_hex(16)
                     continue
+                # Auto-correct server from MetaApi suggestions (Exness Real32 etc.)
+                if e.code == "E_SRV_NOT_FOUND" or ".dat file for server" in (e.message or "").lower():
+                    for sug in _suggested_servers_from_error(e.details):
+                        sug_n = normalize_exness_server(sug) or sug
+                        if sug_n.lower() in tried_servers:
+                            continue
+                        if "exness" not in sug_n.lower():
+                            continue
+                        log.warning("metaapi server suggest %s → %s", body["server"], sug_n)
+                        body["server"] = sug_n
+                        tried_servers.add(sug_n.lower())
+                        tx = secrets.token_hex(16)
+                        break
+                    else:
+                        raise MetaApiError(e.message, code="E_SRV_NOT_FOUND", status=400, details=e.details) from e
+                    continue
                 # Hard fail fast on credential / server problems — do not spin for minutes
                 msg = (e.message or "").lower()
                 if is_validation_cooldown_error(e):
                     try:
                         from goldbot.storage.state import store
 
-                        key = f"metaapi_cooldown:{str(login).strip()}:{str(server).strip().lower()}"
+                        key = f"metaapi_cooldown:{str(login).strip()}:{str(body['server']).strip().lower()}"
                         store.set_kv(
                             key,
                             {
                                 "until": time.time() + 3600,
                                 "login": str(login).strip(),
-                                "server": str(server).strip(),
+                                "server": str(body["server"]).strip(),
                                 "error": e.message,
                             },
                         )
                     except Exception:
                         pass
                     raise MetaApiError(e.message, code="E_VALIDATION_COOLDOWN", status=429, details=e.details) from e
-                if e.code in {"E_AUTH", "UnauthorizedError"} or any(
-                    x in msg for x in ("wrong password", "invalid password", "authenticate", "investor password")
+                if e.code in {
+                    "E_AUTH",
+                    "UnauthorizedError",
+                    "ERR_OTP_REQUIRED",
+                    "E_TRADING_ACCOUNT_DISABLED",
+                    "E_PASSWORD_CHANGE_REQUIRED",
+                    "E_NO_SYMBOLS",
+                } or any(
+                    x in msg
+                    for x in (
+                        "wrong password",
+                        "invalid password",
+                        "authenticate",
+                        "investor password",
+                        "one-time password",
+                        "account is disabled",
+                    )
                 ):
                     raise
                 if e.code == "ACCEPTED" or e.status == 202:
@@ -408,19 +518,19 @@ class MetaApiCloud:
                     log.info("metaapi create accepted, retry in %ss", wait)
                     time.sleep(wait)
                     # After 202, account may already exist — try find before retry POST
-                    found = self.find_account_by_login(login, server)
+                    found = self.find_account_by_login(login, body["server"])
                     if found and is_metaapi_account_id(str(found.get("id") or "")):
                         return found
                     continue
                 if "retry" in msg or "in progress" in msg or "detection" in msg:
                     time.sleep((4 + attempt * 2) if fast else (15 + attempt * 5))
-                    found = self.find_account_by_login(login, server)
+                    found = self.find_account_by_login(login, body["server"])
                     if found and is_metaapi_account_id(str(found.get("id") or "")):
                         return found
                     continue
                 raise
         # Last chance: broker detection may have created it despite timeout
-        found = self.find_account_by_login(login, server)
+        found = self.find_account_by_login(login, body.get("server") or server)
         if found and is_metaapi_account_id(str(found.get("id") or "")):
             return found
         raise last_err or MetaApiError("create account timed out")
@@ -428,6 +538,34 @@ class MetaApiCloud:
     def deploy(self, account_id: str) -> dict:
         data = self._http("POST", self._prov_url(f"/users/current/accounts/{account_id}/deploy"), {}, transaction=True)
         return data if isinstance(data, dict) else {"ok": True}
+
+    def undeploy(self, account_id: str) -> dict:
+        try:
+            data = self._http(
+                "POST",
+                self._prov_url(f"/users/current/accounts/{account_id}/undeploy"),
+                {},
+                transaction=True,
+            )
+            return data if isinstance(data, dict) else {"ok": True}
+        except MetaApiError as e:
+            if "already" in (e.message or "").lower():
+                return {"ok": True}
+            raise
+
+    def redeploy(self, account_id: str, *, wait: float = 45.0) -> dict:
+        """Undeploy then deploy — heals stuck DISCONNECTED Exness terminals."""
+        try:
+            self.undeploy(account_id)
+            time.sleep(2)
+        except Exception as e:
+            log.info("undeploy before redeploy: %s", e)
+        try:
+            self.deploy(account_id)
+        except MetaApiError as e:
+            if "already" not in (e.message or "").lower():
+                log.warning("redeploy deploy: %s", e.message)
+        return self.ensure_deployed(account_id, max_wait=wait)
 
     def ensure_deployed(self, account_id: str, *, max_wait: float = 60.0) -> dict:
         acc = self.get_account(account_id)
@@ -496,11 +634,14 @@ class MetaApiCloud:
                 status=503,
             )
 
+        server = normalize_exness_server(server) or str(server).strip()
+        login = str(login).strip()
+
         # Honor MetaApi "retry in 1 hour" lockout — per login+server only
         try:
             from goldbot.storage.state import store
 
-            cool_key = f"metaapi_cooldown:{str(login).strip()}:{str(server).strip().lower()}"
+            cool_key = f"metaapi_cooldown:{login}:{server.lower()}"
             cool = store.get_kv(cool_key) or {}
             until = float((cool or {}).get("until") or 0)
             if until > time.time():
@@ -560,6 +701,9 @@ class MetaApiCloud:
         account_id = normalize_account_id(str((acc or {}).get("id") or ""))
         if not account_id:
             raise MetaApiError("الحساب الموجود بلا معرّف UUID صالح", code="E_BAD_ACCOUNT_ID")
+        # Prefer region from the account itself (critical for client API)
+        if acc.get("region"):
+            self.region = str(acc["region"]).strip()
         try:
             self._http(
                 "PUT",
@@ -570,21 +714,32 @@ class MetaApiCloud:
         except MetaApiError as e:
             log.info("password update skipped: %s", e.message)
 
-        deploy_budget = deploy_wait if deploy_wait is not None else (8.0 if fast else 60.0)
+        deploy_budget = deploy_wait if deploy_wait is not None else (10.0 if fast else 75.0)
         try:
             acc = self.ensure_deployed(account_id, max_wait=deploy_budget)
         except MetaApiError as e:
             if "not found" in (e.message or "").lower():
-                # Force fresh create once
                 created = self.create_account(login, password, server, symbol=symbol, fast=fast)
                 account_id = normalize_account_id(str(created["id"]))
                 acc = self.ensure_deployed(account_id, max_wait=deploy_budget)
             else:
                 raise
 
+        # Heal stuck DISCONNECTED terminals (common after bad password / server switch)
+        status0 = str(acc.get("connectionStatus") or "").upper()
+        if status0 in {"DISCONNECTED", "DEPLOYING", ""} and not fast:
+            try:
+                acc = self.redeploy(account_id, wait=min(60.0, deploy_budget + 20))
+            except Exception as e:
+                log.warning("redeploy heal failed: %s", e)
+
         connected = False
         if wait:
-            wait_timeout = 25.0 if fast else float(settings.metaapi_connect_timeout)
+            # Real servers often need longer than Trial to reach CONNECTED
+            is_real = "real" in server.lower()
+            wait_timeout = (35.0 if is_real else 25.0) if fast else float(
+                settings.metaapi_connect_timeout if not is_real else max(settings.metaapi_connect_timeout, 150)
+            )
             acc = self.wait_connected(account_id, timeout=wait_timeout)
             status = str(acc.get("connectionStatus") or "").upper()
             replicas = acc.get("accountReplicas") or acc.get("replicas") or []
@@ -594,6 +749,20 @@ class MetaApiCloud:
                         status = "CONNECTED"
                         break
             connected = status == "CONNECTED"
+            # Full wait finished but still disconnected → surface real failure (not soft pending)
+            if not connected and not fast:
+                detail = (
+                    acc.get("connectionError")
+                    or acc.get("error")
+                    or acc.get("message")
+                    or "الطرفية السحابية لم تتصل بـ Exness"
+                )
+                raise MetaApiError(
+                    str(detail),
+                    code="E_NOT_CONNECTED",
+                    status=400,
+                    details=acc,
+                )
         else:
             status = str(acc.get("connectionStatus") or "").upper()
             connected = status == "CONNECTED" and str(acc.get("state") or "").upper() == "DEPLOYED"
@@ -601,6 +770,14 @@ class MetaApiCloud:
         region = str(acc.get("region") or self.region)
         if region:
             self.region = region
+        # Clear cooldown on successful create/bind path
+        if connected:
+            try:
+                from goldbot.storage.state import store
+
+                store.set_kv(f"metaapi_cooldown:{login}:{server.lower()}", {"until": 0})
+            except Exception:
+                pass
         return {
             "ok": True,
             "account_id": account_id,

@@ -316,7 +316,7 @@ class LoginBody(BaseModel):
 class Mt5LoginBody(BaseModel):
     mt5_login: str
     mt5_password: str
-    mt5_server: str = "Exness-MT5Trial15"
+    mt5_server: str = "Exness-MT5Real32"
     symbol: str = "XAUUSDm"
     auto_start: bool = True
     metaapi_token: str | None = None  # optional — paste once to unlock cloud trading
@@ -436,7 +436,7 @@ async def setup_next():
         next_ar = "الحساب متصل — اضغط «ابدأ التداول» من المكتب."
     elif metaapi.configured:
         step = "exness_login"
-        next_ar = "التوكن محفوظ. أدخل رقم Exness + كلمة المرور + السيرفر (مثل Exness-MT5Trial15) ثم ارتباط."
+        next_ar = "التوكن محفوظ. أدخل رقم Exness + كلمة مرور التداول + السيرفر (مثل Exness-MT5Real32) ثم ارتباط."
     elif mt5_linux.configured:
         step = "exness_vnc_or_login"
         next_ar = "منفّذ Linux مضبوط. سجّل Exness عبر VNC إن لزم، ثم ادخل من شاشة MT5."
@@ -450,7 +450,7 @@ async def setup_next():
         "metaapi_configured": metaapi.configured,
         "mt5_linux_configured": mt5_linux.configured,
         "token_url": "https://app.metaapi.cloud/api-access/generate-token",
-        "default_server": "Exness-MT5Trial15",
+        "default_server": "Exness-MT5Real32",
         "default_symbol": "XAUUSDm",
         "version": __version__,
     }
@@ -495,9 +495,9 @@ async def exness_servers():
 
     return {
         "servers": EXNESS_SERVERS,
-        "default": "Exness-MT5Trial15",
+        "default": "Exness-MT5Real32",
         "allow_custom": True,
-        "hint_ar": "انسخ اسم السيرفر حرفياً من منطقة العميل في Exness (مثل Exness-MT5Trial15).",
+        "hint_ar": "انسخ اسم السيرفر حرفياً من منطقة العميل في Exness (مثل Exness-MT5Real32).",
         "symbols": list(EXNESS_GOLD_SYMBOLS),
         "default_symbol": "XAUUSDm",
     }
@@ -535,6 +535,7 @@ async def mt5_login(body: Mt5LoginBody, response: Response):
 
     cloud: dict = {"ok": False, "configured": metaapi.configured}
     message = ""
+    cloud_ok = False
     if metaapi.configured and settings.prefer_metaapi:
         try:
             cloud = _provision_cloud_fast(
@@ -544,15 +545,18 @@ async def mt5_login(body: Mt5LoginBody, response: Response):
                 secrets["server"],
                 settings.symbol,
                 secrets.get("metaapi_account_id") or None,
-                timeout_sec=22.0,
+                timeout_sec=28.0,
             )
             if cloud.get("connected"):
+                cloud_ok = True
                 message = "تم الربط السحابي المباشر بـ Exness عبر MetaApi — التنفيذ الحقيقي من التطبيق بدون Windows."
             else:
                 message = (
-                    "تم حفظ الحساب وبدء الطرفية السحابية. الاتصال بالوسيط يكتمل خلال أقل من دقيقة — "
-                    "لا تغلق الصفحة، حدّث من تبويب الربط إن لزم."
+                    "تم حفظ الحساب وبدء الطرفية السحابية لـ "
+                    f"{secrets['server']}. الاتصال بالوسيط قد يستغرق حتى دقيقتين — "
+                    "لا تغلق الصفحة؛ راقب تبويب الربط."
                 )
+                cloud = {**cloud, "ok": True, "pending": True}
         except MetaApiError as e:
             # Clear corrupt MetaApi ids (e.g. numeric 1215) so next attempt recreates
             if "not found" in (e.message or "").lower() or e.code in {"E_BAD_ACCOUNT_ID", "NotFoundError"}:
@@ -561,11 +565,13 @@ async def mt5_login(body: Mt5LoginBody, response: Response):
             if e.code == "E_PROVISION_PENDING":
                 cloud = {"ok": True, "configured": True, "pending": True, "code": e.code}
                 message = e.message
-                # The same provision thread is still running — do not start a duplicate job
             else:
                 cloud = {"ok": False, "configured": True, "error": e.message, "code": e.code, "details": e.details}
                 message = arabic_metaapi_error(e)
-                store.set_kv("metaapi_last_error", {"error": e.message, "code": e.code, "ts": __import__("time").time()})
+                store.set_kv(
+                    "metaapi_last_error",
+                    {"error": e.message, "code": e.code, "ts": time.time(), "server": secrets["server"]},
+                )
             store.log_event("metaapi_login_error", {"user": user["username"], "error": e.message, "code": e.code})
     else:
         message = (
@@ -574,6 +580,7 @@ async def mt5_login(body: Mt5LoginBody, response: Response):
         )
 
     desk.account = bridge.connect()
+    cloud_ok = cloud_ok or bool(desk.account.connected)
     # Refresh public user with metaapi fields
     result["user"] = auth.public_user(user["id"])
 
@@ -582,9 +589,6 @@ async def mt5_login(body: Mt5LoginBody, response: Response):
         if desk.risk.state.halted:
             desk.risk.reset_day(desk.account.equity or settings.paper_balance, note="mt5_login_reset")
         started = desk.start_desk()
-    elif body.auto_start and not desk.account.connected:
-        # Arm later — still allow start attempt after cloud connects
-        pass
 
     store.log_event(
         "mt5_login",
@@ -595,11 +599,14 @@ async def mt5_login(body: Mt5LoginBody, response: Response):
             "execution": bridge.execution or "pending",
             "metaapi_account_id": bridge.metaapi_account_id,
             "connected": desk.account.connected,
+            "cloud_ok": cloud_ok,
         },
     )
     cloud_status = _cloud_status_for_user(user["id"])
     return {
         "ok": True,
+        "cloud_ok": cloud_ok,
+        "live_execution": bool(desk.account.connected and bridge.is_live_execution()),
         **result,
         "cloud": cloud,
         "bridge": cloud_status,  # UI uses this pill — now cloud-first
@@ -607,6 +614,7 @@ async def mt5_login(body: Mt5LoginBody, response: Response):
         "started": started,
         "execution": bridge.execution or ("metaapi" if bridge.metaapi_account_id else "pending"),
         "message": message,
+        "provision": _get_provision_state(),
     }
 
 
@@ -785,7 +793,7 @@ def _readiness(snap: dict) -> dict:
         ),
         "next_for_exness": [
             "الصق توكن MetaApi (ويفضّل أيضاً METAAPI_TOKEN في Render حتى لا يُمسح بعد النشر)",
-            "أدخل رقم Exness + كلمة مرور التداول + السيرفر (مثل Exness-MT5Trial15)",
+            "أدخل رقم Exness + كلمة مرور التداول + السيرفر (مثل Exness-MT5Real32)",
             "انتظر «MetaApi: متصل Exness» والرصيد الحقيقي (ليس 10000 ورقي)",
             "ثم اضغط ابدأ التداول — لن تُفتح صفقات وهمية",
         ],

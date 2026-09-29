@@ -43,7 +43,7 @@ class Settings:
     # MT5 / Exness — never commit secrets; set via Render/VPS env
     mt5_login: int = field(default_factory=lambda: _env_int("MT5_LOGIN", 0))
     mt5_password: str = field(default_factory=lambda: os.getenv("MT5_PASSWORD", ""))
-    mt5_server: str = field(default_factory=lambda: os.getenv("MT5_SERVER", "Exness-MT5Real"))
+    mt5_server: str = field(default_factory=lambda: os.getenv("MT5_SERVER", "Exness-MT5Real32"))
     mt5_path: str = field(default_factory=lambda: os.getenv("MT5_PATH", ""))
 
     # MetaApi cloud — real Exness execution from Linux/Render (no Windows)
