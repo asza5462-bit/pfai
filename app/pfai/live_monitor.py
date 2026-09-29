@@ -16,7 +16,7 @@ log = logging.getLogger("pfai.live_monitor")
 class LiveSystemMonitor:
     """Strong live supervisor bound into evolution / chat / boot."""
 
-    VERSION = "8.13.0"
+    VERSION = "8.14.0"
 
     def __init__(
         self,
@@ -206,9 +206,9 @@ class LiveSystemMonitor:
         return summary
 
     def _loop(self) -> None:
-        # Immediate first pulse so 24/7 is visible
+        # Soft first pulse (no LoRA) so free-tier cold wake stays responsive
         try:
-            self.pulse(deep=False, train_if_eligible=True)
+            self.pulse(deep=False, train_if_eligible=False)
         except Exception as exc:
             log.warning("live_monitor first pulse failed: %s", exc)
         deep_every = 8

@@ -1,6 +1,6 @@
 # PFAI Project Memory
 
-Last updated: 2026-09-29 (PFAI 8.13.0 — 24/7 live monitor + continuous learn/train)
+Last updated: 2026-09-29 (PFAI 8.14.0 — cold-start wake/retry + Claude-grade ops)
 
 ## Snapshot
 

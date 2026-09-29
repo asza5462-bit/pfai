@@ -4,6 +4,7 @@ from fastapi.exceptions import RequestValidationError
 from fastapi.responses import JSONResponse
 import os
 import re
+import threading
 import time
 from fastapi.responses import FileResponse
 from pathlib import Path
@@ -1551,14 +1552,17 @@ TOOL_ROUTER.handlers['live_monitor_status'] = _tool_live_monitor_status
 TOOL_ROUTER.handlers['live_monitor_pulse'] = _tool_live_monitor_pulse
 
 def _pfai_startup_live_monitor() -> None:
+    """Start monitor worker without blocking bind; first heavy pulse runs in-thread."""
     try:
         st = LIVE_MONITOR.start()
-        # Immediate deep-ish ensure on boot
-        pulse = LIVE_MONITOR.pulse(deep=False, train_if_eligible=True)
-        log.info(
-            'startup: live monitor alive=%s pulses=%s continuous=%s',
-            st.get('alive'), pulse.get('continuous_alive'), pulse.get('continuous_alive'),
-        )
+        # Soft ensure only — skip LoRA on cold boot so free-tier wake stays fast
+        def _soft():
+            try:
+                LIVE_MONITOR.pulse(deep=False, train_if_eligible=False)
+            except Exception as exc:
+                log.warning('startup: live monitor soft pulse failed: %s', exc)
+        threading.Thread(target=_soft, name='pfai-live-monitor-soft', daemon=True).start()
+        log.info('startup: live monitor started alive=%s (soft pulse deferred)', st.get('alive'))
     except Exception as exc:
         log.warning('startup: live monitor failed: %s', exc)
 

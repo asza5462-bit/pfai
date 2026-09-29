@@ -2,7 +2,7 @@
 <html lang="ar" dir="rtl">
 <head>
 <meta charset="utf-8"><meta name="viewport" content="width=device-width,initial-scale=1">
-<meta name="theme-color" content="#07111f"><title>PFAI v8.11.0 — Master Chat Control</title>
+<meta name="theme-color" content="#07111f"><title>PFAI v8.14.0 — Master Chat Control</title>
 <style>
 :root{--bg:#050a12;--panel:#0a1421;--panel2:#0e1b2b;--line:#1b3047;--text:#eef7ff;--muted:#8fa6ba;--accent:#66b7ff;--ok:#35d39a;--warn:#ffd166;--bad:#ff6677;--shadow:0 18px 50px #0007}
 *{box-sizing:border-box}html,body{margin:0;min-height:100%;background:radial-gradient(circle at 10% 0,#123050 0,#050a12 38%);color:var(--text);font-family:Inter,system-ui,-apple-system,"Segoe UI",Tahoma,Arial,sans-serif}button,input,textarea,select{font:inherit}button{cursor:pointer}
@@ -16,7 +16,7 @@
 </style></head>
 <body>
 <div class="app">
-<aside class="side"><div class="brand"><strong>PFAI v8.11.0</strong><small>Master Chat · Code · Web</small></div><nav class="nav" id="nav"></nav><div class="side-foot"><div class="pill"><i class="dot" id="sideDot"></i><span id="sideStatus">جاري الاتصال</span></div></div></aside>
+<aside class="side"><div class="brand"><strong>PFAI v8.14.0</strong><small>Master Chat · Code · Web</small></div><nav class="nav" id="nav"></nav><div class="side-foot"><div class="pill"><i class="dot" id="sideDot"></i><span id="sideStatus">جاري الاتصال</span></div></div></aside>
 <main class="main">
 <header class="top"><div class="title"><h1 id="pageTitle">AI Command Chat</h1><p id="pageSubtitle">العقل المركزي للتعامل مع قلب PFAI</p></div><div class="actions"><span class="pill"><i class="dot" id="topDot"></i><span id="topStatus">غير متصل</span></span><button class="btn" onclick="refreshAll()">↻ تحديث</button></div></header>
 
@@ -53,14 +53,55 @@
 <div id="toast" class="toast"></div>
 <script>
 const NAV=[['chat','✦','AI Command Chat'],['academy','</>','Coding Academy'],['dashboard','⌂','الرئيسية'],['live','◉','Live System'],['learning','↻','التعلم المستمر'],['training','Δ','تدريب النماذج'],['code','</>','Code Learning'],['autofix','⚙','Auto-Fix'],['knowledge','◈','Knowledge & Memory'],['analytics','▥','Metrics & Analytics'],['logs','≡','Logs & Audit'],['recovery','↺','Recovery Center'],['deploy','⇧','Deployments'],['security','◇','Security Center'],['api','{}','API Console'],['modules','▦','Modules'],['settings','⚙','الإعدادات']];
-const TITLES={chat:['AI Command Chat','PFAI 8.11.0 — تحكم كامل · أكواد قوية · ويب حي · تعلم/تدريب'],academy:['Coding Academy','تعليم · تدريب · مشاريع · مراجعة · Sandbox'],dashboard:['لوحة القيادة','مركز التحكم التشغيلي لـ PFAI v8.11.0'],live:['Live System','مراقبة حية للنظام والـBackend'],learning:['التعلم المستمر','Continuous Learning + Governed Promotion'],training:['تدريب النماذج','Autonomous Training · Datasets · Checkpoints · Rollback'],code:['Code Learning','Ground-truth execution + Best-of-N + Solve'],autofix:['Auto-Fix','Regression Capture والتحقق الفعلي'],knowledge:['Knowledge & Memory','الذاكرة وقاعدة المعرفة'],analytics:['Metrics & Analytics','إحصاءات من PFAI Runtime'],logs:['Logs & Audit','سجل التدقيق المتاح من الـBackend'],recovery:['Recovery Center','سلامة السجل واختبارات الاسترداد'],deploy:['Deployments','Canary / Promote / Rollback'],security:['Security Center','Owner Gate وطبقات الأمان'],api:['API Console','استدعاء مسارات PFAI الحقيقية'],modules:['Modules','Capability Inventory'],settings:['Settings','إعدادات الاتصال والواجهة']};
+const TITLES={chat:['AI Command Chat','PFAI 8.14.0 — عقل حي · تعلم/تدريب 24/7 · مراقب حي'],academy:['Coding Academy','تعليم · تدريب · مشاريع · مراجعة · Sandbox'],dashboard:['لوحة القيادة','مركز التحكم التشغيلي لـ PFAI v8.14.0'],live:['Live System','مراقبة حية للنظام والـBackend'],learning:['التعلم المستمر','Continuous Learning + Governed Promotion'],training:['تدريب النماذج','Autonomous Training · Datasets · Checkpoints · Rollback'],code:['Code Learning','Ground-truth execution + Best-of-N + Solve'],autofix:['Auto-Fix','Regression Capture والتحقق الفعلي'],knowledge:['Knowledge & Memory','الذاكرة وقاعدة المعرفة'],analytics:['Metrics & Analytics','إحصاءات من PFAI Runtime'],logs:['Logs & Audit','سجل التدقيق المتاح من الـBackend'],recovery:['Recovery Center','سلامة السجل واختبارات الاسترداد'],deploy:['Deployments','Canary / Promote / Rollback'],security:['Security Center','Owner Gate وطبقات الأمان'],api:['API Console','استدعاء مسارات PFAI الحقيقية'],modules:['Modules','Capability Inventory'],settings:['Settings','إعدادات الاتصال والواجهة']};
 let BASE=localStorage.getItem('pfai_base_url')||location.origin; let OWNER_AUTHED=true; let PUBLIC_ACCESS=true; let timer=null; let systemCache=null; let OWNER_SETUP_REQUIRED=false;
 const $=id=>document.getElementById(id); const esc=x=>String(x??'').replace(/[&<>"']/g,m=>({'&':'&amp;','<':'&lt;','>':'&gt;','"':'&quot;',"'":'&#39;'}[m]));
 function nav(){ $('nav').innerHTML=NAV.map(([id,icon,label])=>`<button data-id="${id}" onclick="show('${id}',this)"><b>${icon}</b> <span>${label}</span></button>`).join(''); }
 function show(id,btn){document.querySelectorAll('.view').forEach(v=>v.classList.remove('active'));$(id).classList.add('active');document.querySelectorAll('.nav button').forEach(b=>b.classList.remove('active'));(btn||document.querySelector(`[data-id="${id}"]`))?.classList.add('active');$('pageTitle').textContent=TITLES[id][0];$('pageSubtitle').textContent=TITLES[id][1]; if(id==='chat') loadCommandChat(); if(id==='academy') loadAcademy(); if(id==='live') loadLive(); if(id==='learning') loadLearning(); if(id==='training') loadTraining(); if(id==='autofix') loadRegressions(); if(id==='analytics') loadMetrics(); if(id==='recovery') loadRecovery(); if(id==='deploy') loadDeployments(); if(id==='security') loadSecurity(); if(id==='modules') loadModules(); if(id==='logs') loadLogs();}
 function toast(msg,bad=false){const t=$('toast');t.textContent=msg;t.style.display='block';t.className='toast '+(bad?'bad':'');clearTimeout(window.__toast);window.__toast=setTimeout(()=>t.style.display='none',3500)}
-function setConn(ok){['topDot','sideDot'].forEach(x=>$(x).className='dot '+(ok?'ok':'bad'));$('topStatus').textContent=ok?'PFAI Backend متصل':'Backend Offline';$('sideStatus').textContent=ok?'متصل':'غير متصل'}
-async function api(path,opts={}){const headers={'Accept':'application/json',...(opts.headers||{})};if(opts.body && typeof opts.body!=='string'){headers['Content-Type']='application/json';opts.body=JSON.stringify(opts.body)};let r;try{r=await fetch(BASE.replace(/\/$/,'')+path,{...opts,headers,credentials:'include'})}catch(e){setConn(false);throw new Error('تعذر الاتصال بالـBackend: '+e.message)}const txt=await r.text();let data;try{data=txt?JSON.parse(txt):{}}catch{data={raw:txt}}if(!r.ok){throw new Error((typeof data.detail==='string'?data.detail:data.message)||`HTTP ${r.status}`)}setConn(true);return data}
+function setConn(ok,label){['topDot','sideDot'].forEach(x=>$(x).className='dot '+(ok?'ok':'bad'));$('topStatus').textContent=label||(ok?'PFAI Backend متصل':'Backend Offline');$('sideStatus').textContent=ok?'متصل':(label||'غير متصل')}
+const sleep=ms=>new Promise(r=>setTimeout(r,ms));
+async function wakeBackend(tries=8){
+  setConn(false,'جاري إيقاظ الخادم…');
+  for(let i=0;i<tries;i++){
+    try{
+      const ctrl=new AbortController();
+      const t=setTimeout(()=>ctrl.abort(),20000);
+      const r=await fetch(BASE.replace(/\/$/,'')+'/health',{credentials:'include',cache:'no-store',signal:ctrl.signal});
+      clearTimeout(t);
+      if(r.ok){setConn(true);return true}
+    }catch(_){}
+    await sleep(Math.min(12000,1800+i*1400));
+  }
+  return false;
+}
+async function api(path,opts={}){
+  const headers={'Accept':'application/json',...(opts.headers||{})};
+  let body=opts.body;
+  if(body && typeof body!=='string'){headers['Content-Type']='application/json';body=JSON.stringify(body)}
+  const url=BASE.replace(/\/$/,'')+path;
+  let lastErr=null;
+  for(let attempt=0;attempt<5;attempt++){
+    try{
+      const ctrl=new AbortController();
+      const t=setTimeout(()=>ctrl.abort(), path==='/chat/message'?180000:90000);
+      const r=await fetch(url,{...opts,body,headers,credentials:'include',signal:ctrl.signal});
+      clearTimeout(t);
+      const txt=await r.text();
+      let data;try{data=txt?JSON.parse(txt):{}}catch{data={raw:txt}}
+      if(!r.ok){throw new Error((typeof data.detail==='string'?data.detail:data.message)||`HTTP ${r.status}`)}
+      setConn(true);return data;
+    }catch(e){
+      lastErr=e;
+      setConn(false,'جاري إعادة الاتصال…');
+      if(attempt===0) toast('الخادم يستيقظ من وضع التوقف المجاني — نعيد المحاولة…');
+      const woke=await wakeBackend(attempt===0?7:4);
+      if(!woke && attempt>=3) break;
+    }
+  }
+  setConn(false);
+  throw new Error('تعذر الاتصال بالـBackend بعد إيقاظه: '+(lastErr&&lastErr.message||'Load failed'));
+}
 function renderStatus(name,value){let s=String(value??'—');let cls=/ok|healthy|running|active|ready|valid|configured|enabled|true/i.test(s)?'ok':/fail|error|offline|stopped|false/i.test(s)?'bad':'warn';return `<div class="status-card"><strong>${esc(name)}</strong><span class="${cls}">${esc(s)}</span></div>`}
 async function refreshAll(){try{systemCache=await api('/system');renderSystem(systemCache);await Promise.all([loadLearning(),loadRecovery(),loadDeployments(),loadModules(),loadSecurity(),loadRegressions()]);$('lastUpdate').textContent='آخر تحديث: '+new Date().toLocaleTimeString('ar-SA')}catch(e){setConn(false);toast(e.message,true)}}
 function renderSystem(s){const h=s.health||{},m=s.metrics||{};$('kHealth').textContent=h.status||'—';$('kHealth').className='metric '+(/ok|healthy/i.test(h.status||'')?'ok':'warn');$('kHealthSub').textContent=h.model?.version||h.model?.artifact||'Runtime';$('kVersion').textContent=s.version||h.version||'—';$('kRequests').textContent=m.counters?.requests_total??0;$('kModel').textContent=h.model?.version||h.model?.artifact||'—';const comps={Runtime:h.status,Model:h.model?.version||h.model?.artifact,Recovery:s.recovery?.history_valid?'Ledger valid':'Ledger invalid',Requests:m.counters?.requests_total??0,Deployments:(s.deployments||[]).length,Version:s.version};$('statusGrid').innerHTML=Object.entries(comps).map(([k,v])=>renderStatus(k,v)).join('');$('metricsSummary').textContent=JSON.stringify(m,null,2);$('deploySummary').textContent=JSON.stringify((s.deployments||[]).slice(-5),null,2);}
@@ -110,7 +151,8 @@ function privilegedBlocked(){return false}
 function saveBaseUrl(){BASE=$('baseUrl').value.trim().replace(/\/$/,'')||location.origin;localStorage.setItem('pfai_base_url',BASE);toast('تم حفظ Backend URL');refreshAll()}
 function saveRefreshInterval(){const n=Math.max(5,Number($('refreshInterval').value)||10);localStorage.setItem('pfai_refresh_interval',n);startTimer();toast('تم حفظ معدل التحديث')}
 function startTimer(){clearInterval(timer);const n=Number(localStorage.getItem('pfai_refresh_interval')||10);timer=setInterval(()=>{if(document.visibilityState==='visible')refreshAll()},n*1000)}
-function boot(){sessionStorage.removeItem('pfai_owner_secret');localStorage.removeItem('pfai_owner_secret');nav();initApi();$('baseUrl').value=BASE;$('refreshInterval').value=localStorage.getItem('pfai_refresh_interval')||10;document.querySelector('[data-id="chat"]').classList.add('active');if(window.initCommandChat)initCommandChat();refreshOwnerStatus().then(()=>refreshAll());startTimer()}
+function startKeepAlive(){clearInterval(window.__pfaiKeep);window.__pfaiKeep=setInterval(()=>{if(document.visibilityState!=='visible')return;fetch(BASE.replace(/\/$/,'')+'/health',{credentials:'include',cache:'no-store'}).then(r=>{if(r.ok)setConn(true)}).catch(()=>{})},180000)}
+async function boot(){sessionStorage.removeItem('pfai_owner_secret');localStorage.removeItem('pfai_owner_secret');nav();initApi();$('baseUrl').value=BASE;$('refreshInterval').value=localStorage.getItem('pfai_refresh_interval')||10;document.querySelector('[data-id="chat"]').classList.add('active');if(window.initCommandChat)initCommandChat();setConn(false,'جاري إيقاظ الخادم…');await wakeBackend(8);refreshOwnerStatus().then(()=>refreshAll());startTimer();startKeepAlive()}
 boot();
 </script>
 <script src="/assets/chat.js"></script>

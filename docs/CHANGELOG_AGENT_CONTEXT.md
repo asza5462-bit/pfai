@@ -1,5 +1,19 @@
 # Agent Context Changelog
 
+## 2026-09-29 — PFAI 8.14: cold-start resilience + Claude-grade ops
+
+### Implemented
+- Frontend `wakeBackend` + multi-retry API (free-tier sleep → auto wake)
+- Keepalive `/health` every 3 min while tab visible
+- Ops short-circuit: «كيف حالة النظام» → natural live pulse (no JSON fog)
+- Softer live-monitor boot (defer LoRA on cold start) for faster wake
+- UI version labels → 8.14.0; stronger Anthropic compose system prompt
+- Tests: `test_v147_resilience_ops.py`
+
+### Honesty
+- Render free tier still sleeps when idle — wake/retry hides most Load failed
+- Weight promotion still never auto; Claude API used only when key present
+
 ## 2026-09-29 — PFAI 8.13: 24/7 live monitor + continuous learn/train
 
 ### Implemented

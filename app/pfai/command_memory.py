@@ -36,7 +36,7 @@ APPROVED_KINDS = {
 
 
 class CommandMemoryService:
-    VERSION = "8.13.0"
+    VERSION = "8.14.0"
 
     def __init__(self, memory: MemoryStore, chat_db_path: str = "data/command_chat.sqlite3"):
         self.memory = memory

@@ -103,10 +103,19 @@ def comprehend(
         intent = "memory_mind"
         goals.append("legendary_recall")
         strategy = "memory_first_answer"
-    elif re.search(r"تحكم|status|صحة|health|نظام", text, re.I):
+    elif re.search(
+        r"تحكم|status|صحة|health|نظام|كيف\s*حال|وضع\s*ال?نظام|فحص",
+        text,
+        re.I,
+    ):
         intent = "ops_status"
         goals.append("accurate_ops_picture")
         strategy = "snapshot_precision"
+        latent = (
+            "صورة تشغيلية دقيقة الآن من القلب الحي"
+            if ar else
+            "precise live operational picture from the heart"
+        )
 
     # Goals / desires
     if re.search(r"أريد|اريد|أريدك|اريدك|I want|make it|طور|حسّن|حسن", text, re.I):

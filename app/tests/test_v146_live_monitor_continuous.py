@@ -131,10 +131,10 @@ class TestLiveMonitorAPI(unittest.TestCase):
         cls.monitor = LIVE_MONITOR
         cls.continuous = CONTINUOUS
 
-    def test_version_813(self):
+    def test_version_81x(self):
         from pfai import __version__
-        self.assertEqual(__version__, "8.13.0")
-        self.assertEqual(self.client.get("/health").json().get("version"), "8.13.0")
+        self.assertTrue(__version__.startswith("8.1"))
+        self.assertEqual(self.client.get("/health").json().get("version"), __version__)
 
     def test_tools_include_live_monitor(self):
         r = self.client.get("/chat/tools")

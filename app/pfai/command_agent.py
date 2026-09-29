@@ -187,6 +187,45 @@ class CommandAgent:
                 cid, reply, timeline, mem_ctx, understanding, lang, memory_direct=True,
             )
 
+        # Ops / system status — concise live pulse (no tool JSON fog)
+        from .ops_pulse import is_ops_status_question, ops_status_reply
+        if is_ops_status_question(message) or understanding.get("intent") == "ops_status":
+            mark("executing", "Gathering live system pulse")
+            health = cont = mon = evo = {}
+            try:
+                health = self.router.execute("health_check", {}, approved=False, actor=owner) or {}
+                if health.get("ok") and isinstance(health.get("result"), dict):
+                    health = health["result"]
+            except Exception:
+                health = {"status": "unknown"}
+            try:
+                cont_r = self.router.execute("continuous_status", {}, approved=False, actor=owner) or {}
+                cont = cont_r.get("result") if cont_r.get("ok") and isinstance(cont_r.get("result"), dict) else cont_r
+            except Exception:
+                cont = {}
+            try:
+                mon_r = self.router.execute("live_monitor_status", {}, approved=False, actor=owner) or {}
+                mon = mon_r.get("result") if mon_r.get("ok") and isinstance(mon_r.get("result"), dict) else mon_r
+            except Exception:
+                mon = {}
+            try:
+                evo_r = self.router.execute("evolution_status", {}, approved=False, actor=owner) or {}
+                evo = evo_r.get("result") if evo_r.get("ok") and isinstance(evo_r.get("result"), dict) else evo_r
+            except Exception:
+                evo = {}
+            from . import __version__ as _ver
+            mark("completed", "Ops pulse ready")
+            reply = ops_status_reply(
+                language=lang, health=health if isinstance(health, dict) else {},
+                continuous=cont if isinstance(cont, dict) else {},
+                monitor=mon if isinstance(mon, dict) else {},
+                evolution=evo if isinstance(evo, dict) else {},
+                version=str(_ver),
+            )
+            return self._finalize_direct(
+                cid, reply, timeline, mem_ctx, understanding, lang, memory_direct=False,
+            )
+
         # Correction conversational shortcut
         if _is_correction_offer(message, dialog):
             return self._handle_correction_capture(cid, owner, message, lang, timeline, mark)
@@ -519,11 +558,11 @@ class CommandAgent:
             from .deep_comprehension import comprehension_block
             u = understanding or {}
             prompt = (
-                "Compose an elite PFAI Command Chat reply. Natural prose only — never dump JSON, "
-                "never dump internal comprehension fields, never invent metrics or web facts. "
-                "Answer the user directly with precision. Weave memory only when relevant. "
-                "Summarize tool outcomes in plain language. One clear next step if useful. "
-                "Prefer the owner's language. No fluff.\n"
+                "Compose a frontier-quality PFAI reply (Claude-level clarity and judgment). "
+                "Natural prose only — never dump JSON, never dump internal comprehension fields, "
+                "never invent metrics or web facts. Be direct, precise, and useful. "
+                "Weave memory only when relevant. Summarize tool outcomes in plain language. "
+                "One clear next step if useful. Prefer the owner's language. No fluff, no corporate filler.\n"
                 f"Internal comprehension (do NOT paste verbatim): {comprehension_block(u, language=lang)}\n"
                 f"Language hint: {lang}\nMessage: {message}\nMemory:\n{mem_ctx}\n"
                 f"Tool results: {json.dumps(tool_results, ensure_ascii=False, default=str)[:8000]}\n"
@@ -532,8 +571,9 @@ class CommandAgent:
                 return self.model.generate(
                     prompt,
                     system=(
-                        "You are PFAI Brain — a precise, self-aware operator assistant. "
-                        "Sound more capable than typical chatbots. Never claim false capabilities."
+                        "You are PFAI Brain — an elite operator assistant matching or exceeding "
+                        "top frontier chat quality: precise, self-aware, honest about limits. "
+                        "Never invent capabilities. Never silent-promote model weights."
                     ),
                 )
             except Exception as exc:
