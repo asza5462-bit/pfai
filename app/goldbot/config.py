@@ -36,7 +36,7 @@ class Settings:
     )
 
     # Trading
-    symbol: str = field(default_factory=lambda: os.getenv("AURUM_SYMBOL", "XAUUSD"))
+    symbol: str = field(default_factory=lambda: os.getenv("AURUM_SYMBOL", "XAUUSDm"))
     timeframe: str = field(default_factory=lambda: os.getenv("AURUM_TIMEFRAME", "M15"))
     mode: str = field(default_factory=lambda: os.getenv("AURUM_MODE", "paper"))  # paper | mt5
 

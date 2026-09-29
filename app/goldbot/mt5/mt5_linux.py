@@ -132,49 +132,70 @@ class Mt5LinuxClient:
         symbol: str = "XAUUSD",
         comment: str = "AURUM",
     ) -> dict:
-        action = "BUY" if side.lower() == "buy" else "SELL"
-        body = {
-            "action": action,
-            "symbol": symbol,
-            "volume": float(lot),
-            "order_type": "MARKET",
-            "sl": float(sl) if sl else None,
-            "tp": float(tp) if tp else None,
-            "deviation": 40,
-            "magic": int(settings.metaapi_magic or 908070),
-            "comment": (comment or "AURUM")[:31],
-        }
-        try:
-            resp = self._req("POST", "/api/v1/order/send", body, timeout=60)
-        except Mt5LinuxError as e:
-            return {"ok": False, "error": e.message, "mode": "mt5", "execution": "mt5_linux", "details": e.details}
+        from goldbot.mt5.symbols import symbol_candidates
 
-        # Normalize varied response shapes
-        ok = bool(
-            resp.get("success")
-            or resp.get("ok")
-            or str(resp.get("retcode") or "") in {"10009", "10008", "10010", "0"}
-            or resp.get("order")
-            or resp.get("ticket")
-        )
-        ticket = resp.get("order") or resp.get("ticket") or resp.get("order_id") or 0
-        try:
-            ticket_i = int(ticket) if ticket not in (None, "") else 0
-        except (TypeError, ValueError):
-            ticket_i = 0
-        return {
-            "ok": ok,
-            "mode": "mt5",
-            "execution": "mt5_linux",
-            "side": side,
-            "lot": float(lot),
-            "sl": float(sl or 0),
-            "tp": float(tp or 0),
-            "ticket": ticket_i,
-            "price": resp.get("price") or resp.get("price_open"),
-            "error": None if ok else (resp.get("message") or resp.get("comment") or "order failed"),
-            "raw": resp,
-        }
+        action = "BUY" if side.lower() == "buy" else "SELL"
+        last = {"ok": False, "error": "no symbol worked", "mode": "mt5", "execution": "mt5_linux"}
+        for sym in symbol_candidates(symbol):
+            body = {
+                "action": action,
+                "symbol": sym,
+                "volume": float(lot),
+                "order_type": "MARKET",
+                "sl": float(sl) if sl else None,
+                "tp": float(tp) if tp else None,
+                "deviation": 40,
+                "magic": int(settings.metaapi_magic or 908070),
+                "comment": (comment or "AURUM")[:31],
+            }
+            try:
+                resp = self._req("POST", "/api/v1/order/send", body, timeout=60)
+            except Mt5LinuxError as e:
+                last = {
+                    "ok": False,
+                    "error": e.message,
+                    "mode": "mt5",
+                    "execution": "mt5_linux",
+                    "details": e.details,
+                    "symbol": sym,
+                }
+                if "symbol" in (e.message or "").lower():
+                    continue
+                return last
+
+            ok = bool(
+                resp.get("success")
+                or resp.get("ok")
+                or str(resp.get("retcode") or "") in {"10009", "10008", "10010", "0"}
+                or resp.get("order")
+                or resp.get("ticket")
+            )
+            ticket = resp.get("order") or resp.get("ticket") or resp.get("order_id") or 0
+            try:
+                ticket_i = int(ticket) if ticket not in (None, "") else 0
+            except (TypeError, ValueError):
+                ticket_i = 0
+            last = {
+                "ok": ok,
+                "mode": "mt5",
+                "execution": "mt5_linux",
+                "side": side,
+                "lot": float(lot),
+                "sl": float(sl or 0),
+                "tp": float(tp or 0),
+                "ticket": ticket_i,
+                "price": resp.get("price") or resp.get("price_open"),
+                "symbol": sym,
+                "error": None if ok else (resp.get("message") or resp.get("comment") or "order failed"),
+                "raw": resp,
+            }
+            if ok:
+                settings.symbol = sym
+                return last
+            if "symbol" in str(resp.get("message") or "").lower():
+                continue
+            return last
+        return last
 
     def snapshot(self) -> dict:
         try:

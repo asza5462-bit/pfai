@@ -201,7 +201,14 @@ async def login(body: LoginBody, response: Response):
 
 @app.get("/api/exness/servers")
 async def exness_servers():
-    return {"servers": EXNESS_SERVERS, "default": "Exness-MT5Trial"}
+    from goldbot.mt5.symbols import EXNESS_GOLD_SYMBOLS
+
+    return {
+        "servers": EXNESS_SERVERS,
+        "default": "Exness-MT5Trial",
+        "symbols": list(EXNESS_GOLD_SYMBOLS),
+        "default_symbol": "XAUUSDm",
+    }
 
 
 @app.post("/api/auth/mt5-login")
@@ -727,8 +734,8 @@ async def cloud_save_token(
     authorization: str | None = Header(default=None),
     aurum_session: str | None = Cookie(default=None, alias=SESSION_COOKIE),
 ):
-    """Save MetaApi token from the app (encrypted) and optionally validate it."""
-    require_user(authorization, aurum_session)
+    """Save MetaApi token from the app (encrypted), validate, and auto-reconnect Exness."""
+    user = require_user(authorization, aurum_session)
     from goldbot.mt5.metaapi_cloud import save_stored_token
 
     token = body.token.strip()
@@ -745,11 +752,59 @@ async def cloud_save_token(
         except MetaApiError as e:
             raise HTTPException(400, f"التوكن مرفوض من MetaApi: {e.message}")
     store.log_event("metaapi_token_saved", {"ok": True, "accounts": (validated or {}).get("accounts")})
+
+    # Auto-provision Exness cloud terminal if credentials already saved
+    cloud = None
+    started = None
+    secrets = auth.mt5_secrets(user["id"])
+    if secrets.get("login") and secrets.get("password"):
+        try:
+            settings.mode = "mt5"
+            settings.mt5_login = secrets["login"]
+            settings.mt5_password = secrets["password"]
+            settings.mt5_server = secrets["server"]
+            settings.symbol = secrets.get("symbol") or settings.symbol
+            bridge.bind_remote_user(user["id"])
+            cloud = metaapi.ensure_account(
+                str(secrets["login"]),
+                secrets["password"],
+                secrets["server"],
+                symbol=settings.symbol,
+                existing_id=secrets.get("metaapi_account_id") or None,
+                wait=True,
+            )
+            auth.update_settings(
+                user["id"],
+                {
+                    "metaapi_account_id": cloud["account_id"],
+                    "metaapi_region": cloud.get("region") or settings.metaapi_region,
+                    "execution": "metaapi",
+                    "mode": "mt5",
+                },
+            )
+            bridge.bind_metaapi(cloud["account_id"], cloud.get("region"))
+            desk.account = bridge.connect()
+            if desk.account.connected:
+                if desk.risk.state.halted:
+                    desk.risk.reset_day(desk.account.equity or settings.paper_balance, note="token_auto_reconnect")
+                started = desk.start_desk()
+        except MetaApiError as e:
+            store.log_event("metaapi_auto_reconnect_error", {"error": e.message})
+
+    connected = bool(desk.account.connected and bridge.execution == "metaapi")
     return {
         "ok": True,
         "metaapi_configured": True,
         "validated": validated,
-        "message": "تم حفظ توكن MetaApi — أعد ربط Exness الآن للتنفيذ الحقيقي.",
+        "cloud": cloud,
+        "bridge": _cloud_status_for_user(user["id"]),
+        "account": desk.account.to_dict(),
+        "started": started,
+        "message": (
+            "تم التفعيل — متصل بـ Exness وجاهز للتداول"
+            if connected
+            else "تم حفظ التوكن. إن كان حساب Exness محفوظاً سيكتمل الربط خلال ثوانٍ — وإلا سجّل الدخول من شاشة MT5."
+        ),
     }
 
 

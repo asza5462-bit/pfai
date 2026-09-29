@@ -34,8 +34,13 @@
         <label>سيرفر Exness
           <select id="mt5Server"></select>
         </label>
-        <label>الرمز
-          <input id="mt5Symbol" value="XAUUSD" />
+        <label>رمز الذهب على Exness
+          <select id="mt5Symbol">
+            <option value="XAUUSDm" selected>XAUUSDm (الأكثر شيوعاً)</option>
+            <option value="XAUUSD">XAUUSD</option>
+            <option value="XAUUSDc">XAUUSDc</option>
+            <option value="XAUUSDr">XAUUSDr</option>
+          </select>
         </label>
         <label>توكن MetaApi (مرة واحدة — من app.metaapi.cloud)
           <input id="mt5MetaToken" type="password" placeholder="الصق API token هنا إن لم يُحفظ بعد" autocomplete="off" />

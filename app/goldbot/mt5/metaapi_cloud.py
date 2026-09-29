@@ -405,12 +405,26 @@ class MetaApiCloud:
         return data if isinstance(data, list) else []
 
     def symbol_price(self, account_id: str, symbol: str, region: str | None = None) -> dict:
-        data = self._http(
-            "GET",
-            self._client_url(f"/users/current/accounts/{account_id}/symbols/{symbol}/current-price", region),
-            timeout=20,
-        )
-        return data if isinstance(data, dict) else {}
+        from goldbot.mt5.symbols import symbol_candidates
+
+        last_err: Exception | None = None
+        for sym in symbol_candidates(symbol):
+            try:
+                data = self._http(
+                    "GET",
+                    self._client_url(f"/users/current/accounts/{account_id}/symbols/{sym}/current-price", region),
+                    timeout=20,
+                )
+                if isinstance(data, dict) and (data.get("bid") or data.get("ask") or data.get("price")):
+                    data = dict(data)
+                    data["symbol"] = sym
+                    return data
+            except Exception as e:
+                last_err = e
+                continue
+        if last_err:
+            log.warning("symbol_price failed: %s", last_err)
+        return {}
 
     def trade(self, account_id: str, trade: dict, region: str | None = None) -> dict:
         data = self._http(
@@ -435,52 +449,74 @@ class MetaApiCloud:
         comment: str = "AURUM",
         region: str | None = None,
     ) -> dict:
+        from goldbot.mt5.symbols import symbol_candidates
+
         action = "ORDER_TYPE_BUY" if side.lower() == "buy" else "ORDER_TYPE_SELL"
-        payload: dict[str, Any] = {
-            "actionType": action,
-            "symbol": symbol,
-            "volume": float(lot),
-            "comment": (comment or "AURUM")[:31],
-        }
-        if sl and float(sl) > 0:
-            payload["stopLoss"] = float(sl)
-        if tp and float(tp) > 0:
-            payload["takeProfit"] = float(tp)
+        last: dict = {"ok": False, "error": "no symbol worked", "mode": "metaapi"}
+        for sym in symbol_candidates(symbol):
+            payload: dict[str, Any] = {
+                "actionType": action,
+                "symbol": sym,
+                "volume": float(lot),
+                "comment": (comment or "AURUM")[:31],
+            }
+            if sl and float(sl) > 0:
+                payload["stopLoss"] = float(sl)
+            if tp and float(tp) > 0:
+                payload["takeProfit"] = float(tp)
+            try:
+                resp = self.trade(account_id, payload, region=region)
+            except MetaApiError as e:
+                last = {"ok": False, "error": e.message, "code": e.code, "mode": "metaapi", "details": e.details, "symbol": sym}
+                # Unknown symbol → try next candidate
+                msg = (e.message or "").lower()
+                if "symbol" in msg or e.code in {"E_SYMBOL", "ValidationError"}:
+                    continue
+                return last
 
-        try:
-            resp = self.trade(account_id, payload, region=region)
-        except MetaApiError as e:
-            return {"ok": False, "error": e.message, "code": e.code, "mode": "metaapi", "details": e.details}
+            numeric = resp.get("numericCode")
+            string_code = str(resp.get("stringCode") or "")
+            ok = (numeric in SUCCESS_CODES) or (string_code in SUCCESS_STRINGS)
+            if not ok and isinstance(resp.get("numericCode"), (int, float)):
+                ok = int(resp["numericCode"]) in SUCCESS_CODES
+            ticket = resp.get("orderId") or resp.get("positionId") or 0
+            try:
+                ticket_i = int(ticket) if ticket not in (None, "") else 0
+            except (TypeError, ValueError):
+                ticket_i = 0
+            last = {
+                "ok": ok,
+                "mode": "metaapi",
+                "side": side,
+                "lot": float(lot),
+                "sl": float(sl or 0),
+                "tp": float(tp or 0),
+                "ticket": ticket_i,
+                "order_id": resp.get("orderId"),
+                "position_id": resp.get("positionId"),
+                "retcode": numeric,
+                "string_code": string_code,
+                "symbol": sym,
+                "comment": comment,
+                "error": None if ok else (resp.get("message") or string_code or "trade failed"),
+                "raw": resp,
+            }
+            if ok:
+                # remember working Exness symbol for the desk
+                try:
+                    from goldbot.config import settings as _settings
 
-        numeric = resp.get("numericCode")
-        string_code = str(resp.get("stringCode") or "")
-        ok = (numeric in SUCCESS_CODES) or (string_code in SUCCESS_STRINGS)
-        # Some responses nest under 'result'
-        if not ok and isinstance(resp.get("numericCode"), (int, float)):
-            ok = int(resp["numericCode"]) in SUCCESS_CODES
-
-        ticket = resp.get("orderId") or resp.get("positionId") or 0
-        try:
-            ticket_i = int(ticket) if ticket not in (None, "") else 0
-        except (TypeError, ValueError):
-            ticket_i = 0
-
-        return {
-            "ok": ok,
-            "mode": "metaapi",
-            "side": side,
-            "lot": float(lot),
-            "sl": float(sl or 0),
-            "tp": float(tp or 0),
-            "ticket": ticket_i,
-            "order_id": resp.get("orderId"),
-            "position_id": resp.get("positionId"),
-            "retcode": numeric,
-            "string_code": string_code,
-            "comment": comment,
-            "error": None if ok else (resp.get("message") or string_code or "trade failed"),
-            "raw": resp,
-        }
+                    _settings.symbol = sym
+                except Exception:
+                    pass
+                return last
+            # MARKET_UNKNOWN_SYMBOL style → try next
+            if string_code in {"MARKET_UNKNOWN_SYMBOL", "TRADE_RETCODE_INVALID_FILL"} or "symbol" in (
+                resp.get("message") or ""
+            ).lower():
+                continue
+            return last
+        return last
 
     def close_position(self, account_id: str, position_id: str | int, region: str | None = None) -> dict:
         try:
