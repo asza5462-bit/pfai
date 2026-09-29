@@ -96,21 +96,30 @@
     const session = ((sig.schools || []).find((s) => s.school.startsWith("Session")) || {}).detail || {};
 
     const ready = data.readiness || {};
+    const pulse = data.pulse || {};
     $("readyPill").textContent = ready.summary_ar || ready.grade || "—";
     $("readyPill").classList.toggle("on", !!ready.paper_ready);
+    $("statePill").textContent = data.state || "—";
     $("modePill").textContent = acc.mode || data.mode || "—";
     $("symbolPill").textContent = data.symbol || "XAUUSD";
     $("sessionPill").textContent = session.killzone || "—";
     $("qualityPill").textContent = sig.quality ? `جودة ${sig.quality}` : "—";
+    $("latencyPill").textContent = data.latency_ms != null ? `${data.latency_ms}ms` : "—";
     $("price").textContent = (tick.bid || sig.entry || "—");
     $("conf").textContent = sig.confluence != null ? `${Math.round(sig.confluence * 100)}%` : "—";
     $("action").textContent = sig.action || "—";
     $("action").className = biasClass(sig.action === "flat" ? "neutral" : sig.action);
-    $("rr").textContent = sig.reward_risk != null ? sig.reward_risk.toFixed(2) : "—";
+    if ($("pulseBias")) {
+      $("pulseBias").textContent = pulse.bias ? `${pulse.bias} ${Math.round((pulse.score || 0) * 100)}` : "—";
+      $("pulseBias").className = biasClass(pulse.bias || "neutral");
+    }
+    $("rr").textContent = sig.reward_risk != null ? Number(sig.reward_risk).toFixed(2) : "—";
     $("equity").textContent = acc.equity != null ? Number(acc.equity).toFixed(2) : "—";
     $("riskState").textContent = risk.halted ? "متوقف" : "نشط";
     $("narrative").textContent = sig.narrative || data.disclaimer || "";
     $("headline").textContent =
+      data.state === "MANAGING" ? "إدارة ذكية للصفقة الآن" :
+      data.state === "IN_TRADE" ? "صفقة مفتوحة — المكتب يراقبها" :
       sig.action === "buy" ? "تقارب شراء على الذهب" :
       sig.action === "sell" ? "تقارب بيع على الذهب" :
       "انتظار الانضباط — لا صفقة ضعيفة";
@@ -197,6 +206,26 @@
     alert(j.message || "توقف التلقائي");
   };
 
+  async function pulse() {
+    try {
+      const r = await fetch("/api/pulse");
+      const j = await r.json();
+      if ($("statePill")) $("statePill").textContent = j.state || "—";
+      if ($("latencyPill")) $("latencyPill").textContent = j.elapsed_ms != null ? `${j.elapsed_ms}ms` : "—";
+      if (j.tick && $("price")) $("price").textContent = j.tick.bid;
+      if (j.pulse && $("pulseBias")) {
+        $("pulseBias").textContent = `${j.pulse.bias} ${Math.round((j.pulse.score || 0) * 100)}`;
+        $("pulseBias").className = biasClass(j.pulse.bias || "neutral");
+      }
+      if (j.account && $("equity")) $("equity").textContent = Number(j.account.equity).toFixed(2);
+      if ((j.manage && (j.manage.closed || []).length) || j.executed_pending) {
+        await loadTrades();
+        await refresh();
+      }
+    } catch (_) { /* ignore transient */ }
+  }
+
   refresh();
-  setInterval(refresh, 20000);
+  setInterval(refresh, 8000);
+  setInterval(pulse, 1000);
 })();

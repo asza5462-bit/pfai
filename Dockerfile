@@ -8,7 +8,10 @@ ENV PYTHONDONTWRITEBYTECODE=1 \
     AURUM_SYMBOL=XAUUSD \
     AURUM_AUTO_TRADE=true \
     AURUM_MIN_CONFLUENCE=0.62 \
-    AURUM_LOOP_SECONDS=20
+    AURUM_LOOP_SECONDS=6 \
+    AURUM_TICK_SECONDS=0.5 \
+    AURUM_PULSE_CONFIRM=true \
+    AURUM_COOLDOWN_SEC=120
 WORKDIR /app
 COPY app/requirements.txt /app/requirements.txt
 RUN pip install --no-cache-dir -r /app/requirements.txt

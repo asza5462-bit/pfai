@@ -69,6 +69,8 @@ async def health():
         "symbol": settings.symbol,
         "mode": desk.account.mode,
         "auto_trade": desk.auto_trade,
+        "state": desk.state,
+        "tick_seconds": settings.tick_seconds,
     }
 
 
@@ -135,7 +137,13 @@ async def ready():
 
 @app.post("/api/scan")
 async def scan():
-    return desk.scan()
+    return desk.scan(full=True)
+
+
+@app.get("/api/pulse")
+async def pulse():
+    """Sub-second analysis + smart trade management snapshot."""
+    return desk.pulse_tick()
 
 
 @app.post("/api/start")

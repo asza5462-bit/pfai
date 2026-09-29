@@ -96,6 +96,23 @@ class DeskStore:
                 (status, float(pnl), int(trade_id)),
             )
 
+    def update_trade(self, trade_id: int, **fields) -> None:
+        allowed = {"sl", "tp", "lot", "status", "pnl", "meta", "entry"}
+        cols = []
+        vals = []
+        for k, v in fields.items():
+            if k not in allowed:
+                continue
+            if k == "meta" and not isinstance(v, str):
+                v = json.dumps(v, ensure_ascii=False)
+            cols.append(f"{k}=?")
+            vals.append(v)
+        if not cols:
+            return
+        vals.append(int(trade_id))
+        with self._conn() as c:
+            c.execute(f"UPDATE trades SET {', '.join(cols)} WHERE id=?", vals)
+
     def recent_events(self, limit: int = 40) -> list[dict]:
         with self._conn() as c:
             rows = c.execute("SELECT * FROM events ORDER BY id DESC LIMIT ?", (limit,)).fetchall()

@@ -52,10 +52,15 @@ class Settings:
     max_open_trades: int = field(default_factory=lambda: _env_int("AURUM_MAX_OPEN", 1))
     min_reward_risk: float = field(default_factory=lambda: _env_float("AURUM_MIN_RR", 2.2))
     max_spread_points: float = field(default_factory=lambda: _env_float("AURUM_MAX_SPREAD", 35.0))
-    min_confluence: float = field(default_factory=lambda: _env_float("AURUM_MIN_CONFLUENCE", 0.72))
-    cooldown_seconds: int = field(default_factory=lambda: _env_int("AURUM_COOLDOWN_SEC", 900))
+    min_confluence: float = field(default_factory=lambda: _env_float("AURUM_MIN_CONFLUENCE", 0.62))
+    cooldown_seconds: int = field(default_factory=lambda: _env_int("AURUM_COOLDOWN_SEC", 120))
     auto_trade: bool = field(default_factory=lambda: _env_bool("AURUM_AUTO_TRADE", False))
-    loop_seconds: int = field(default_factory=lambda: _env_int("AURUM_LOOP_SECONDS", 30))
+    # Dual-loop cadence: fast pulse/manage + slower strategy scan
+    loop_seconds: float = field(default_factory=lambda: _env_float("AURUM_LOOP_SECONDS", 6.0))
+    tick_seconds: float = field(default_factory=lambda: _env_float("AURUM_TICK_SECONDS", 0.5))
+    require_pulse_confirm: bool = field(default_factory=lambda: _env_bool("AURUM_PULSE_CONFIRM", True))
+    max_hold_seconds: int = field(default_factory=lambda: _env_int("AURUM_MAX_HOLD_SEC", 10800))
+    max_chase_r: float = field(default_factory=lambda: _env_float("AURUM_MAX_CHASE_R", 0.35))
 
     # Paper account
     paper_balance: float = field(default_factory=lambda: _env_float("AURUM_PAPER_BALANCE", 10_000.0))

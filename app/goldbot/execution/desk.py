@@ -1,13 +1,16 @@
-"""AURUM trading desk — scan → confluence → risk → execute loop."""
+"""AURUM trading desk — dual-loop fast pulse + smart lifecycle."""
 from __future__ import annotations
 
 import asyncio
 import logging
 import threading
+import time
 from typing import Any
 
 from goldbot.brain.confluence import build_signal
+from goldbot.brain.fast_pulse import fast_pulse
 from goldbot.config import settings
+from goldbot.execution.smart_exits import run_smart_manager
 from goldbot.mt5.bridge import bridge
 from goldbot.risk.manager import RiskManager
 from goldbot.storage.state import store
@@ -18,18 +21,34 @@ log = logging.getLogger("aurum.desk")
 class TradingDesk:
     def __init__(self) -> None:
         self.risk = RiskManager()
-        self._lock = threading.Lock()
+        self._lock = threading.RLock()
         self._task: asyncio.Task | None = None
         self._running = False
         self.armed = False
+        self.state = "IDLE"  # IDLE | SCANNING | ARMED | IN_TRADE | MANAGING
         self.last: dict[str, Any] = {}
+        self.last_pulse: dict[str, Any] = {}
+        self.last_manage: dict[str, Any] = {}
+        self._last_full_scan = 0.0
+        self._pending_signal: dict[str, Any] | None = None
         self.account = bridge.connect()
-        # Restore open-trade count into risk desk
         opens = store.open_trades()
         self.risk.state.open_trades = len(opens)
+        if opens:
+            self.state = "IN_TRADE"
         if settings.auto_trade:
             store.set_kv("auto_trade", True)
-        store.log_event("boot", {"mode": self.account.mode, "detail": self.account.detail, "auto_trade": self.auto_trade})
+            self.armed = True
+            self.state = "ARMED" if not opens else "IN_TRADE"
+        store.log_event(
+            "boot",
+            {
+                "mode": self.account.mode,
+                "detail": self.account.detail,
+                "auto_trade": self.auto_trade,
+                "tick_seconds": settings.tick_seconds,
+            },
+        )
 
     @property
     def auto_trade(self) -> bool:
@@ -37,116 +56,242 @@ class TradingDesk:
 
     def set_auto_trade(self, enabled: bool) -> None:
         store.set_kv("auto_trade", bool(enabled))
+        self.armed = bool(enabled)
+        if enabled and self.state == "IDLE":
+            self.state = "ARMED"
+        if not enabled and not store.open_trades():
+            self.state = "IDLE"
         store.log_event("auto_trade", {"enabled": bool(enabled)})
 
     def start_desk(self) -> dict:
-        """Arm the desk: auto-trade on + immediate scan/execute attempt."""
         self.armed = True
         self.set_auto_trade(True)
+        self.state = "ARMED"
         self.start_background()
-        snap = self.scan()
+        snap = self.scan(full=True)
         executed = None
         if snap["execution_gate"]["allowed"] and snap["signal"]["action"] != "flat":
-            executed = self.execute_signal(force=False)
-        store.log_event("desk_start", {"armed": True, "auto_trade": True, "action": snap["signal"]["action"]})
+            if snap.get("pulse_confirm", True):
+                executed = self.execute_signal(force=False)
         return {
             "ok": True,
             "armed": True,
             "auto_trade": True,
             "mode": self.account.mode,
+            "state": self.state,
             "scan": snap,
             "executed": executed,
-            "message": "المكتب يعمل الآن — يمسح الذهب وينفّذ عند اكتمال التقارب وإجازة المخاطر.",
+            "message": "المكتب السريع يعمل — تحليل بأجزاء الثانية + إدارة ذكية للفتح والإغلاق.",
         }
 
-    def manage_open_trades(self, bid: float, ask: float) -> list[dict]:
-        """Paper SL/TP manager — closes positions when levels are touched."""
-        closed: list[dict] = []
-        for t in store.open_trades():
-            if (t.get("mode") or "paper") != "paper":
-                continue
-            side = t.get("side")
-            entry = float(t.get("entry") or 0)
-            sl = float(t.get("sl") or 0)
-            tp = float(t.get("tp") or 0)
-            lot = float(t.get("lot") or 0.01)
-            hit = None
-            exit_px = bid
-            if side == "buy":
-                if sl and bid <= sl:
-                    hit, exit_px = "sl", bid
-                elif tp and ask >= tp:
-                    hit, exit_px = "tp", ask
-            elif side == "sell":
-                if sl and ask >= sl:
-                    hit, exit_px = "sl", ask
-                elif tp and bid <= tp:
-                    hit, exit_px = "tp", bid
-            if not hit:
-                continue
-            move = (exit_px - entry) if side == "buy" else (entry - exit_px)
-            pnl = move * lot * 100.0
-            store.close_trade(int(t["id"]), pnl=pnl, status=f"closed_{hit}")
-            self.risk.register_close(pnl)
-            bridge.paper_equity += pnl
-            bridge.paper_balance = bridge.paper_equity
-            event = {"trade_id": t["id"], "hit": hit, "pnl": round(pnl, 2), "exit": exit_px}
-            store.log_event("trade_close", event)
-            closed.append(event)
-        return closed
+    def _refresh_account(self) -> None:
+        if bridge.mode == "paper":
+            self.account.balance = bridge.paper_balance
+            self.account.equity = bridge.paper_equity
+            self.account.free_margin = bridge.paper_equity
+        else:
+            self.account = bridge.connect()
 
-    def scan(self) -> dict:
+    def pulse_tick(self) -> dict:
+        """Sub-second path: quote → pulse → smart manage open trades."""
         with self._lock:
+            t0 = time.perf_counter()
+            tick = bridge.tick()
+            bid = float(tick["bid"])
+            ask = float(tick["ask"])
+            fast_pulse.push(bid, ask)
+            candles = bridge.fetch_candles(count=120)
+            pulse = fast_pulse.analyze(candles)
+            self.last_pulse = pulse
+
+            managed = run_smart_manager(bid, ask, candles, fast_pulse)
+            if managed.closed:
+                for c in managed.closed:
+                    self.risk.register_close(float(c.get("pnl") or 0))
+            self.risk.state.open_trades = len(store.open_trades())
+            self._refresh_account()
+
+            if store.open_trades():
+                self.state = "MANAGING" if managed.updated or managed.events else "IN_TRADE"
+            elif self.auto_trade:
+                self.state = "ARMED"
+            else:
+                self.state = "IDLE"
+
+            # Try entry on pending confluence with pulse confirm (no heavy rescan)
+            executed = None
+            if (
+                self.auto_trade
+                and self._pending_signal
+                and not store.open_trades()
+                and self._pending_signal.get("action") in {"buy", "sell"}
+            ):
+                if self._try_pending_entry(bid, ask, pulse):
+                    executed = True
+
+            elapsed_ms = (time.perf_counter() - t0) * 1000
+            payload = {
+                "state": self.state,
+                "tick": tick,
+                "pulse": pulse,
+                "manage": {
+                    "events": managed.events,
+                    "closed": managed.closed,
+                    "updated": managed.updated,
+                },
+                "open_trades": store.open_trades(),
+                "account": self.account.to_dict(),
+                "elapsed_ms": round(elapsed_ms, 2),
+                "executed_pending": bool(executed),
+                "pending_signal": self._pending_signal,
+            }
+            self.last_manage = payload
+            if self.last:
+                self.last["pulse"] = pulse
+                self.last["state"] = self.state
+                self.last["tick"] = tick
+                self.last["open_trades"] = payload["open_trades"]
+                self.last["manage"] = payload["manage"]
+                self.last["latency_ms"] = payload["elapsed_ms"]
+            return payload
+
+    def _try_pending_entry(self, bid: float, ask: float, pulse: dict) -> bool:
+        sig = self._pending_signal or {}
+        action = sig.get("action")
+        if action not in {"buy", "sell"}:
+            return False
+        if settings.require_pulse_confirm and not fast_pulse.confirms(action, pulse):
+            return False
+        # anti-chase: price already ran away from planned entry
+        entry = float(sig.get("entry") or 0)
+        stop = float(sig.get("stop") or 0)
+        risk = abs(entry - stop) or 1.0
+        px = ask if action == "buy" else bid
+        chase = abs(px - entry) / risk
+        if chase > settings.max_chase_r:
+            store.log_event("entry_skip", {"reason": "chase", "chase_r": chase, "action": action})
+            self._pending_signal = None
+            return False
+        equity = self.account.equity or settings.paper_balance
+        allowed, reason = self.risk.allow_trade(equity, action)
+        if not allowed:
+            return False
+        lot = self.risk.lot_size(equity, entry, stop)
+        # Shift SL/TP with live fill so R:R geometry stays intact
+        delta = px - entry
+        sl = float(sig["stop"]) + delta
+        tp = float(sig["take"]) + delta
+        result = bridge.order_market(action, lot, sl, tp, comment="AURUM-FAST")
+        if not result.get("ok"):
+            return False
+        self.risk.register_open()
+        trade_id = store.add_trade(
+            {
+                **result,
+                "status": "open",
+                "meta": {
+                    "confluence": sig.get("confluence"),
+                    "quality": sig.get("quality"),
+                    "pulse": pulse,
+                    "narrative": sig.get("narrative"),
+                    "fast_entry": True,
+                },
+            }
+        )
+        self._pending_signal = None
+        self.state = "IN_TRADE"
+        store.log_event("trade_open", {"trade_id": trade_id, "fast": True, **result})
+        return True
+
+    def scan(self, full: bool = True) -> dict:
+        with self._lock:
+            self.state = "SCANNING" if not store.open_trades() else self.state
+            t0 = time.perf_counter()
             candles = bridge.fetch_candles()
             tick = bridge.tick()
-            closed = self.manage_open_trades(float(tick["bid"]), float(tick["ask"]))
-            signal = build_signal(candles, spread_points=float(tick.get("spread_points") or 0))
-            if bridge.mode == "paper":
-                self.account.balance = bridge.paper_balance
-                self.account.equity = bridge.paper_equity
-                self.account.free_margin = bridge.paper_equity
-            else:
-                self.account = bridge.connect()
+            bid, ask = float(tick["bid"]), float(tick["ask"])
+            fast_pulse.push(bid, ask)
+            # smart manage first (integrated)
+            managed = run_smart_manager(bid, ask, candles, fast_pulse)
+            if managed.closed:
+                for c in managed.closed:
+                    self.risk.register_close(float(c.get("pnl") or 0))
 
+            signal = build_signal(candles, spread_points=float(tick.get("spread_points") or 0))
+            pulse = fast_pulse.analyze(candles)
+            self.last_pulse = pulse
+            pulse_ok = (not settings.require_pulse_confirm) or signal.action == "flat" or fast_pulse.confirms(
+                signal.action, pulse
+            )
+
+            self._refresh_account()
             equity = self.account.equity or settings.paper_balance
             self.risk.roll_day(equity)
             self.risk.state.open_trades = len(store.open_trades())
             allowed, reason = self.risk.allow_trade(equity, signal.action)
-            lot = 0.0
-            if signal.action != "flat":
-                lot = self.risk.lot_size(equity, signal.entry, signal.stop)
+            if signal.action != "flat" and not pulse_ok:
+                allowed, reason = False, "awaiting_pulse_confirm"
+            lot = self.risk.lot_size(equity, signal.entry, signal.stop) if signal.action != "flat" else 0.0
 
-            feed = tick.get("source") or bridge.mode
+            if signal.action in {"buy", "sell"} and signal.quality in {"A", "B", "C"}:
+                self._pending_signal = signal.to_dict()
+            elif signal.action == "flat":
+                self._pending_signal = None
+
+            if store.open_trades():
+                self.state = "IN_TRADE"
+            elif self.auto_trade:
+                self.state = "ARMED"
+            else:
+                self.state = "IDLE"
+
+            elapsed_ms = (time.perf_counter() - t0) * 1000
             payload = {
                 "symbol": settings.symbol,
                 "timeframe": settings.timeframe,
                 "tick": tick,
                 "account": self.account.to_dict(),
                 "signal": signal.to_dict(),
+                "pulse": pulse,
+                "pulse_confirm": pulse_ok,
+                "pending_signal": self._pending_signal,
                 "risk": self.risk.state.to_dict(),
                 "execution_gate": {"allowed": allowed, "reason": reason, "lot": lot},
                 "auto_trade": self.auto_trade,
                 "armed": self.armed or self.auto_trade,
-                "feed": feed,
-                "closed_this_scan": closed,
+                "state": self.state,
+                "feed": tick.get("source") or bridge.mode,
+                "manage": {
+                    "events": managed.events,
+                    "closed": managed.closed,
+                    "updated": managed.updated,
+                },
+                "closed_this_scan": managed.closed,
+                "open_trades": store.open_trades(),
                 "candles_tail": [c.to_dict() for c in candles[-80:]],
                 "candle_count": len(candles),
+                "latency_ms": round(elapsed_ms, 2),
+                "tick_seconds": settings.tick_seconds,
+                "loop_seconds": settings.loop_seconds,
             }
             self.last = payload
+            self._last_full_scan = time.time()
             store.log_event(
                 "scan",
                 {
                     "action": signal.action,
                     "confluence": signal.confluence,
-                    "vetoes": signal.vetoes,
-                    "feed": feed,
-                    "closed": len(closed),
+                    "quality": signal.quality,
+                    "pulse": pulse.get("bias"),
+                    "pulse_ok": pulse_ok,
+                    "state": self.state,
+                    "latency_ms": payload["latency_ms"],
                 },
             )
             return payload
 
     def execute_signal(self, force: bool = False) -> dict:
-        snap = self.scan()
+        snap = self.scan(full=True)
         sig = snap["signal"]
         gate = snap["execution_gate"]
         if sig["action"] == "flat":
@@ -154,7 +299,10 @@ class TradingDesk:
         if not force and not gate["allowed"]:
             return {"ok": False, "error": gate["reason"], "scan": snap}
         if not force and not self.auto_trade:
-            return {"ok": False, "error": "auto_trade_disabled", "scan": snap, "hint": "POST /api/start"}
+            return {"ok": False, "error": "auto_trade_disabled", "scan": snap}
+        if not force and settings.require_pulse_confirm and not snap.get("pulse_confirm"):
+            self._pending_signal = sig
+            return {"ok": False, "error": "awaiting_pulse_confirm", "scan": snap}
 
         lot = gate["lot"] or 0.01
         result = bridge.order_market(sig["action"], lot, sig["stop"], sig["take"], comment="AURUM-ELITE")
@@ -164,15 +312,22 @@ class TradingDesk:
                 {
                     **result,
                     "status": "open",
-                    "meta": {"confluence": sig["confluence"], "narrative": sig["narrative"]},
+                    "meta": {
+                        "confluence": sig["confluence"],
+                        "quality": sig.get("quality"),
+                        "narrative": sig["narrative"],
+                        "pulse": snap.get("pulse"),
+                    },
                 }
             )
             if result.get("mode") == "paper":
                 cost = abs(sig["entry"] - sig["stop"]) * lot * 100 * 0.02
                 bridge.paper_equity -= cost
                 bridge.paper_balance = bridge.paper_equity
+            self._pending_signal = None
+            self.state = "IN_TRADE"
             store.log_event("trade_open", {"trade_id": trade_id, **result})
-            return {"ok": True, "trade_id": trade_id, "result": result, "scan": self.scan()}
+            return {"ok": True, "trade_id": trade_id, "result": result, "scan": self.scan(full=True)}
         store.log_event("trade_reject", result)
         return {"ok": False, "error": result.get("error") or "order_failed", "result": result, "scan": snap}
 
@@ -180,13 +335,22 @@ class TradingDesk:
         self._running = True
         while self._running:
             try:
-                snap = self.scan()
-                if self.auto_trade and snap["execution_gate"]["allowed"] and snap["signal"]["action"] != "flat":
-                    self.execute_signal(force=False)
+                # Fast path every tick
+                self.pulse_tick()
+                # Periodic full strategy scan
+                if time.time() - self._last_full_scan >= settings.loop_seconds:
+                    snap = self.scan(full=True)
+                    if (
+                        self.auto_trade
+                        and snap["execution_gate"]["allowed"]
+                        and snap["signal"]["action"] != "flat"
+                        and snap.get("pulse_confirm")
+                    ):
+                        self.execute_signal(force=False)
             except Exception as e:
                 log.exception("desk loop error: %s", e)
                 store.log_event("error", {"message": str(e)})
-            await asyncio.sleep(settings.loop_seconds)
+            await asyncio.sleep(max(0.2, float(settings.tick_seconds)))
 
     def start_background(self) -> None:
         try:

@@ -73,3 +73,9 @@ def test_api_health_and_status():
     assert ready.status_code == 200
     assert "paper_ready" in ready.json()
     assert "checks" in ready.json()
+    pulse = client.get("/api/pulse")
+    assert pulse.status_code == 200
+    body = pulse.json()
+    assert "pulse" in body
+    assert "elapsed_ms" in body
+    assert "state" in body

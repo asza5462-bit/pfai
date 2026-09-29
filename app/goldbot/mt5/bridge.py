@@ -328,7 +328,8 @@ class Bridge:
 
     def _cached_spot(self) -> float | None:
         now = time.time()
-        if self._last_price and now - self._spot_cache_ts < 20:
+        # Tight cache for sub-second desk; still protects gold-api from spam
+        if self._last_price and now - self._spot_cache_ts < 3:
             return self._last_price
         return self._spot_gold_api() or (self._last_price or None)
 

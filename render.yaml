@@ -37,7 +37,15 @@ services:
       - key: AURUM_MAX_SPREAD
         value: "45"
       - key: AURUM_LOOP_SECONDS
-        value: "20"
+        value: "6"
+      - key: AURUM_TICK_SECONDS
+        value: "0.5"
+      - key: AURUM_PULSE_CONFIRM
+        value: "true"
+      - key: AURUM_COOLDOWN_SEC
+        value: "120"
+      - key: AURUM_MAX_HOLD_SEC
+        value: "10800"
       - key: AURUM_DATA_DIR
         value: "data/goldbot"
       - key: AURUM_PAPER_BALANCE

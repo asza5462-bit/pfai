@@ -1,5 +1,5 @@
 """AURUM — Elite XAUUSD trading desk (MT5 / Exness ready)."""
 
-__version__ = "1.2.0"
+__version__ = "2.0.0"
 PRODUCT_NAME = "AURUM"
-PRODUCT_TAGLINE = "Elite Gold Desk · XAUUSD · MetaTrader 5"
+PRODUCT_TAGLINE = "Elite Gold Desk · Fast Pulse · Smart Exits · MT5"
