@@ -253,6 +253,8 @@ pre#inst {
   grid-template-columns: 1fr 1fr;
   gap: 0.4rem;
   margin-bottom: 1rem;
+  position: relative;
+  z-index: 5;
 }
 
 .auth-tabs button, .tabs button, button.tiny {
@@ -260,8 +262,12 @@ pre#inst {
   border: 1px solid var(--line);
   background: transparent;
   color: var(--ink);
-  padding: 0.7rem;
+  padding: 0.85rem 0.7rem;
   cursor: pointer;
+  position: relative;
+  z-index: 5;
+  min-height: 48px;
+  touch-action: manipulation;
 }
 
 .auth-tabs button.on, .tabs button.on {

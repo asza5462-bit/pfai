@@ -374,9 +374,9 @@
   (async () => {
     try {
       const st = await api("/api/auth/status");
-      if (st.needs_setup) {
-        $("tabRegister").click();
-        showAuth("أنشئ أول حساب مالك للمكتب", true);
+      if (st.needs_setup || st.open_register) {
+        showRegisterTab();
+        showAuth(st.needs_setup ? "أنشئ أول حساب مالك للمكتب" : "يمكنك إنشاء حساب جديد أو تسجيل الدخول", true);
       }
       if (st.authenticated && st.user) {
         await enterLoggedIn(st.user);
