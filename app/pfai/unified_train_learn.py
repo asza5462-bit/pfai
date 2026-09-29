@@ -104,13 +104,20 @@ class UnifiedTrainLearnLoop:
     def _training_busy(self) -> bool:
         if not self.training_status_fn:
             return False
-        st = self._safe("training_status", self.training_status_fn, timeout=8)
+        st = self._safe("training_status", self.training_status_fn, timeout=4)
+        # Trust live async flag only — never treat stale last.status=STARTED_ASYNC as busy
         if st.get("async_running"):
             return True
-        status = str(st.get("status") or (st.get("last") or {}).get("status") or "").upper()
-        return status in {"RUNNING", "QUEUED", "STARTING", "STARTED_ASYNC", "ALREADY_RUNNING"}
+        status = str(st.get("status") or "").upper()
+        return status in {"RUNNING", "QUEUED", "STARTING"}
 
-    def cycle(self, *, force_train: bool = False, train_if_eligible: bool = True) -> dict[str, Any]:
+    def cycle(
+        self,
+        *,
+        force_train: bool = False,
+        train_if_eligible: bool = True,
+        skip_tick: bool = False,
+    ) -> dict[str, Any]:
         """One smooth unified learn→train heartbeat. Never blocks forever."""
         # Overlap guard: never pile cycles (chat + minute + hour)
         if not self._cycle_lock.acquire(blocking=False):
@@ -130,14 +137,18 @@ class UnifiedTrainLearnLoop:
                 "note": "Previous unified cycle still running — returned last snapshot.",
             }
         try:
-            return self._cycle_body(force_train=force_train, train_if_eligible=train_if_eligible)
+            return self._cycle_body(
+                force_train=force_train,
+                train_if_eligible=train_if_eligible,
+                skip_tick=skip_tick,
+            )
         finally:
             try:
                 self._cycle_lock.release()
             except RuntimeError:
                 pass
 
-    def _cycle_body(self, *, force_train: bool, train_if_eligible: bool) -> dict[str, Any]:
+    def _cycle_body(self, *, force_train: bool, train_if_eligible: bool, skip_tick: bool = False) -> dict[str, Any]:
         t0 = time.time()
         steps: list[dict[str, Any]] = []
 
@@ -187,9 +198,12 @@ class UnifiedTrainLearnLoop:
         ensure = self._safe("continuous_ensure", self.continuous_ensure_fn, timeout=12)
         steps.append(ensure)
 
-        # Debounce continuous tick — worker already loops; avoid double work / delay
+        # Debounce / skip continuous tick — worker already loops; avoid boot hangs
         now = time.time()
-        tick_due = force_train or (now - self._last_tick_ts) >= self.min_tick_interval_seconds
+        tick_due = (
+            not skip_tick
+            and (force_train or (now - self._last_tick_ts) >= self.min_tick_interval_seconds)
+        )
         if tick_due:
             tick = self._safe(
                 "continuous_tick",
@@ -202,13 +216,16 @@ class UnifiedTrainLearnLoop:
             tick = {
                 "ok": True,
                 "skipped": True,
-                "reason": "tick_debounce",
+                "reason": "tick_skipped" if skip_tick else "tick_debounce",
                 "_label": "continuous_tick",
-                "debounced": True,
+                "debounced": not skip_tick,
             }
         steps.append(tick)
 
-        push = self._safe("experience_push", self.experience_push_fn, timeout=12)
+        if skip_tick:
+            push = {"ok": True, "pushed": 0, "accepted": 0, "skipped": True, "_label": "experience_push"}
+        else:
+            push = self._safe("experience_push", self.experience_push_fn, timeout=12)
         steps.append(push)
 
         diag = self._safe("training_diagnose", self.training_diagnose_fn, timeout=10)
@@ -319,12 +336,12 @@ class UnifiedTrainLearnLoop:
                     self.heartbeat_seconds,
                     self.heartbeat_train_every,
                 )
-                # Let boot settle before first soft cycle (free-tier CPU)
+                # Let boot settle; first pulse is light (no tick — avoids free-tier hang)
                 if self._hb_stop.wait(12.0):
                     self._hb_alive = False
                     return
                 try:
-                    self.cycle(force_train=False, train_if_eligible=False)
+                    self.cycle(force_train=False, train_if_eligible=False, skip_tick=True)
                 except Exception as exc:
                     log.warning("unified first soft cycle failed: %s", exc)
                 while not self._hb_stop.wait(self.heartbeat_seconds):

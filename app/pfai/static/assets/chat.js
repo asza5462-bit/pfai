@@ -108,10 +108,16 @@
         chips.push(`<span class="chat-chip ${elig ? 'ok' : 'warn'}">${lang === 'en' ? 'Eligible' : 'الأهلية'}: ${elig ? 'YES' : 'NO'}${reason ? ' · ' + esc(String(reason).slice(0, 60)) : ''}</span>`);
         eligShown = true;
       }
-      if (name === 'training_cycle_start' || name === 'smart_training_start') {
-        const ex = !!(res.actual_training_executed || (res.cycle && res.cycle.actual_training_executed));
-        const st = (res.cycle && res.cycle.status) || res.status || '';
-        chips.push(`<span class="chat-chip ${ex ? 'ok' : 'warn'}">${lang === 'en' ? 'REAL train' : 'تدريب حقيقي'}: ${ex ? 'EXECUTED' : esc(String(st).slice(0, 48))}</span>`);
+      if (name === 'training_cycle_start' || name === 'smart_training_start' || name === 'unified_train_learn_cycle') {
+        const train = res.train || res.cycle || res;
+        const ex = !!(res.actual_training_executed || train.actual_training_executed);
+        const st = train.status || res.status || '';
+        const trig = train.triggered;
+        chips.push(`<span class="chat-chip ${ex || trig ? 'ok' : 'warn'}">${lang === 'en' ? 'REAL train' : 'تدريب حقيقي'}: ${ex ? 'EXECUTED' : esc(String(st || (trig ? 'STARTED' : 'idle')).slice(0, 48))}</span>`);
+      }
+      if (name === 'unified_train_learn_status') {
+        const hb = res.heartbeat_alive;
+        chips.push(`<span class="chat-chip ${hb ? 'ok' : 'warn'}">${lang === 'en' ? 'Unified 24/7' : 'موحّد 24/7'}: ${hb ? 'ON' : 'off'}</span>`);
       }
       if (name === 'live_monitor_pulse' || name === 'live_monitor_status') {
         const alive = res.alive !== undefined ? res.alive : res.continuous_alive;
@@ -387,7 +393,7 @@
       const chip = $('chatTrainElig');
       if (chip && elig) {
         chip.textContent = elig.eligible
-          ? 'Eligible · لا يبدأ من الشات'
+          ? 'Eligible · كتابة من الشات · ليس قراءة فقط'
           : `Not eligible · ${(elig.reason || (elig.blockers || [])[0] || '—').toString().slice(0, 48)}`;
         chip.className = 'chat-chip ' + (elig.eligible ? 'ok' : 'warn');
       }
@@ -497,16 +503,15 @@
     const box = $('chatLog');
     if (box) box.innerHTML = '';
     appendBubble('assistant',
-      'مرحباً — أنا عقل PFAI 8.2 (التحكم الكامل من الشات).\n'
-      + '• أوامر التشغيل · الأكاديمية · التعلم المستمر · التدريب · الويب الحي\n'
+      'مرحباً — أنا عقل PFAI 8.15 (حلقة تعلّم+تدريب موحّدة 24/7).\n'
+      + '• أوامر التشغيل · الأكاديمية · التعلّم المستمر · التدريب الحقيقي · الويب الحي\n'
+      + '• التدريب من الشات مسار كتابة — ليس قراءة فقط — بلا ترقية أوزان صامتة\n'
       + '• تعليم أكواد أقوى: تلميحات تشخيصية + تسليم تمارين من الشات\n'
-      + '• بحث ويب/جلب روابط عبر أدوات سياسة آمنة (بدون نتائج ملفّقة)\n'
-      + '• ترقية الأوزان لا تتم بصمت — دورة التدريب صريحة عند الطلب\n\n'
-      + 'Hello — PFAI 8.2 Master Chat Control.\n'
-      + '• Ops · Academy · Continuous learning · Training · Live web\n'
-      + '• Stronger coding: diagnostic hints + exercise submit from chat\n'
-      + '• Web search/fetch via policy-gated tools (no fabricated results)\n'
-      + '• No silent weight promotion — training cycles are explicit',
+      + '• بحث ويب/جلب روابط عبر أدوات سياسة آمنة (بدون نتائج ملفّقة)\n\n'
+      + 'Hello — PFAI 8.15 Unified learn+train 24/7.\n'
+      + '• Ops · Academy · Continuous learning · Real LoRA · Live web\n'
+      + '• Training from chat is a write path — never silent weight promote\n'
+      + '• Web search/fetch via policy-gated tools (no fabricated results)',
       { status: 'completed', provider: 'ready' }
     );
     refreshLearningRail();

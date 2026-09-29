@@ -224,6 +224,18 @@ class TestUnifiedAPI(unittest.TestCase):
             any(x in reply for x in ("موحّد", "مستمر", "تدريب", "LoRA", "24/7", "دورة")),
             reply,
         )
+        # Status ask must not force-start LoRA
+        for t in (body.get("tools") or []):
+            if t.get("tool") == "unified_train_learn_cycle" and t.get("ok"):
+                train = (t.get("result") or {}).get("train") or {}
+                self.assertFalse(train.get("triggered"), train)
+
+    def test_head_routes_ok(self):
+        self.assertEqual(self.client.head("/").status_code, 200)
+        self.assertEqual(self.client.head("/health").status_code, 200)
+        h = self.client.get("/health").json()
+        self.assertIn("chat_brain", h)
+        self.assertIn("anthropic_key_configured", h)
 
 
 if __name__ == "__main__":

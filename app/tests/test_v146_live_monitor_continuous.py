@@ -62,16 +62,21 @@ class TestLiveMonitorUnit(unittest.TestCase):
 class TestContinuousRouting(unittest.TestCase):
     def test_arabic_continuous_question_plans_monitor(self):
         m = MockCommandProvider()
-        tools = {t["tool"] for t in m.plan_tools(
+        planned = m.plan_tools(
             "هل التدريب المستمر يعمل",
             [
                 "live_monitor_pulse", "live_monitor_status", "continuous_start",
                 "continuous_status", "continuous_tick", "smart_training_status",
-                "unified_brain_pulse",
+                "unified_brain_pulse", "unified_train_learn_cycle", "unified_train_learn_status",
             ],
-        )}
-        self.assertIn("live_monitor_pulse", tools)
-        self.assertIn("continuous_start", tools)
+        )
+        tools = {t["tool"] for t in planned}
+        # Status ask → unified status/cycle (learn-only) + monitor status — no LoRA stampede
+        self.assertIn("unified_train_learn_status", tools)
+        self.assertTrue(tools & {"live_monitor_status", "live_monitor_pulse", "continuous_status"})
+        cycle = next((t for t in planned if t["tool"] == "unified_train_learn_cycle"), None)
+        if cycle:
+            self.assertFalse(cycle["args"].get("train_if_eligible"))
 
     def test_continue_inherits_train_intent(self):
         u = comprehend(

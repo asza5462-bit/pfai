@@ -1,5 +1,16 @@
 # Agent Context Changelog
 
+## 2026-09-29 — Audit fixes: HEAD probes, status-ask no LoRA stampede, UI honesty
+
+### Fixed
+- `HEAD /` and `HEAD /health` return 200 (Render port probe was 405)
+- Status questions (`هل التدريب المستمر يعمل`) run unified cycle with `train_if_eligible=false`
+- `ابدأ التدريب` routes to unified cycle first
+- Boot soft cycle skips heavy continuous tick (no 30s timeout hang)
+- Busy detection uses live `async_running` only (no stale STARTED_ASYNC)
+- Health reports `chat_brain` / `anthropic_key_configured` honestly
+- UI chip no longer claims training cannot start from chat; welcome → 8.15
+
 ## 2026-09-29 — PFAI 8.15: unified 24/7 learn→grow→train loop
 
 ### Implemented

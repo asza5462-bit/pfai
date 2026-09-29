@@ -127,12 +127,16 @@ class TestSmartTrainingRouting(unittest.TestCase):
     def test_ar_start_training_routes_to_write_tools(self):
         m = MockCommandProvider()
         allowed = [
-            "smart_training_start", "training_cycle_start", "smart_training_status",
-            "training_eligibility", "training_control_status", "continuous_start",
+            "unified_train_learn_cycle", "smart_training_start", "training_cycle_start",
+            "smart_training_status", "training_eligibility", "training_control_status",
+            "continuous_start", "unified_train_learn_status",
         ]
-        tools = {t["tool"] for t in m.plan_tools("ابدأ التدريب الحقيقي الآن بلا حدود", allowed)}
+        planned = m.plan_tools("ابدأ التدريب الحقيقي الآن بلا حدود", allowed)
+        tools = {t["tool"] for t in planned}
+        self.assertIn("unified_train_learn_cycle", tools)
         self.assertIn("smart_training_start", tools)
-        self.assertIn("training_cycle_start", tools)
+        cycle = next(t for t in planned if t["tool"] == "unified_train_learn_cycle")
+        self.assertTrue(cycle["args"].get("train_if_eligible") or cycle["args"].get("force_train"))
 
     def test_eligibility_question_still_includes_start(self):
         m = MockCommandProvider()
@@ -246,6 +250,7 @@ class TestSmartTrainingAPI(unittest.TestCase):
         self.assertTrue("PFAI v8." in html)
         js = self.client.get("/assets/chat.js").text
         self.assertIn("smart_training_start", js)
+        self.assertIn("unified_train_learn_cycle", js)
         self.assertIn("ليس قراءة فقط", js)
 
 

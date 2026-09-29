@@ -907,8 +907,12 @@ UNIFIED_TRAIN_LEARN = UnifiedTrainLearnLoop(
 def _tool_unified_train_learn_status():
     return UNIFIED_TRAIN_LEARN.status()
 
-def _tool_unified_train_learn_cycle(force_train: bool = False):
-    return UNIFIED_TRAIN_LEARN.cycle(force_train=bool(force_train), train_if_eligible=True)
+def _tool_unified_train_learn_cycle(force_train: bool = False, train_if_eligible: bool = True):
+    # Status-style asks can pass train_if_eligible=false — avoid LoRA stampede
+    return UNIFIED_TRAIN_LEARN.cycle(
+        force_train=bool(force_train),
+        train_if_eligible=bool(train_if_eligible) or bool(force_train),
+    )
 
 
 def _pfai_startup_continuous() -> None:
@@ -1603,7 +1607,13 @@ for _spec in (
     ToolSpec('live_monitor_status', '24/7 live supervisor status (learn/train/heal)', 'read', False, {}),
     ToolSpec('live_monitor_pulse', 'Run one live-monitor heartbeat (optional deep heal/develop)', 'write', False, {'deep': 'bool?'}),
     ToolSpec('unified_train_learn_status', 'Unified 24/7 learn+train loop status', 'read', False, {}),
-    ToolSpec('unified_train_learn_cycle', 'One smooth learn→grow→train heartbeat (async LoRA)', 'write', False, {'force_train': 'bool?'}),
+    ToolSpec(
+        'unified_train_learn_cycle',
+        'One smooth learn→grow→train heartbeat (async LoRA)',
+        'write',
+        False,
+        {'force_train': 'bool?', 'train_if_eligible': 'bool?'},
+    ),
 ):
     TOOL_ROUTER.specs[_spec.name] = _spec
 TOOL_ROUTER.handlers['live_monitor_status'] = _tool_live_monitor_status
@@ -1618,7 +1628,7 @@ def _pfai_startup_live_monitor() -> None:
         # Soft unified cycle (learn only) + monitor pulse — no LoRA on cold boot
         def _soft():
             try:
-                UNIFIED_TRAIN_LEARN.cycle(force_train=False, train_if_eligible=False)
+                UNIFIED_TRAIN_LEARN.cycle(force_train=False, train_if_eligible=False, skip_tick=True)
             except Exception as exc:
                 log.warning('startup: unified train/learn soft cycle failed: %s', exc)
             try:
@@ -2003,8 +2013,11 @@ class RunCycle(BaseModel):
     version:str
     score:float|None=None
     notes:str=''
-@app.get('/health')
-def health():
+@app.api_route('/health', methods=['GET', 'HEAD'])
+def health(req: Request):
+    if req.method == 'HEAD':
+        return Response(status_code=200)
+    anthropic_ready = bool(os.environ.get('ANTHROPIC_API_KEY'))
     return runtime.health(extra={
         'public_access': public_access_mode(),
         'authentication': 'DISABLED' if public_access_mode() else 'OWNER',
@@ -2012,9 +2025,12 @@ def health():
         'owner_setup_required': False if public_access_mode() else OWNER_AUTH.setup_required(),
         'continuous': continuous_gate_status(),
         'network_enabled': RESEARCH_GATE.policy.network,
+        'anthropic_key_configured': anthropic_ready,
+        'chat_brain': 'anthropic' if anthropic_ready else 'pfai-brain',
         'platform': {
             'orchestrator': True,
             'anthropic_required': False,
+            'anthropic_key_configured': anthropic_ready,
             'providers': [p.provider_id for p in PROVIDER_REGISTRY.list_providers()],
             'schema_version': PLATFORM_COMPAT.schema_version(),
             'schema_current': PLATFORM_MIGRATIONS_RUNNER.current_version(),
@@ -2279,8 +2295,11 @@ def regression_reject(case_id: str, owner: str = Depends(access_privileged)):
     OWNER.authorize('REGRESSION_REJECT', f'{owner} rejected regression case {case_id}')
     return REGRESSIONS.reject(case_id)
 
-@app.get('/')
-def dashboard():
+@app.api_route('/', methods=['GET', 'HEAD'])
+def dashboard(req: Request):
+    # Render free-tier probes HEAD / for port detection — must not 405
+    if req.method == 'HEAD':
+        return Response(status_code=200)
     return FileResponse(STATIC/'index.html')
 
 @app.get('/recovery/verify')

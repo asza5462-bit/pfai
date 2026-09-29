@@ -60,13 +60,30 @@ class MockCommandProvider(ModelProvider):
             text + ar,
             re.I,
         ))
+        status_only_continuous = bool(re.search(
+            r"هل\s*(?:ال)?(?:تدريب|تعل[يّ]م)|يعمل|status|حالة\s*(?:ال)?(?:تدريب|تعل[يّ]م)|"
+            r"is\s*(?:continuous|training)\s*work",
+            text + ar,
+            re.I,
+        )) and not re.search(
+            r"ابدأ|شغ[ّل]|طور|درّب|درب|start|run\s*train|force",
+            text + ar,
+            re.I,
+        )
         if early_continuous:
-            add("unified_train_learn_cycle")
-            add("unified_train_learn_status")
-            add("live_monitor_pulse")
-            add("continuous_start")
-            add("continuous_status")
-            add("evolution_status")
+            if status_only_continuous:
+                # Verify loop without starting LoRA
+                add("unified_train_learn_status")
+                add("unified_train_learn_cycle")  # args set below → train_if_eligible=false
+                add("live_monitor_status")
+                add("continuous_status")
+            else:
+                add("unified_train_learn_cycle")
+                add("unified_train_learn_status")
+                add("live_monitor_pulse")
+                add("continuous_start")
+                add("continuous_status")
+                add("evolution_status")
         elif re.search(
             r"ابدأ\s*التدريب|شغ[ّل]\s*التدريب|درّب|درب\s*الان|run\s*training|"
             r"training_cycle|smart_training|تدريب\s*حقيقي|تدريب\s*فعلي|"
@@ -74,9 +91,9 @@ class MockCommandProvider(ModelProvider):
             text + ar,
             re.I,
         ):
+            add("unified_train_learn_cycle")
             add("smart_training_start")
-            add("training_cycle_start")
-            add("smart_training_status")
+            add("unified_train_learn_status")
             add("training_eligibility")
             add("continuous_start")
             add("live_monitor_pulse")
@@ -342,7 +359,21 @@ class MockCommandProvider(ModelProvider):
             if name == "live_monitor_pulse":
                 args = {"deep": bool(re.search(r"عميق|deep|أصلح|طور|sovereign", message or "", re.I))}
             if name == "unified_train_learn_cycle":
-                args = {"force_train": bool(re.search(r"الآن|now|فوري|force|اجبر", message or "", re.I))}
+                force = bool(re.search(r"الآن|now|فوري|force|اجبر", message or "", re.I))
+                # Pure status questions: learn heartbeat only — do not stampede LoRA
+                status_ask = bool(re.search(
+                    r"هل\s*(?:ال)?(?:تدريب|تعل[يّ]م)|يعمل|status|حالة\s*(?:ال)?(?:تدريب|تعل[يّ]م)",
+                    message or "",
+                    re.I,
+                )) and not re.search(
+                    r"ابدأ|شغ[ّل]|طور|درّب|درب|start|run\s*train|force|أكما?ل|استمر",
+                    message or "",
+                    re.I,
+                )
+                args = {
+                    "force_train": force,
+                    "train_if_eligible": bool(force) or not status_ask,
+                }
             tools.append({"tool": name, "args": args})
         return tools
 
