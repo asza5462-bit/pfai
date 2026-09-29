@@ -95,9 +95,13 @@
     const risk = data.risk || {};
     const session = ((sig.schools || []).find((s) => s.school.startsWith("Session")) || {}).detail || {};
 
+    const ready = data.readiness || {};
+    $("readyPill").textContent = ready.summary_ar || ready.grade || "—";
+    $("readyPill").classList.toggle("on", !!ready.paper_ready);
     $("modePill").textContent = acc.mode || data.mode || "—";
     $("symbolPill").textContent = data.symbol || "XAUUSD";
     $("sessionPill").textContent = session.killzone || "—";
+    $("qualityPill").textContent = sig.quality ? `جودة ${sig.quality}` : "—";
     $("price").textContent = (tick.bid || sig.entry || "—");
     $("conf").textContent = sig.confluence != null ? `${Math.round(sig.confluence * 100)}%` : "—";
     $("action").textContent = sig.action || "—";

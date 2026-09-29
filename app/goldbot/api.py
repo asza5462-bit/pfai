@@ -72,9 +72,47 @@ async def health():
     }
 
 
+def _readiness(snap: dict) -> dict:
+    tick = snap.get("tick") or {}
+    bid = float(tick.get("bid") or 0)
+    feed = str(snap.get("feed") or tick.get("source") or "")
+    checks = {
+        "service_up": True,
+        "product_aurum": True,
+        "price_live": bid >= 3000,
+        "feed_ok": feed.startswith("gold_api") or feed.startswith("yahoo") or feed == "mt5",
+        "candles_ok": int(snap.get("candle_count") or 0) >= 50,
+        "auto_trade": bool(snap.get("auto_trade")),
+        "risk_active": not bool((snap.get("risk") or {}).get("halted")),
+        "mt5_live": (snap.get("account") or {}).get("mode") == "mt5",
+    }
+    paper_ready = all(checks[k] for k in ("service_up", "price_live", "feed_ok", "candles_ok", "risk_active"))
+    live_ready = paper_ready and checks["mt5_live"]
+    grade = "live_ready" if live_ready else "paper_ready" if paper_ready else "not_ready"
+    return {
+        "grade": grade,
+        "paper_ready": paper_ready,
+        "exness_mt5_ready": live_ready,
+        "checks": checks,
+        "summary_ar": (
+            "جاهز للتداول الورقي على الذهب"
+            if grade == "paper_ready"
+            else "جاهز للتنفيذ عبر MT5/Exness"
+            if grade == "live_ready"
+            else "غير جاهز — راجع الفحوصات"
+        ),
+        "next_for_exness": [
+            "Windows VPS + MetaTrader 5",
+            "حساب Exness Demo أولاً",
+            "AURUM_MODE=mt5 + MT5_LOGIN/PASSWORD/SERVER",
+        ],
+    }
+
+
 @app.get("/api/status")
 async def status():
     snap = desk.last or desk.scan()
+    ready = _readiness(snap)
     return {
         "product": PRODUCT_NAME,
         "tagline": PRODUCT_TAGLINE,
@@ -83,8 +121,16 @@ async def status():
             "التداول ينطوي على مخاطر. لا يمكن لأي بوت ضمان ربح أو خسارة صفر. "
             "AURUM يقلّل المخاطرة بإدارة رأس مال صارمة وفلاتر تقارب — وليس سحراً."
         ),
+        "readiness": ready,
         **snap,
     }
+
+
+@app.get("/api/ready")
+async def ready():
+    snap = desk.last or desk.scan()
+    ready = _readiness(snap)
+    return {"ok": ready["paper_ready"], **ready, "version": __version__, "mode": (snap.get("account") or {}).get("mode")}
 
 
 @app.post("/api/scan")

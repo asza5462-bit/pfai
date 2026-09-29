@@ -28,6 +28,16 @@ def test_patterns_and_signal():
     sig = build_signal(cs, spread_points=10)
     assert sig.action in {"buy", "sell", "flat"}
     assert 0 <= sig.confluence <= 1
+    assert hasattr(sig, "quality")
+
+
+def test_vol_veto_uses_tradable_not_neutral_bias():
+    """Regression: flat trend must not block when ATR regime is tradable."""
+    cs = _candles(n=100, start=4100)
+    sig = build_signal(cs, spread_points=10)
+    assert "volatility_regime_blocked" not in sig.vetoes or any(
+        (s.get("detail") or {}).get("tradable") is False for s in sig.schools if s["school"].startswith("Volatility")
+    )
 
 
 def test_risk_halt():
@@ -59,3 +69,7 @@ def test_api_health_and_status():
     stop = client.post("/api/stop")
     assert stop.status_code == 200
     assert stop.json()["auto_trade"] is False
+    ready = client.get("/api/ready")
+    assert ready.status_code == 200
+    assert "paper_ready" in ready.json()
+    assert "checks" in ready.json()

@@ -68,6 +68,12 @@ html, body {
   font-size: 0.78rem;
   letter-spacing: 0.04em;
 }
+.meta span.on {
+  background: rgba(31, 122, 76, 0.14);
+  border-color: rgba(31, 122, 76, 0.45);
+  color: var(--bull);
+  font-weight: 600;
+}
 
 .hero {
   min-height: 72vh;

@@ -61,6 +61,8 @@ class Bridge:
     _spot_cache_ts: float = 0.0
     _feed_source: str = "init"
     _cache_ttl: float = 55.0
+    _yahoo_backoff_until: float = 0.0
+    _yahoo_ok_until: float = 0.0
 
     def connect(self) -> AccountSnapshot:
         if self.mode == "mt5":
@@ -189,14 +191,27 @@ class Bridge:
         return None
 
     def _yahoo_chart(self, interval: str = "15m", range_: str = "5d") -> list[Candle] | None:
-        """OHLC proxy — cached hard to avoid Yahoo 429 on Render."""
+        """OHLC proxy with long backoff after 429 — gold-api is primary on Render."""
+        now = time.time()
+        if now < self._yahoo_backoff_until:
+            return None
         urls = [
             f"https://query2.finance.yahoo.com/v8/finance/chart/GC=F?interval={interval}&range={range_}",
-            f"https://query1.finance.yahoo.com/v8/finance/chart/GC=F?interval={interval}&range={range_}",
         ]
         for url in urls:
-            data = self._http_json(url, timeout=10)
-            if not isinstance(data, dict):
+            try:
+                req = Request(url, headers={"User-Agent": "Mozilla/5.0 AURUM/1.1"})
+                with urlopen(req, timeout=10) as resp:
+                    data = json.loads(resp.read().decode())
+            except Exception as e:
+                msg = str(e)
+                # Back off hard on rate limits
+                if "429" in msg or "Too Many" in msg:
+                    self._yahoo_backoff_until = now + 900
+                    log.warning("yahoo backoff 15m after rate limit: %s", e)
+                else:
+                    self._yahoo_backoff_until = now + 120
+                    log.warning("yahoo feed fail: %s", e)
                 continue
             try:
                 result = data["chart"]["result"][0]
@@ -212,6 +227,7 @@ class Bridge:
                 if out:
                     self._last_price = out[-1].close
                     self._feed_source = "yahoo_ohlc"
+                    self._yahoo_ok_until = now + 600
                     return out
             except Exception as e:
                 log.warning("yahoo parse fail: %s", e)
@@ -239,9 +255,9 @@ class Bridge:
 
     def _fetch_paper(self, count: int) -> list[Candle]:
         now = time.time()
+        spot = self._cached_spot() or self._spot_gold_api() or self._last_price
+
         if self._candle_cache and now - self._candle_cache_ts < self._cache_ttl:
-            # refresh last close from spot without refetching full OHLC
-            spot = self._cached_spot()
             bars = list(self._candle_cache)
             if spot and bars:
                 bars[-1] = Candle(
@@ -250,22 +266,59 @@ class Bridge:
                     high=max(bars[-1].high, spot),
                     low=min(bars[-1].low, spot),
                     close=spot,
-                    volume=bars[-1].volume,
+                    volume=bars[-1].volume + 1,
                 )
+                self._candle_cache = bars
             return bars[-count:] if len(bars) > count else bars
 
-        tf = (settings.timeframe or "M15").upper()
-        interval = {"M1": "1m", "M5": "5m", "M15": "15m", "M30": "30m", "H1": "60m", "H4": "60m", "D1": "1d"}.get(tf, "15m")
-        range_ = "5d" if interval.endswith("m") else "3mo"
-        live = self._yahoo_chart(interval=interval, range_=range_)
+        # Prefer reliable spot-based structure; try Yahoo only when not in backoff.
+        live = None
+        if now >= self._yahoo_backoff_until:
+            tf = (settings.timeframe or "M15").upper()
+            interval = {"M1": "1m", "M5": "5m", "M15": "15m", "M30": "30m", "H1": "60m", "H4": "60m", "D1": "1d"}.get(tf, "15m")
+            live = self._yahoo_chart(interval=interval, range_="5d")
         if live:
+            if spot:
+                live[-1] = Candle(
+                    time=live[-1].time,
+                    open=live[-1].open,
+                    high=max(live[-1].high, spot),
+                    low=min(live[-1].low, spot),
+                    close=spot,
+                    volume=live[-1].volume,
+                )
             self._candle_cache = live
             self._candle_cache_ts = now
             self._seeded = True
             return live[-count:] if len(live) > count else live
 
-        spot = self._spot_gold_api() or self._last_price or 2650.0
+        # Primary Render path: gold-api spot + structure scaffold (updated live each scan)
+        spot = spot or 2650.0
         self._last_price = spot
+        if self._candle_cache and self._feed_source.startswith("gold_api"):
+            # Evolve scaffold with fresh spot instead of regenerating random walk every TTL.
+            bars = list(self._candle_cache)
+            last = bars[-1]
+            bucket = int(now) // 900 * 900
+            if last.time < bucket:
+                bars.append(Candle(time=bucket, open=spot, high=spot, low=spot, close=spot, volume=1))
+                if len(bars) > 240:
+                    bars = bars[-240:]
+            else:
+                bars[-1] = Candle(
+                    time=last.time,
+                    open=last.open,
+                    high=max(last.high, spot),
+                    low=min(last.low, spot),
+                    close=spot,
+                    volume=last.volume + 1,
+                )
+            self._candle_cache = bars
+            self._candle_cache_ts = now
+            self._feed_source = "gold_api_live"
+            self._seeded = True
+            return bars[-count:] if len(bars) > count else bars
+
         bars = self._synthetic_around(spot, max(count, 120))
         self._candle_cache = bars
         self._candle_cache_ts = now
