@@ -46,6 +46,36 @@ class MetaApiError(Exception):
         self.details = details
 
 
+def _load_stored_token() -> str:
+    """Env first, then encrypted token saved from the app UI."""
+    env = (settings.metaapi_token or "").strip()
+    if env:
+        return env
+    try:
+        from goldbot.auth.users import auth
+        from goldbot.storage.state import store
+
+        enc = store.get_kv("metaapi_token_enc")
+        if not enc:
+            return ""
+        return auth._decrypt(str(enc)).strip()
+    except Exception as e:
+        log.warning("metaapi token load failed: %s", e)
+        return ""
+
+
+def save_stored_token(token: str) -> None:
+    """Persist MetaApi token encrypted so Render env is optional."""
+    from goldbot.auth.users import auth
+    from goldbot.storage.state import store
+
+    clean = (token or "").strip()
+    if not clean:
+        raise MetaApiError("التوكن فارغ", code="EMPTY_TOKEN")
+    store.set_kv("metaapi_token_enc", auth._encrypt(clean))
+    settings.metaapi_token = clean
+
+
 class MetaApiCloud:
     """Thin REST client for MetaApi cloud G2 accounts."""
 
@@ -56,14 +86,35 @@ class MetaApiCloud:
         magic: int | None = None,
         http: Callable[..., dict | list | None] | None = None,
     ) -> None:
-        self.token = (token if token is not None else settings.metaapi_token).strip()
+        # token=None means resolve from env/store; token="" means explicitly empty (tests)
+        if token is None:
+            self.token = _load_stored_token()
+        else:
+            self.token = str(token).strip()
         self.region = (region if region is not None else settings.metaapi_region).strip() or "new-york"
         self.magic = int(magic if magic is not None else settings.metaapi_magic)
         self._http = http or self._default_http
 
     @property
     def configured(self) -> bool:
+        if not self.token:
+            self.refresh_token()
         return bool(self.token)
+
+    def set_token(self, token: str) -> None:
+        self.token = (token or "").strip()
+        settings.metaapi_token = self.token
+
+    def refresh_token(self) -> str:
+        self.token = _load_stored_token()
+        return self.token
+
+    def validate_token(self) -> dict:
+        """Light check that the token works against Provisioning API."""
+        if not self.configured:
+            raise MetaApiError("لا يوجد METAAPI_TOKEN", code="NO_TOKEN", status=503)
+        accounts = self.list_accounts()
+        return {"ok": True, "accounts": len(accounts), "region": self.region}
 
     def _headers(self, *, transaction: bool = False) -> dict[str, str]:
         h = {

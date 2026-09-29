@@ -87,6 +87,40 @@ def test_metaapi_ensure_and_order(monkeypatch):
     assert order["mode"] == "metaapi"
 
 
+def test_save_metaapi_token_from_app(tmp_path, monkeypatch):
+    monkeypatch.setenv("AURUM_COOKIE_SECURE", "0")
+    monkeypatch.setenv("METAAPI_TOKEN", "")
+    from goldbot.config import settings
+    from goldbot.storage.state import DeskStore
+
+    settings.metaapi_token = ""
+    settings.prefer_metaapi = True
+    users = UserAuth(tmp_path / "users.sqlite3")
+    store = DeskStore(tmp_path / "desk.sqlite3")
+    monkeypatch.setattr("goldbot.api.auth", users)
+    monkeypatch.setattr("goldbot.api.store", store)
+    monkeypatch.setattr("goldbot.storage.state.store", store)
+    monkeypatch.setattr("goldbot.auth.users.auth", users)
+
+    fake = FakeMetaHttp()
+    cloud = MetaApiCloud(token="", region="new-york", http=fake)
+    monkeypatch.setattr("goldbot.api.metaapi", cloud)
+    monkeypatch.setattr("goldbot.mt5.metaapi_cloud.metaapi", cloud)
+
+    client = TestClient(app)
+    reg = client.post(
+        "/api/auth/register",
+        json={"username": "owner1", "password": "password12", "password_confirm": "password12"},
+    )
+    assert reg.status_code == 200
+
+    saved = client.post("/api/cloud/token", json={"token": "my-real-metaapi-token-abc", "check_token": True})
+    assert saved.status_code == 200, saved.text
+    assert saved.json()["metaapi_configured"] is True
+    assert cloud.configured is True
+    assert store.get_kv("metaapi_token_enc")
+
+
 def test_mt5_login_uses_metaapi_cloud(tmp_path, monkeypatch):
     monkeypatch.setenv("AURUM_COOKIE_SECURE", "0")
     monkeypatch.setenv("METAAPI_TOKEN", "unit-test-token")

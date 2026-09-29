@@ -26,9 +26,15 @@ STATIC = Path(__file__).resolve().parent / "static"
 
 @asynccontextmanager
 async def lifespan(_: FastAPI):
-    # Do not auto-trade until a user arms the desk (safer default for real product)
+    # Load MetaApi token from env or app-saved encrypted store (no Windows path)
+    metaapi.refresh_token()
     desk.start_background()
-    log.info("AURUM desk online mode=%s symbol=%s", settings.mode, settings.symbol)
+    log.info(
+        "AURUM desk online mode=%s symbol=%s metaapi=%s",
+        settings.mode,
+        settings.symbol,
+        metaapi.configured,
+    )
     yield
     desk.stop_background()
     bridge.shutdown()
@@ -55,6 +61,13 @@ class Mt5LoginBody(BaseModel):
     mt5_server: str = "Exness-MT5Trial"
     symbol: str = "XAUUSD"
     auto_start: bool = True
+    metaapi_token: str | None = None  # optional — paste once to unlock cloud trading
+
+
+class MetaApiTokenBody(BaseModel):
+    token: str = Field(..., min_length=10, description="MetaApi auth token from app.metaapi.cloud")
+    region: str | None = None
+    check_token: bool = True
 
 
 class AutoTradeBody(BaseModel):
@@ -128,6 +141,7 @@ async def download_agent():
 
 @app.api_route("/health", methods=["GET", "HEAD"])
 async def health():
+    metaapi.refresh_token()
     return {
         "ok": True,
         "product": PRODUCT_NAME,
@@ -137,6 +151,8 @@ async def health():
         "auto_trade": desk.auto_trade,
         "state": desk.state,
         "tick_seconds": settings.tick_seconds,
+        "metaapi_configured": metaapi.configured,
+        "execution": bridge.execution or desk.account.mode,
         "auth": {"needs_setup": auth.needs_setup(), "users": auth.user_count()},
     }
 
@@ -189,6 +205,18 @@ async def mt5_login(body: Mt5LoginBody, response: Response):
     user = result["user"]
     _set_session(response, result["token"])
 
+    # Optional one-shot MetaApi token from the login form
+    if body.metaapi_token and body.metaapi_token.strip():
+        try:
+            from goldbot.mt5.metaapi_cloud import save_stored_token
+
+            save_stored_token(body.metaapi_token.strip())
+            metaapi.set_token(body.metaapi_token.strip())
+            metaapi.validate_token()
+        except MetaApiError as e:
+            raise HTTPException(400, f"توكن MetaApi غير صالح: {e.message}")
+
+    metaapi.refresh_token()
     secrets = auth.mt5_secrets(user["id"])
     settings.mode = "mt5"
     settings.symbol = secrets["symbol"] or "XAUUSD"
@@ -238,8 +266,8 @@ async def mt5_login(body: Mt5LoginBody, response: Response):
             store.log_event("metaapi_login_error", {"user": user["username"], "error": e.message, "code": e.code})
     else:
         message = (
-            "حساب Exness محفوظ، لكن METAAPI_TOKEN غير مضبوط على السيرفر. "
-            "أضِف توكن MetaApi في Render لتفعيل التنفيذ الحقيقي المباشر بدون Windows."
+            "حساب Exness محفوظ. للصق توكن MetaApi من تبويب «ربط Exness السحابي» "
+            "أو من حقل التوكن في شاشة الدخول — بعدها يبدأ التنفيذ الحقيقي بدون Windows."
         )
 
     desk.account = bridge.connect()
@@ -305,11 +333,12 @@ def _cloud_status_for_user(user_id: int) -> dict:
     st.setdefault("execution", "windows_bridge" if st.get("online") else "pending")
     st.setdefault("provider", "windows_bridge")
     st.setdefault("windows_required", not metaapi.configured)
+    metaapi.refresh_token()
     st.setdefault(
         "detail",
         st.get("detail")
         or (
-            "METAAPI_TOKEN مطلوب للربط المباشر"
+            "الصق توكن MetaApi من تبويب الربط السحابي"
             if not metaapi.configured
             else "بانتظار إنشاء الطرفية السحابية"
         ),
@@ -533,18 +562,20 @@ async def schools(authorization: str | None = Header(default=None), aurum_sessio
 
 @app.get("/api/connect-guide")
 async def connect_guide():
+    metaapi.refresh_token()
     return {
         "title": "ربط Exness المباشر من التطبيق (سحابة MetaApi)",
         "steps": [
-            "من شاشة الدخول: أدخل رقم حساب MT5/Exness + كلمة المرور + السيرفر.",
-            "AURUM ينشئ طرفية MT5 سحابية عبر MetaApi ويربط حسابك مباشرة.",
-            "عندما تظهر حالة «متصل سحابياً» يبدأ التنفيذ الذكي الحقيقي من التطبيق.",
-            "لا تحتاج Windows ولا تثبيت MetaTrader على جهازك.",
+            "أنشئ حساباً مجانياً على app.metaapi.cloud وانسخ API token.",
+            "الصق التوكن في شاشة الدخول أو تبويب الربط السحابي داخل AURUM.",
+            "أدخل رقم حساب Exness/MT5 + كلمة المرور + السيرفر.",
+            "عندما تظهر «متصل سحابياً» يبدأ التنفيذ الحقيقي من التطبيق بدون Windows.",
             "ابدأ Demo (Exness-MT5Trial) قبل Real.",
         ],
         "metaapi_configured": metaapi.configured,
-        "warning": "كلمة المرور تُحفظ مشفّرة. يلزم METAAPI_TOKEN على السيرفر لفتح الطرفية السحابية.",
+        "warning": "التوكن وكلمة مرور Exness يُحفظان مشفّرين داخل التطبيق.",
         "servers": EXNESS_SERVERS,
+        "metaapi_signup": "https://app.metaapi.cloud",
     }
 
 
@@ -596,6 +627,7 @@ async def bridge_complete(body: BridgeCompleteBody, authorization: str | None = 
 @app.get("/api/bridge/status")
 async def bridge_status(authorization: str | None = Header(default=None), aurum_session: str | None = Cookie(default=None, alias=SESSION_COOKIE)):
     user = require_user(authorization, aurum_session)
+    metaapi.refresh_token()
     st = _cloud_status_for_user(user["id"])
     return {
         "ok": True,
@@ -607,15 +639,63 @@ async def bridge_status(authorization: str | None = Header(default=None), aurum_
     }
 
 
+@app.get("/api/cloud/status")
+async def cloud_status(authorization: str | None = Header(default=None), aurum_session: str | None = Cookie(default=None, alias=SESSION_COOKIE)):
+    user = require_user(authorization, aurum_session)
+    metaapi.refresh_token()
+    st = _cloud_status_for_user(user["id"])
+    return {
+        "ok": True,
+        "metaapi_configured": metaapi.configured,
+        "region": settings.metaapi_region,
+        "bridge": st,
+        "account": desk.account.to_dict(),
+        "signup_url": "https://app.metaapi.cloud",
+    }
+
+
+@app.post("/api/cloud/token")
+async def cloud_save_token(
+    body: MetaApiTokenBody,
+    authorization: str | None = Header(default=None),
+    aurum_session: str | None = Cookie(default=None, alias=SESSION_COOKIE),
+):
+    """Save MetaApi token from the app (encrypted) and optionally validate it."""
+    require_user(authorization, aurum_session)
+    from goldbot.mt5.metaapi_cloud import save_stored_token
+
+    token = body.token.strip()
+    if body.region:
+        settings.metaapi_region = body.region.strip()
+        store.set_kv("metaapi_region", settings.metaapi_region)
+    save_stored_token(token)
+    metaapi.set_token(token)
+    metaapi.region = settings.metaapi_region
+    validated = None
+    if body.check_token:
+        try:
+            validated = metaapi.validate_token()
+        except MetaApiError as e:
+            raise HTTPException(400, f"التوكن مرفوض من MetaApi: {e.message}")
+    store.log_event("metaapi_token_saved", {"ok": True, "accounts": (validated or {}).get("accounts")})
+    return {
+        "ok": True,
+        "metaapi_configured": True,
+        "validated": validated,
+        "message": "تم حفظ توكن MetaApi — أعد ربط Exness الآن للتنفيذ الحقيقي.",
+    }
+
+
 @app.post("/api/cloud/reconnect")
 async def cloud_reconnect(authorization: str | None = Header(default=None), aurum_session: str | None = Cookie(default=None, alias=SESSION_COOKIE)):
     """Re-provision / refresh MetaApi cloud connection for the logged-in user."""
     user = require_user(authorization, aurum_session)
+    metaapi.refresh_token()
     secrets = auth.mt5_secrets(user["id"])
     if not secrets.get("login") or not secrets.get("password"):
         raise HTTPException(400, "لا توجد بيانات Exness محفوظة — سجّل الدخول من شاشة MT5")
     if not metaapi.configured:
-        raise HTTPException(503, "METAAPI_TOKEN غير مضبوط على السيرفر")
+        raise HTTPException(503, "الصق توكن MetaApi أولاً من تبويب الربط السحابي")
     try:
         cloud = metaapi.ensure_account(
             str(secrets["login"]),

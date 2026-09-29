@@ -37,10 +37,15 @@
         <label>الرمز
           <input id="mt5Symbol" value="XAUUSD" />
         </label>
+        <label>توكن MetaApi (مرة واحدة — من app.metaapi.cloud)
+          <input id="mt5MetaToken" type="password" placeholder="الصق API token هنا إن لم يُحفظ بعد" autocomplete="off" />
+        </label>
         <button type="submit" class="primary">ارتباط سحابي وابدأ التداول</button>
         <p class="auth-note">
-          التطبيق يفتح طرفية MT5 سحابية ويربط حساب Exness مباشرة — بدون Windows.
-          استخدم حساب تجريبي (Trial) أولاً قبل الحساب الحقيقي.
+          1) أنشئ حساباً على app.metaapi.cloud وانسخ التوكن ·
+          2) أدخل حساب Exness ·
+          3) التطبيق يربط وينفّذ مباشرة بدون Windows.
+          ابدأ بـ Trial قبل Real.
         </p>
       </form>
 
@@ -117,14 +122,19 @@
       <section class="connect-box">
         <h1>ربط Exness السحابي المباشر</h1>
         <p id="bridgeStatusText">حالة السحابة: —</p>
+        <p id="metaConfiguredLine" class="auth-note">توكن MetaApi: —</p>
         <ol class="steps">
-          <li>أدخل رقم حساب Exness/MT5 وكلمة المرور والسيرفر من شاشة الدخول.</li>
-          <li>AURUM ينشئ طرفية MT5 في السحابة ويربط حسابك تلقائياً.</li>
-          <li>عندما تصبح الحالة «متصل سحابياً» يعمل التنفيذ الذكي الكامل.</li>
-          <li>لا حاجة لتثبيت MetaTrader أو تشغيل وكيل Windows.</li>
+          <li>احصل على API token من <a href="https://app.metaapi.cloud" target="_blank" rel="noopener">app.metaapi.cloud</a>.</li>
+          <li>الصق التوكن بالأسفل واحفظه (مرة واحدة).</li>
+          <li>أدخل حساب Exness من شاشة الدخول — AURUM يفتح طرفية سحابية تلقائياً.</li>
+          <li>عندما تصبح الحالة «متصل سحابياً» يعمل التنفيذ الذكي الكامل بدون Windows.</li>
         </ol>
+        <label>توكن MetaApi
+          <input id="cloudMetaToken" type="password" placeholder="الصق التوكن هنا" autocomplete="off" />
+        </label>
+        <button type="button" id="btnSaveMetaToken" class="primary">حفظ التوكن وتفعيله</button>
         <p id="cloudAccountLine" class="auth-note">معرّف الحساب السحابي: —</p>
-        <button type="button" id="btnRefreshBridge" class="primary">تحديث / إعادة ربط السحابة</button>
+        <button type="button" id="btnRefreshBridge" class="ghost">تحديث / إعادة ربط Exness</button>
         <p id="connectMsg" class="auth-msg"></p>
         <textarea id="agentCmd" class="hidden" rows="1" readonly aria-hidden="true"></textarea>
         <button type="button" id="btnCopyAgent" class="hidden" aria-hidden="true">نسخ</button>

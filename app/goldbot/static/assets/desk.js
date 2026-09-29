@@ -101,7 +101,7 @@
     }
   }
 
-  function setBridgeUI(bridge, token, agentCommand) {
+  function setBridgeUI(bridge, token, agentCommand, metaConfigured) {
     const online = !!(bridge && bridge.online);
     const provider = (bridge && bridge.provider) || (bridge && bridge.execution) || "";
     const cloud = provider === "metaapi" || !!(bridge && bridge.account_id);
@@ -116,6 +116,12 @@
     if ($("cloudAccountLine")) {
       const id = (bridge && (bridge.account_id || (bridge.account && bridge.account.login))) || "—";
       $("cloudAccountLine").textContent = `معرّف الحساب السحابي: ${bridge && bridge.account_id ? bridge.account_id : id}`;
+    }
+    if ($("metaConfiguredLine") && metaConfigured != null) {
+      $("metaConfiguredLine").textContent = metaConfigured
+        ? "توكن MetaApi: محفوظ ومفعّل"
+        : "توكن MetaApi: غير محفوظ — الصقه بالأسفل";
+      $("metaConfiguredLine").classList.toggle("ok", !!metaConfigured);
     }
     if (token) bridgeToken = token;
     if (agentCommand && $("agentCmd")) $("agentCmd").value = agentCommand;
@@ -180,10 +186,22 @@
     renderTrades(j.trades || [], $("tradesFull"));
   }
 
+  async function refreshCloudStatusOnly() {
+    try {
+      const j = await api("/api/cloud/status");
+      setBridgeUI(j.bridge || j.cloud, null, null, j.metaapi_configured);
+      return j;
+    } catch (_) {
+      const j = await api("/api/bridge/status");
+      setBridgeUI(j.bridge || j.cloud, null, null, j.metaapi_configured);
+      return j;
+    }
+  }
+
   async function refreshBridge() {
     try {
       const j = await api("/api/cloud/reconnect", { method: "POST" });
-      setBridgeUI(j.bridge || j.cloud);
+      setBridgeUI(j.bridge || j.cloud, null, null, true);
       if (j.account) {
         $("equity").textContent = Number(j.account.equity || 0).toFixed(2);
         $("modePill").textContent = j.account.mode || "mt5";
@@ -194,12 +212,39 @@
       }
     } catch (e) {
       try {
-        const j = await api("/api/bridge/status");
-        setBridgeUI(j.bridge || j.cloud);
-      } catch (_) {
-        if ($("connectMsg")) $("connectMsg").textContent = e.message || "تعذّر تحديث السحابة";
+        await refreshCloudStatusOnly();
+      } catch (_) {}
+      if ($("connectMsg")) {
+        $("connectMsg").textContent = e.message || "تعذّر تحديث السحابة";
+        $("connectMsg").classList.remove("ok");
       }
     }
+  }
+
+  if ($("btnSaveMetaToken")) {
+    $("btnSaveMetaToken").onclick = async () => {
+      const token = ($("cloudMetaToken").value || "").trim();
+      if (token.length < 10) {
+        $("connectMsg").textContent = "الصق توكن MetaApi صالحاً أولاً";
+        $("connectMsg").classList.remove("ok");
+        return;
+      }
+      try {
+        const j = await api("/api/cloud/token", {
+          method: "POST",
+          body: JSON.stringify({ token, check_token: true }),
+        });
+        $("connectMsg").textContent = j.message || "تم الحفظ";
+        $("connectMsg").classList.add("ok");
+        $("cloudMetaToken").value = "";
+        await refreshCloudStatusOnly();
+        // If Exness creds already saved, reconnect immediately
+        try { await refreshBridge(); } catch (_) {}
+      } catch (e) {
+        $("connectMsg").textContent = e.message || "فشل حفظ التوكن";
+        $("connectMsg").classList.remove("ok");
+      }
+    };
   }
 
   async function pulse() {
@@ -262,6 +307,7 @@
     e.preventDefault();
     showAuth("جاري الارتباط بحساب Exness/MT5…");
     try {
+      const metaTok = ($("mt5MetaToken") && $("mt5MetaToken").value || "").trim();
       const j = await api("/api/auth/mt5-login", {
         method: "POST",
         body: JSON.stringify({
@@ -270,6 +316,7 @@
           mt5_server: $("mt5Server").value,
           symbol: $("mt5Symbol").value.trim() || "XAUUSD",
           auto_start: true,
+          metaapi_token: metaTok || null,
         }),
       });
       showAuth(j.message || "تم الربط السحابي", true);
