@@ -1,5 +1,17 @@
 # Agent Context Changelog
 
+## 2026-09-29 — PFAI 8.13: 24/7 live monitor + continuous learn/train
+
+### Implemented
+- `live_monitor.py`: supervisor pulse — ensure continuous + evolution, tick learn, LoRA when eligible (cooldown), deep heal/develop
+- Boot + evolution minute bind live monitor; hour auto-train when eligible (default ON in open mode)
+- Chat routing: Arabic «التدريب المستمر / التعليم المستمر / أكمل» → real start/tick/monitor tools
+- Compose: natural continuous/monitor answers; no English latent leaks; UI chip spam reduced
+- Tests: `test_v146_live_monitor_continuous.py`
+
+### Honesty
+- Weight activation still never auto; monitor starts real LoRA jobs only — promote stays owner-gated
+
 ## 2026-09-29 — PFAI 8.12: Elite natural reply brain
 
 ### Implemented

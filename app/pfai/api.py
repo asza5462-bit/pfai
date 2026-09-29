@@ -27,6 +27,7 @@ from .quantum_core import QuantumInspiredCore, quantum_core_enabled
 from .iot_mind import IoTMind
 from .evolution_cadence import EvolutionCadence, evolution_enabled
 from .free_sovereign import FreeSovereignIntegrity
+from .live_monitor import LiveSystemMonitor
 from .smart_training import SmartTrainingController
 from .logging_setup import setup_logging
 from .command_audit import CommandAuditLog
@@ -916,14 +917,25 @@ def _evolve_minute_tick() -> dict:
     cont = {'ok': False, 'skipped': True}
     if is_continuous_enabled():
         try:
+            # Keep continuous worker alive every minute
+            CONTINUOUS.start()
             cont = CONTINUOUS.tick_once()
         except Exception as exc:
             cont = {'ok': False, 'error': str(exc)[:160]}
+    monitor = {'ok': True, 'skipped': True}
+    try:
+        # Soft pulse via live monitor when wired (may be rebound after init)
+        mon = globals().get('LIVE_MONITOR')
+        if mon is not None:
+            monitor = mon.pulse(deep=False, train_if_eligible=True)
+    except Exception as exc:
+        monitor = {'ok': False, 'error': str(exc)[:160]}
     return {
         'ok': True,
         'quantum_us': ((q.get('timing') or {}).get('elapsed_us')),
         'quantum_band': ((q.get('timing') or {}).get('target_band')),
         'continuous_ok': bool((cont or {}).get('ok')),
+        'live_monitor_ok': bool((monitor or {}).get('ok')),
         'weight_promotion': 'never_auto',
     }
 
@@ -1360,6 +1372,7 @@ def _conflict_scan() -> dict:
     for mod in (
         'pfai.smart_continuous', 'pfai.quantum_core', 'pfai.iot_mind',
         'pfai.evolution_cadence', 'pfai.free_sovereign', 'pfai.advanced_self_develop',
+        'pfai.live_monitor', 'pfai.elite_reply',
     ):
         try:
             __import__(mod)
@@ -1496,6 +1509,68 @@ TOOL_ROUTER.handlers['free_sovereign_repair'] = _tool_free_sovereign_repair
 TOOL_ROUTER.handlers['free_sovereign_cycle'] = _tool_free_sovereign_cycle
 TOOL_ROUTER.handlers['free_ai_status'] = _tool_free_ai_status
 
+# --- Live System Monitor (24/7 learn + train + heal supervisor) ------------
+LIVE_MONITOR = LiveSystemMonitor(
+    continuous_ensure_fn=lambda: (
+        CONTINUOUS.start() if is_continuous_enabled() else {'ok': True, 'skipped': True, 'reason': 'gate_off'}
+    ),
+    continuous_tick_fn=lambda: (
+        CONTINUOUS.tick_once() if is_continuous_enabled() else {'ok': True, 'skipped': True, 'reason': 'gate_off'}
+    ),
+    continuous_status_fn=lambda: CONTINUOUS.status(),
+    evolution_ensure_fn=lambda: (
+        EVOLUTION.start() if evolution_enabled() else {'ok': True, 'skipped': True, 'reason': 'disabled'}
+    ),
+    evolution_status_fn=lambda: EVOLUTION.status(),
+    training_eligibility_fn=lambda: _tool_training_eligibility(),
+    training_start_fn=lambda: SMART_TRAINING.start_async(
+        owner_requested=True, activate_if_pass=False, force_prepare=True,
+    ) if hasattr(SMART_TRAINING, 'start_async') else SMART_TRAINING.start(
+        owner_requested=True, activate_if_pass=False, force_prepare=True,
+    ),
+    training_status_fn=lambda: SMART_TRAINING.status(),
+    heal_fn=lambda: AUTONOMY.run_cycle(include_continuous_tick=False),
+    develop_fn=lambda: ADVANCED.autonomous_cycle(force=True, include_continuous_tick=False),
+    sovereign_fn=lambda: FREE_SOVEREIGN.repair(deep_code=True),
+    memory_heal_fn=lambda: COMMAND_MEMORY.heal_conflicts(owner=''),
+    interval_seconds=int(os.environ.get('PFAI_LIVE_MONITOR_SECONDS') or 90),
+)
+
+def _tool_live_monitor_status():
+    return LIVE_MONITOR.status()
+
+def _tool_live_monitor_pulse(deep: bool = False):
+    return LIVE_MONITOR.pulse(deep=bool(deep), train_if_eligible=True)
+
+for _spec in (
+    ToolSpec('live_monitor_status', '24/7 live supervisor status (learn/train/heal)', 'read', False, {}),
+    ToolSpec('live_monitor_pulse', 'Run one live-monitor heartbeat (optional deep heal/develop)', 'write', False, {'deep': 'bool?'}),
+):
+    TOOL_ROUTER.specs[_spec.name] = _spec
+TOOL_ROUTER.handlers['live_monitor_status'] = _tool_live_monitor_status
+TOOL_ROUTER.handlers['live_monitor_pulse'] = _tool_live_monitor_pulse
+
+def _pfai_startup_live_monitor() -> None:
+    try:
+        st = LIVE_MONITOR.start()
+        # Immediate deep-ish ensure on boot
+        pulse = LIVE_MONITOR.pulse(deep=False, train_if_eligible=True)
+        log.info(
+            'startup: live monitor alive=%s pulses=%s continuous=%s',
+            st.get('alive'), pulse.get('continuous_alive'), pulse.get('continuous_alive'),
+        )
+    except Exception as exc:
+        log.warning('startup: live monitor failed: %s', exc)
+
+def _pfai_shutdown_live_monitor() -> None:
+    try:
+        LIVE_MONITOR.stop('app_shutdown')
+    except Exception as exc:
+        log.warning('shutdown: live monitor stop failed: %s', exc)
+
+app.router.add_event_handler('startup', _pfai_startup_live_monitor)
+app.router.add_event_handler('shutdown', _pfai_shutdown_live_monitor)
+
 def _pfai_startup_free_sovereign() -> None:
     """On boot: clear schema debt + soft sovereign repair (no weight promote)."""
     try:
@@ -1532,7 +1607,14 @@ def _evolve_hour_with_sovereign() -> dict:
     except Exception as exc:
         sov = {'ok': False, 'error': str(exc)[:160]}
     train_out = {'ok': True, 'skipped': True}
-    auto_train = (os.environ.get('PFAI_AUTO_TRAIN_WHEN_ELIGIBLE') or '').strip().lower() in {'1', 'true', 'on', 'yes'}
+    # Default ON in public/open mode — real LoRA when eligible; never silent activate.
+    _at = (os.environ.get('PFAI_AUTO_TRAIN_WHEN_ELIGIBLE') or '').strip().lower()
+    if _at in {'0', 'false', 'off', 'no'}:
+        auto_train = False
+    elif _at in {'1', 'true', 'on', 'yes'}:
+        auto_train = True
+    else:
+        auto_train = bool(open_execution_status().get('open_chat_tools') or is_continuous_enabled())
     if auto_train:
         try:
             # Owner-style start: prepare + real cycle. Orchestrator enforces honesty/gates.

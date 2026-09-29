@@ -77,16 +77,28 @@ def comprehend(
         intent = "research"
         goals.append("grounded_web_facts")
         strategy = "cite_then_synthesize"
-    elif re.search(r"تدريب|training|continuous|تعلم\s*مستمر|lora|fine.?tun", text, re.I):
+    elif re.search(
+        r"تدريب|training|continuous|تعل[يّ]م\s*مستمر|التعليم\s*المستمر|"
+        r"التدريب\s*المستمر|lora|fine.?tun|تدرب|درّب|درب",
+        text,
+        re.I,
+    ):
         intent = "train_learn"
         goals.append("real_weight_training")
         goals.append("continuous_capability")
         strategy = "start_real_training"
-        latent = (
-            "تشغيل تدريب LoRA حقيقي من الشات — ليس قراءة فقط وليس وهماً"
-            if ar else
-            "run real LoRA training from chat — not read-only, not simulated"
-        )
+        if re.search(r"مستمر|continuous|24/?7|على\s*مدار|مدار\s*الساعة", text, re.I):
+            latent = (
+                "تعلّم وتدريب مستمران 24/7 بمراقب حي — عمل حقيقي بلا وهم"
+                if ar else
+                "24/7 continuous learn+train under a live monitor — real work, not theater"
+            )
+        else:
+            latent = (
+                "تشغيل تدريب LoRA حقيقي من الشات — ليس قراءة فقط وليس وهماً"
+                if ar else
+                "run real LoRA training from chat — not read-only, not simulated"
+            )
     elif re.search(r"ذاكرة|memory|تذكر|remember|افهم|فهم", text, re.I):
         intent = "memory_mind"
         goals.append("legendary_recall")
@@ -126,13 +138,36 @@ def comprehend(
         if re.search(pat, text, re.I):
             entities.append(label)
 
-    # Dialog continuity
-    prior_user = [d.get("content") for d in (dialog or []) if d.get("role") == "user"][-3:]
+    # Dialog continuity — inherit prior productive intent on أكمل/continue
+    prior_user = [d.get("content") for d in (dialog or []) if d.get("role") == "user"][-4:]
     prior_assistant = [d.get("content") for d in (dialog or []) if d.get("role") == "assistant"][-2:]
-    if prior_user and intent == "general":
+    continue_cmd = bool(re.search(
+        r"^(?:اكمل|أكمل|استمر|continue|go\s*on|keep\s*going|next)\s*[.!?؟]*$",
+        text,
+        re.I,
+    ))
+    if intent == "general" and (continue_cmd or (prior_user and len(text) < 24)):
+        # Infer prior intent from recent user turns
+        prior_blob = " ".join(str(x or "") for x in prior_user)
+        inherited = ""
+        if re.search(r"تدريب|training|continuous|تعل[يّ]م\s*مستمر|تدرب|lora", prior_blob, re.I):
+            inherited = "train_learn"
+        elif re.search(r"أصلح|طور\s*نفس|self.?improve|مراقب|sovereign|راجع\s*كل", prior_blob, re.I):
+            inherited = "self_evolve"
+        elif re.search(r"عقل\s*واحد|unified", prior_blob, re.I):
+            inherited = "unify_system"
+        if inherited:
+            intent = inherited
+            strategy = "continue_prior_intent"
+            latent = _default_latent(inherited, lang)
+        else:
+            intent = "followup"
+            strategy = "continue_thread"
+            latent = latent or _default_latent("followup", lang)
+    elif prior_user and intent == "general":
         intent = "followup"
         strategy = "continue_thread"
-        latent = latent or "continue prior desire with higher precision"
+        latent = latent or _default_latent("followup", lang)
 
     # Memory influence
     mem_used = bool(memory_hints and "no durable" not in memory_hints.lower())

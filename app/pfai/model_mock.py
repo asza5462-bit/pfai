@@ -51,7 +51,22 @@ class MockCommandProvider(ModelProvider):
             add("iot_understand")
             add("evolution_status")
             add("quantum_status")
-        if re.search(
+        # Continuous 24/7 first — must beat bare "هل التدريب" eligibility branch
+        early_continuous = bool(re.search(
+            r"ال?تدريب\s*ال?مستمر|ال?تعل[يّ]م\s*ال?مستمر|continuous\s*(training|learning)|"
+            r"على\s*مدار\s*ال?ساعة|24/?7|مراقب\s*حي|live\s*monitor",
+            text + ar,
+            re.I,
+        ))
+        if early_continuous:
+            add("live_monitor_pulse")
+            add("continuous_start")
+            add("continuous_tick")
+            add("live_monitor_status")
+            add("continuous_status")
+            add("smart_continuous_status")
+            add("evolution_status")
+        elif re.search(
             r"ابدأ\s*التدريب|شغ[ّل]\s*التدريب|درّب|درب\s*الان|run\s*training|"
             r"training_cycle|smart_training|تدريب\s*حقيقي|تدريب\s*فعلي|"
             r"ليس\s*وهم|بلا\s*حدود.*تدريب|تدريب.*بلا\s*حدود",
@@ -62,9 +77,11 @@ class MockCommandProvider(ModelProvider):
             add("training_cycle_start")
             add("smart_training_status")
             add("training_eligibility")
+            add("continuous_start")
+            add("live_monitor_pulse")
         elif re.search(
-            r"eligib|أهلية|حالة\s*التدريب|training\s*status|جاهزية\s*التدريب|"
-            r"هل\s*(التدريب|النموذج)|next\s*training|can\s*we\s*train|متى\s*نتدرب",
+            r"eligib|أهلية|حالة\s*التدريب(?!\s*ال?مستمر)|training\s*status|جاهزية\s*التدريب|"
+            r"هل\s*(?:ال)?(?:تدريب|نموذج)(?!\s*ال?مستمر)|next\s*training|can\s*we\s*train|متى\s*نتدرب",
             text + ar,
             re.I,
         ):
@@ -74,6 +91,8 @@ class MockCommandProvider(ModelProvider):
             add("smart_training_start")
         elif re.search(r"continuous|تعلم\s*مستمر|continuous\s*learning", text + ar):
             add("continuous_status")
+            add("live_monitor_status")
+            add("continuous_start")
         elif re.search(r"\btraining\b|تدريب\s*النموذج|تدريب\s*النماذج|التدريب", text + ar):
             add("smart_training_start")
             add("training_cycle_start")
@@ -148,18 +167,26 @@ class MockCommandProvider(ModelProvider):
         if re.search(r"search knowledge|ابحث.*معرف|راجع.*بيانات|بيانات", text + ar) and not web_intent:
             add("knowledge_search")
             add("memory_search")
-        if re.search(
-            r"تدريب\s*مستمر|تدريب\s*بذكاء|بدون\s*قيود|فهم\s*عالي|تركيز\s*عالي|"
-            r"دقيق\s*جدا|smart\s*continuous|high.?precision\s*train|continuous\s*without",
+        # Continuous learn/train 24/7 — match الـdefinite article forms
+        continuous_ask = bool(re.search(
+            r"ال?تدريب\s*ال?مستمر|ال?تعل[يّ]م\s*ال?مستمر|continuous\s*(training|learning)|"
+            r"تدريب\s*بذكاء|smart\s*continuous|high.?precision\s*train|"
+            r"على\s*مدار\s*ال?ساعة|24/?7|مراقب\s*حي|live\s*monitor|"
+            r"هل\s*(?:ال)?تدريب|هل\s*(?:ال)?تعل[يّ]م",
             text + ar,
             re.I,
-        ):
+        ))
+        if continuous_ask:
+            add("live_monitor_pulse")
             add("continuous_start")
             add("continuous_tick")
-            add("smart_continuous_status")
+            add("live_monitor_status")
             add("continuous_status")
-        if re.search(r"start continuous|شغ[لّ].*تعلم|تشغيل.*continuous|ابدأ\s*التعلم\s*المستمر", text + ar):
+            add("smart_continuous_status")
+            add("evolution_status")
+        if re.search(r"start continuous|شغ[لّ].*تعلم|تشغيل.*continuous|ابدأ\s*ال?تعلم\s*ال?مستمر", text + ar):
             add("continuous_start")
+            add("live_monitor_pulse")
             add("continuous_status")
             add("continuous_tick")
             add("smart_continuous_status")
@@ -167,17 +194,27 @@ class MockCommandProvider(ModelProvider):
             add("continuous_tick")
             add("continuous_status")
             add("smart_continuous_status")
-        if re.search(r"smart\s*continuous|حالة\s*التدريب\s*الذكي|precision\s*train", text + ar, re.I):
+        if re.search(r"smart\s*continuous|حالة\s*ال?تدريب\s*ال?ذكي|precision\s*train", text + ar, re.I):
             add("smart_continuous_status")
             add("continuous_status")
+            add("live_monitor_status")
         if re.search(
-            r"start\s*training\s*cycle|training_cycle|ابدأ\s*دورة\s*التدريب|شغّل\s*التدريب|run\s*training",
+            r"start\s*training\s*cycle|training_cycle|ابدأ\s*دورة\s*ال?تدريب|شغّل\s*ال?تدريب|"
+            r"run\s*training|ابدأ\s*ال?تدريب|تدرب|درّب|درب\s*على|تدرب\s*على",
             text + ar,
             re.I,
         ):
             add("smart_training_start")
+            add("continuous_start")
+            add("live_monitor_pulse")
             add("training_cycle_start")
             add("training_eligibility")
+        # Continue / أكمل — keep productive loops moving
+        if re.search(r"^(?:اكمل|أكمل|استمر|continue|go\s*on|keep\s*going)\b", text + ar, re.I):
+            add("live_monitor_pulse")
+            add("continuous_tick")
+            add("smart_training_start")
+            add("evolution_tick")
         if re.search(r"stop continuous|أوقف.*تعلم|ايقاف.*تعلم", text + ar):
             add("continuous_stop")
         if re.search(r"resume continuous|استأنف.*تعلم", text + ar):
@@ -308,6 +345,8 @@ class MockCommandProvider(ModelProvider):
                     args.pop("language", None)
             if name == "evolution_tick":
                 args = {"kind": "minute"}
+            if name == "live_monitor_pulse":
+                args = {"deep": bool(re.search(r"عميق|deep|أصلح|طور|sovereign", message or "", re.I))}
             tools.append({"tool": name, "args": args})
         return tools
 

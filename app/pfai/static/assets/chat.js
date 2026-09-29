@@ -81,37 +81,47 @@
 
   function renderLearningContext(ctx, lang) {
     if (!ctx) return '';
+    // Only show academy strip for real coding/teaching turns — not ops/training spam
+    const codingish = ['teach', 'coding', 'academy', 'exercise', 'review', 'assess'].includes(
+      String(ctx.intent || ctx.mode || '').toLowerCase()
+    ) || ctx.track_id || ctx.lesson_id || ctx.lesson_title;
+    if (!codingish) return '';
     const bits = [];
-    if (ctx.intent) bits.push(`${lang === 'en' ? 'intent' : 'نية'}: ${ctx.intent}`);
     if (ctx.mode) bits.push(`${lang === 'en' ? 'mode' : 'وضع'}: ${ctx.mode}`);
     if (ctx.track_id) bits.push(`track: ${ctx.track_id}`);
     if (ctx.lesson_title || ctx.lesson_id) bits.push(`${ctx.lesson_title || ctx.lesson_id}`);
-    if (ctx.assessment_count) bits.push(`assessment: ${ctx.assessment_count}`);
-    if (ctx.can_start_training_from_chat !== false) {
-      bits.push(lang === 'en' ? 'training: writable from chat' : 'تدريب: قابل للتشغيل من الشات');
-    }
-    if (ctx.training_auto) bits.push(lang === 'en' ? 'auto-train when eligible' : 'تدريب تلقائي عند الجاهزية');
-    if (ctx.read_only === false || ctx.write_path) bits.push(lang === 'en' ? 'not read-only' : 'ليس قراءة فقط');
+    if (!bits.length) return '';
     return `<div class="chat-learn-strip">${bits.map(b => `<span class="chat-chip">${esc(String(b))}</span>`).join('')}</div>`;
   }
 
   function renderTrainingChips(tools, lang) {
     if (!tools || !tools.length) return '';
     const chips = [];
+    let eligShown = false;
     tools.forEach(t => {
       if (!t || !t.ok) return;
       const name = t.tool || '';
       const res = t.result || {};
-      if (name === 'training_eligibility' || name === 'smart_training_status' || (res.eligibility && 'eligible' in res)) {
+      if (!eligShown && (name === 'training_eligibility' || name === 'smart_training_status' || (res.eligibility && 'eligible' in res))) {
         const elig = res.eligible;
         const reason = (res.eligibility && (res.eligibility.reason || (res.eligibility.reasons || [])[0])) || res.reason || '';
-        chips.push(`<span class="chat-chip ${elig ? 'ok' : 'warn'}">${lang === 'en' ? 'Training eligible' : 'أهلية التدريب'}: ${elig ? 'YES' : 'NO'}${reason ? ' · ' + esc(String(reason).slice(0, 80)) : ''}</span>`);
-        chips.push(`<span class="chat-chip ok">${lang === 'en' ? 'Start from chat: YES' : 'يبدأ من الشات: نعم'}</span>`);
+        chips.push(`<span class="chat-chip ${elig ? 'ok' : 'warn'}">${lang === 'en' ? 'Eligible' : 'الأهلية'}: ${elig ? 'YES' : 'NO'}${reason ? ' · ' + esc(String(reason).slice(0, 60)) : ''}</span>`);
+        eligShown = true;
       }
       if (name === 'training_cycle_start' || name === 'smart_training_start') {
         const ex = !!(res.actual_training_executed || (res.cycle && res.cycle.actual_training_executed));
         const st = (res.cycle && res.cycle.status) || res.status || '';
         chips.push(`<span class="chat-chip ${ex ? 'ok' : 'warn'}">${lang === 'en' ? 'REAL train' : 'تدريب حقيقي'}: ${ex ? 'EXECUTED' : esc(String(st).slice(0, 48))}</span>`);
+      }
+      if (name === 'live_monitor_pulse' || name === 'live_monitor_status') {
+        const alive = res.alive !== undefined ? res.alive : res.continuous_alive;
+        chips.push(`<span class="chat-chip ok">${lang === 'en' ? 'Live monitor' : 'مراقب حي'}: ${alive === false ? 'DOWN' : '24/7'}</span>`);
+      }
+      if (name === 'continuous_start' || name === 'continuous_status' || name === 'continuous_tick') {
+        const wa = res.worker_alive;
+        if (wa !== undefined) {
+          chips.push(`<span class="chat-chip ${wa ? 'ok' : 'warn'}">${lang === 'en' ? 'Continuous' : 'مستمر'}: ${wa ? 'ALIVE' : 'DOWN'}</span>`);
+        }
       }
       if (name === 'training_control_status') {
         chips.push(`<span class="chat-chip">control: ${esc(String(res.paused === true ? 'paused' : (res.autonomous_enabled ? 'autonomous' : 'manual')))}</span>`);

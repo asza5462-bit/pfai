@@ -228,6 +228,71 @@ def humanize_tool(name: str, res: Any, *, en: bool) -> str | None:
             return f"System check: {ok}."
         return f"فحص النظام: {ok}."
 
+    if name in {"continuous_status", "smart_continuous_status"}:
+        alive = res.get("worker_alive") or res.get("real_loop")
+        pending = res.get("pending_examples")
+        svc = (res.get("service") or {}).get("status") if isinstance(res.get("service"), dict) else res.get("service")
+        if en:
+            return (
+                f"Continuous learn {'ALIVE 24/7' if alive else 'DOWN'} "
+                f"(service={svc or '?'}, pending={pending})."
+            )
+        return (
+            f"التعلّم المستمر {'يعمل 24/7' if alive else 'متوقف'} "
+            f"(الخدمة={svc or '؟'}، معلّق={pending})."
+        )
+
+    if name == "continuous_start":
+        alive = res.get("worker_alive")
+        if en:
+            return f"Continuous worker started — alive={alive}."
+        return f"شغّلت عامل التعلّم المستمر — حي={alive}."
+
+    if name == "continuous_tick":
+        cy = res.get("cycle") or res
+        if en:
+            return f"Continuous tick done — cycle ok={cy.get('ok', res.get('ok'))}."
+        return f"نفّذت دورة تعلّم مستمر — نجاح={cy.get('ok', res.get('ok'))}."
+
+    if name in {"live_monitor_status", "live_monitor_pulse"}:
+        if name == "live_monitor_status" and hasattr(res, "get"):
+            alive = res.get("alive")
+            pulses = res.get("pulses")
+            cont = res.get("continuous") or {}
+            if en:
+                return (
+                    f"Live monitor {'RUNNING' if alive else 'DOWN'} · pulses={pulses} · "
+                    f"continuous_worker={cont.get('worker_alive')}."
+                )
+            return (
+                f"المراقب الحي {'يعمل' if alive else 'متوقف'} · نبضات={pulses} · "
+                f"عامل_مستمر={cont.get('worker_alive')}."
+            )
+        # pulse summary
+        train = res.get("training") or {}
+        if en:
+            return (
+                f"Live monitor pulse ok — continuous={res.get('continuous_alive')} · "
+                f"evolution={res.get('evolution_alive')} · "
+                f"train_triggered={train.get('triggered')} "
+                f"(weights never auto-promoted)."
+            )
+        return (
+            f"نبضة المراقب الحي تمت — مستمر={res.get('continuous_alive')} · "
+            f"تطوّر={res.get('evolution_alive')} · "
+            f"تدريب_مُشغَّل={train.get('triggered')} "
+            f"(ترقية الأوزان لا تتم صامتة)."
+        )
+
+    if name in {"smart_training_status", "training_eligibility"}:
+        elig = res.get("eligible")
+        if elig is None and isinstance(res.get("eligibility"), dict):
+            elig = res["eligibility"].get("eligible")
+        status = res.get("status") or (res.get("last") or {}).get("status")
+        if en:
+            return f"Training eligibility={'YES' if elig else 'NO'}" + (f" · status {status}." if status else ".")
+        return f"أهلية التدريب={'نعم' if elig else 'لا'}" + (f" · الحالة {status}." if status else ".")
+
     # Generic: prefer answer/message fields over raw JSON
     for key in ("answer", "message", "summary", "detail", "status"):
         if res.get(key) and not isinstance(res.get(key), (dict, list)):
@@ -334,6 +399,10 @@ def _lead_for_intent(intent: str, latent: str, message: str, *, en: bool) -> str
             return "I'll keep what matters and answer from verified memory — nothing invented."
         return "سأحتفظ بما يهم وأجيب من ذاكرة موثّقة — بلا اختراع."
     if intent == "train_learn":
+        if re.search(r"مستمر|continuous|24/?7|مدار|مراقب", message or "", re.I):
+            if en:
+                return "Continuous learn+train is supervised 24/7 by the live monitor — real ticks, real LoRA when eligible."
+            return "التعلّم والتدريب المستمران تحت المراقب الحي 24/7 — دورات حقيقية وLoRA عند الأهلية."
         if en:
             return "Real training path is open from chat — LoRA runs when eligible, never silent weight promotion."
         return "مسار التدريب الحقيقي مفتوح من الشات — LoRA يعمل عند الأهلية، بلا ترقية أوزان صامتة."
@@ -366,11 +435,14 @@ def _lead_for_intent(intent: str, latent: str, message: str, *, en: bool) -> str
             return "Ops pulse — real status only."
         return "نبضة التشغيل — حالة حقيقية فقط."
     if intent == "followup":
-        if latent:
-            return (f"Continuing: {latent}." if en else f"نكمل: {latent}.")
-        return ("Continuing with higher precision." if en else "نكمل بدقة أعلى.")
+        # Never echo English boilerplate into Arabic replies
+        if latent and not re.search(r"continue prior|higher precision", latent, re.I):
+            return (f"Continuing — {latent}." if en else f"نكمل — {latent}.")
+        return ("Continuing the productive loop now." if en else "نكمل الحلقة الإنتاجية الآن.")
     # general — answer the ask, don't dump internals
     if latent and latent not in {"general help", "مساعدة عامة"}:
+        if not en and re.search(r"[A-Za-z]{4,}", latent) and not re.search(r"[\u0600-\u06FF]", latent):
+            return "فهمت — أنفّذ بدقة."
         return (f"Understood — {latent}." if en else f"فهمت — {latent}.")
     return ("Understood." if en else "فهمت.")
 
@@ -383,7 +455,10 @@ def _next_move(intent: str, *, en: bool) -> str:
         "self_evolve": ("قل «طوّر نفسك» لنبضة تطوير ذاتي.", "Say “self-develop” for a self-improve tick."),
         "teach": ("اختر درساً أو أرسل حلاً للتحقق.", "Pick a lesson or submit a solution to verify."),
         "research": ("ضيّق سؤال البحث بجملة واحدة.", "Narrow the research question to one sentence."),
-        "train_learn": ("قل «ابدأ التدريب» لتشغيل LoRA الحقيقي.", "Say “start training” to run real LoRA."),
+        "train_learn": (
+            "قل «أكمل» لنبضة مراقب أخرى، أو «ابدأ التدريب» لـ LoRA فوري.",
+            "Say “continue” for another monitor pulse, or “start training” for immediate LoRA.",
+        ),
         "memory_mind": ("قل ما تريدني أن أتذكره بوضوح.", "Tell me clearly what to remember."),
         "ops_status": ("اطلب التحكم الكامل أو نبضة العقل.", "Ask for master control or a brain pulse."),
     }

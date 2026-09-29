@@ -329,6 +329,7 @@ class CommandAgent:
         "autonomy_status", "advanced_status", "advanced_awareness", "self_check_run",
         "unified_brain_status", "quantum_status", "quantum_pulse", "iot_status", "iot_understand",
         "evolution_status", "free_ai_status", "free_sovereign_audit",
+        "live_monitor_status", "memory_status", "memory_audit",
     })
 
     def _execute_plan(
@@ -636,6 +637,8 @@ def _budget_plan(planned: list[dict], *, max_tools: int = 3) -> list[dict]:
             "free_sovereign_cycle", "free_sovereign_repair", "self_heal_cycle",
             "self_improve_tick", "advanced_self_develop",
             "memory_heal", "memory_audit", "memory_status",
+            "live_monitor_pulse", "live_monitor_status",
+            "continuous_start", "continuous_tick", "smart_training_start",
         }
         # If the turn is ONLY pulse + redundant status mirrors, collapse to pulse
         non_mirror = [p for p in planned if p.get("tool") in companion_ok]

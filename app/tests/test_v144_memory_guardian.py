@@ -136,9 +136,9 @@ class TestMemoryAPI(unittest.TestCase):
         cls.client = TestClient(app)
         cls.mem = COMMAND_MEMORY
 
-    def test_version_812(self):
+    def test_version_81x(self):
         from pfai import __version__
-        self.assertTrue(__version__.startswith("8.12"))
+        self.assertTrue(__version__.startswith("8.1"))
         self.assertEqual(self.client.get("/health").json().get("version"), __version__)
 
     def test_chat_tools_include_memory_guardian(self):

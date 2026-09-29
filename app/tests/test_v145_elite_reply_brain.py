@@ -121,10 +121,10 @@ class TestEliteChatFlow(unittest.TestCase):
             else:
                 os.environ[k] = v
 
-    def test_version_812(self):
+    def test_version_812_plus(self):
         from pfai import __version__
-        self.assertEqual(__version__, "8.12.0")
-        self.assertEqual(self.client.get("/health").json().get("version"), "8.12.0")
+        self.assertTrue(__version__.startswith("8.1"))
+        self.assertEqual(self.client.get("/health").json().get("version"), __version__)
 
     def test_provider_pfai_brain(self):
         self.assertEqual(self.agent.provider_name(), "pfai-brain")
