@@ -434,6 +434,18 @@ class CommandAgent:
 
     def _plan(self, message: str, mem_ctx: str, dialog: list[dict]) -> list[dict]:
         allowed = [t["name"] for t in self.router.catalog()]
+        # Force productive continue when user says أكمل after train/continuous asks
+        if re.search(r"^(?:اكمل|أكمل|استمر|continue|go\s*on|keep\s*going)\s*[.!?؟]*$", (message or "").strip(), re.I):
+            prior = " ".join(
+                str(d.get("content") or "") for d in (dialog or []) if d.get("role") == "user"
+            )
+            if re.search(r"تدريب|تعل[يّ]م|continuous|تدرب|lora|مراقب", prior, re.I):
+                forced = []
+                for name in ("live_monitor_pulse", "continuous_tick", "smart_training_start", "continuous_status"):
+                    if name in allowed:
+                        forced.append({"tool": name, "args": {"deep": False} if name == "live_monitor_pulse" else {}, "reason": "continue prior train/learn"})
+                if forced:
+                    return forced[:3]
         if self._model_generate_ready():
             catalog = json.dumps(self.router.catalog(), ensure_ascii=False)
             prompt = (

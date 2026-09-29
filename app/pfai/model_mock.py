@@ -209,12 +209,13 @@ class MockCommandProvider(ModelProvider):
             add("live_monitor_pulse")
             add("training_cycle_start")
             add("training_eligibility")
-        # Continue / أكمل — keep productive loops moving
-        if re.search(r"^(?:اكمل|أكمل|استمر|continue|go\s*on|keep\s*going)\b", text + ar, re.I):
+        # Continue / أكمل — match original message only (text+ar duplicates break \b)
+        if re.search(r"^(?:اكمل|أكمل|استمر|continue|go\s*on|keep\s*going)\s*[.!?؟]*$", (message or "").strip(), re.I):
             add("live_monitor_pulse")
             add("continuous_tick")
             add("smart_training_start")
             add("evolution_tick")
+            add("continuous_status")
         if re.search(r"stop continuous|أوقف.*تعلم|ايقاف.*تعلم", text + ar):
             add("continuous_stop")
         if re.search(r"resume continuous|استأنف.*تعلم", text + ar):
