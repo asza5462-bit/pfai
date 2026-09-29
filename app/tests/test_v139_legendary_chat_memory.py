@@ -59,9 +59,14 @@ class TestEliteCompose(unittest.TestCase):
             language="ar",
             understanding=u,
         )
-        self.assertIn("فهمتك", reply)
-        self.assertIn("الذاكرة الأسطورية", reply)
-        self.assertIn("الخطوة التالية", reply)
+        self.assertTrue(reply.strip())
+        self.assertNotIn('"active_facts"', reply)
+        self.assertNotIn("الفهم: النية=", reply)
+        # Natural elite prose — memory desire still visible in lead or next move
+        self.assertTrue(
+            ("ذاكرة" in reply) or ("نبضة" in reply) or ("فهمت" in reply),
+            reply,
+        )
 
 
 class TestLegendaryAPI(unittest.TestCase):
@@ -100,7 +105,10 @@ class TestLegendaryAPI(unittest.TestCase):
         self.assertEqual(body.get("status"), "completed")
         self.assertIn("understanding", body)
         self.assertEqual((body.get("understanding") or {}).get("intent"), "memory_mind")
-        self.assertIn("فهمتك", body.get("reply") or "")
+        reply = body.get("reply") or ""
+        self.assertTrue(reply.strip())
+        self.assertNotIn('"active_facts"', reply)
+        self.assertNotIn("الفهم: النية=", reply)
 
 
 if __name__ == "__main__":

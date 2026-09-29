@@ -40,9 +40,25 @@
 
   function renderTimeline(timeline, lang) {
     if (!timeline || !timeline.length) return '';
-    return `<div class="chat-timeline">${timeline.map(s =>
+    // Collapse internals — show final status chip; full trace only on expand
+    const last = timeline[timeline.length - 1] || {};
+    const summary = statusChip(last.status || 'completed', lang);
+    const steps = timeline.map(s =>
       `<div class="chat-step">${statusChip(s.status, lang)} <span>${esc(s.detail || s.tool || '')}</span></div>`
-    ).join('')}</div>`;
+    ).join('');
+    return `<details class="chat-timeline-wrap">
+      <summary class="chat-timeline-summary muted">${summary} <span>${lang === 'en' ? 'trace' : 'التتبع'}</span></summary>
+      <div class="chat-timeline">${steps}</div>
+    </details>`;
+  }
+
+  function providerLabel(provider) {
+    if (!provider) return '';
+    if (provider === 'pfai-brain' || provider === 'mock-command') {
+      return 'PFAI Brain';
+    }
+    if (String(provider).startsWith('anthropic:')) return provider;
+    return provider;
   }
 
   function renderProgress(progress, lang) {
@@ -312,7 +328,7 @@
       ${kind}
       ${srcHtml}
       ${citeHtml}
-      ${meta && meta.provider ? `<div class="chat-meta muted">provider: ${esc(meta.provider)} · status: ${esc(meta.status || '')}</div>` : ''}
+      ${meta && meta.provider ? `<div class="chat-meta muted">${esc(providerLabel(meta.provider))} · ${esc(meta.status || '')}</div>` : ''}
     `;
     box.appendChild(div);
     box.scrollTop = box.scrollHeight;

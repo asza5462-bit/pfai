@@ -58,9 +58,9 @@ def extract_identity_and_prefs(message: str) -> list[dict[str, Any]]:
     if not text:
         return out
 
-    # Name: اسمي X / my name is X — stop at connectors (و، وأنني، and, …)
+    # Name: اسمي X / اسمي هو X / my name is X — stop at connectors
     for pat, pred in (
-        (r"(?:اسمي|اسمِي)\s+([^\n،,.!\s]{2,40})", "name_is"),
+        (r"(?:اسمي|اسمِي)(?:\s+هو)?\s+([^\n،,.!\s]{2,40})", "name_is"),
         (r"(?i)my\s+name\s+is\s+([^\n,!.\s]{2,40})", "name_is"),
         (r"(?:نادني|call\s+me)\s+([^\n،,.!\s]{2,40})", "name_is"),
     ):

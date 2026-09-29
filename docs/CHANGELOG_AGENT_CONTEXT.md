@@ -1,5 +1,17 @@
 # Agent Context Changelog
 
+## 2026-09-29 — PFAI 8.12: Elite natural reply brain
+
+### Implemented
+- `elite_reply.py`: natural Arabic/English compose — no JSON dumps, no comprehension fog
+- Memory short-circuits: remember confirm, name recall, honest empty-name
+- Provider brand `pfai-brain` (was `mock-command`); UI collapses timeline under “التتبع”
+- Plan tools: memory audit/heal only when explicitly asked
+- Tests: `test_v145_elite_reply_brain.py`
+
+### Honesty
+- Still no invented metrics; weight promotion stays gated; local brain when Anthropic absent
+
 ## 2026-09-28 — PFAI 8.9: Free Sovereign Integrity
 
 ### Implemented

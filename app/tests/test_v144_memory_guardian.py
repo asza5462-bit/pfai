@@ -116,7 +116,8 @@ class TestComposeMemoryFirst(unittest.TestCase):
             understanding={"intent": "memory_mind", "latent_need": "recall"},
         )
         self.assertIn("خالد", reply)
-        self.assertIn("بدون تعارض", reply)
+        self.assertNotIn("memory_audit", reply)
+        self.assertNotIn('"active_facts"', reply)
 
 
 class TestMemoryAPI(unittest.TestCase):
@@ -135,10 +136,10 @@ class TestMemoryAPI(unittest.TestCase):
         cls.client = TestClient(app)
         cls.mem = COMMAND_MEMORY
 
-    def test_version_811(self):
+    def test_version_812(self):
         from pfai import __version__
-        self.assertEqual(__version__, "8.11.0")
-        self.assertEqual(self.client.get("/health").json().get("version"), "8.11.0")
+        self.assertTrue(__version__.startswith("8.12"))
+        self.assertEqual(self.client.get("/health").json().get("version"), __version__)
 
     def test_chat_tools_include_memory_guardian(self):
         r = self.client.get("/chat/tools")

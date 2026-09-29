@@ -48,7 +48,7 @@ class CodingAgent:
             if isinstance(self.model, AnthropicProvider):
                 return f"anthropic:{getattr(self.model, 'model', 'claude')}"
             return type(self.model).__name__
-        return "mock-command"
+        return "pfai-brain"
 
     def _model_ready(self) -> bool:
         if self.model is None:

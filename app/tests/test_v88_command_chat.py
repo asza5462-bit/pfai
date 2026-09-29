@@ -26,7 +26,7 @@ class TestMockProvider(unittest.TestCase):
 
     def test_generate_is_mock_not_secret(self):
         text = MockCommandProvider().generate("hello")
-        self.assertIn("PFAI-MOCK", text)
+        self.assertIn("PFAI Brain", text)
         self.assertNotIn("sk-", text)
 
 
@@ -113,7 +113,7 @@ class TestCommandAgentFlow(unittest.TestCase):
     def test_health_command_completes_with_mock(self):
         r = self.agent.handle("شغّل فحص الصحة", owner="owneruser")
         self.assertEqual(r["status"], "completed")
-        self.assertEqual(r["provider"], "mock-command")
+        self.assertEqual(r["provider"], "pfai-brain")
         self.assertTrue(any(s["status"] == "executing" for s in r["timeline"]))
         self.assertTrue(any(t.get("tool") == "health_check" and t.get("ok") for t in r["tools"]))
 
