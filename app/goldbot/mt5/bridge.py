@@ -54,8 +54,13 @@ class Bridge:
     paper_balance: float = field(default_factory=lambda: settings.paper_balance)
     paper_equity: float = field(default_factory=lambda: settings.paper_balance)
     _mt5: Any = None
-    _last_price: float = 2350.0
+    _last_price: float = 0.0
     _seeded: bool = False
+    _candle_cache: list = field(default_factory=list)
+    _candle_cache_ts: float = 0.0
+    _spot_cache_ts: float = 0.0
+    _feed_source: str = "init"
+    _cache_ttl: float = 55.0
 
     def connect(self) -> AccountSnapshot:
         if self.mode == "mt5":
@@ -164,85 +169,122 @@ class Bridge:
             self._last_price = out[-1].close
         return out
 
+    def _http_json(self, url: str, timeout: float = 10.0) -> dict | list | None:
+        try:
+            req = Request(url, headers={"User-Agent": "Mozilla/5.0 AURUM/1.1"})
+            with urlopen(req, timeout=timeout) as resp:
+                return json.loads(resp.read().decode())
+        except Exception as e:
+            log.warning("feed fail %s: %s", url, e)
+            return None
+
+    def _spot_gold_api(self) -> float | None:
+        data = self._http_json("https://api.gold-api.com/price/XAU", timeout=8)
+        if isinstance(data, dict) and data.get("price"):
+            px = float(data["price"])
+            self._last_price = px
+            self._feed_source = "gold_api"
+            self._spot_cache_ts = time.time()
+            return px
+        return None
+
     def _yahoo_chart(self, interval: str = "15m", range_: str = "5d") -> list[Candle] | None:
-        """Live gold OHLC proxy (GC futures / XAU) when MT5 is unavailable."""
+        """OHLC proxy — cached hard to avoid Yahoo 429 on Render."""
         urls = [
+            f"https://query2.finance.yahoo.com/v8/finance/chart/GC=F?interval={interval}&range={range_}",
             f"https://query1.finance.yahoo.com/v8/finance/chart/GC=F?interval={interval}&range={range_}",
-            f"https://query1.finance.yahoo.com/v8/finance/chart/XAUUSD=X?interval={interval}&range={range_}",
         ]
         for url in urls:
+            data = self._http_json(url, timeout=10)
+            if not isinstance(data, dict):
+                continue
             try:
-                req = Request(url, headers={"User-Agent": "AURUM/1.0"})
-                with urlopen(req, timeout=10) as resp:
-                    data = json.loads(resp.read().decode())
                 result = data["chart"]["result"][0]
                 ts = result.get("timestamp") or []
-                quote = (result.get("indicators") or {}).get("quote") or [{}]
-                q = quote[0]
-                opens, highs, lows, closes = q.get("open") or [], q.get("high") or [], q.get("low") or [], q.get("close") or []
-                vols = q.get("volume") or []
+                q = ((result.get("indicators") or {}).get("quote") or [{}])[0]
                 out: list[Candle] = []
                 for i, t in enumerate(ts):
-                    o, h, l, c = (
-                        opens[i] if i < len(opens) else None,
-                        highs[i] if i < len(highs) else None,
-                        lows[i] if i < len(lows) else None,
-                        closes[i] if i < len(closes) else None,
-                    )
+                    o, h, l, c = q["open"][i], q["high"][i], q["low"][i], q["close"][i]
                     if None in (o, h, l, c):
                         continue
-                    vol = float(vols[i] or 0) if i < len(vols) else 0.0
+                    vol = float((q.get("volume") or [0])[i] or 0)
                     out.append(Candle(time=int(t), open=float(o), high=float(h), low=float(l), close=float(c), volume=vol))
                 if out:
                     self._last_price = out[-1].close
+                    self._feed_source = "yahoo_ohlc"
                     return out
             except Exception as e:
-                log.warning("yahoo chart fail %s: %s", url, e)
+                log.warning("yahoo parse fail: %s", e)
         return None
 
-    def _yahoo_last(self) -> float | None:
-        bars = self._yahoo_chart()
-        if bars:
-            return bars[-1].close
-        return None
-
-    def _fetch_paper(self, count: int) -> list[Candle]:
-        tf = (settings.timeframe or "M15").upper()
-        interval = {"M1": "1m", "M5": "5m", "M15": "15m", "M30": "30m", "H1": "60m", "H4": "60m", "D1": "1d"}.get(tf, "15m")
-        range_ = "5d" if interval.endswith("m") else "3mo"
-        live = self._yahoo_chart(interval=interval, range_=range_)
-        if live:
-            self._seeded = True
-            return live[-count:] if len(live) > count else live
-
-        # Offline fallback — synthetic walk only if market feed unreachable
-        price = self._last_price
+    def _synthetic_around(self, price: float, count: int) -> list[Candle]:
         now = int(time.time()) // 900 * 900
         candles: list[Candle] = []
-        x = price * 0.985
+        x = price * 0.992
         for i in range(count):
             t = now - (count - i) * 900
-            wave = math.sin(i / 9.0) * price * 0.0018 + math.cos(i / 21.0) * price * 0.0011
+            wave = math.sin(i / 7.5) * price * 0.0015 + math.cos(i / 17.0) * price * 0.0009
             o = x
-            c = x + wave * 0.15 + (price - x) * 0.03
-            h = max(o, c) + abs(wave) * 0.25
-            l = min(o, c) - abs(wave) * 0.25
-            vol = 800 + abs(wave) * 50 + (1200 if i % 17 == 0 else 0)
+            c = x + wave * 0.2 + (price - x) * 0.04
+            h = max(o, c) + abs(wave) * 0.3
+            l = min(o, c) - abs(wave) * 0.3
+            vol = 900 + abs(wave) * 40 + (1500 if i % 13 == 0 else 0)
             candles.append(Candle(time=t, open=o, high=h, low=l, close=c, volume=vol))
             x = c
         if candles:
             candles[-1].close = price
             candles[-1].high = max(candles[-1].high, price)
             candles[-1].low = min(candles[-1].low, price)
-        self._seeded = True
         return candles
+
+    def _fetch_paper(self, count: int) -> list[Candle]:
+        now = time.time()
+        if self._candle_cache and now - self._candle_cache_ts < self._cache_ttl:
+            # refresh last close from spot without refetching full OHLC
+            spot = self._cached_spot()
+            bars = list(self._candle_cache)
+            if spot and bars:
+                bars[-1] = Candle(
+                    time=bars[-1].time,
+                    open=bars[-1].open,
+                    high=max(bars[-1].high, spot),
+                    low=min(bars[-1].low, spot),
+                    close=spot,
+                    volume=bars[-1].volume,
+                )
+            return bars[-count:] if len(bars) > count else bars
+
+        tf = (settings.timeframe or "M15").upper()
+        interval = {"M1": "1m", "M5": "5m", "M15": "15m", "M30": "30m", "H1": "60m", "H4": "60m", "D1": "1d"}.get(tf, "15m")
+        range_ = "5d" if interval.endswith("m") else "3mo"
+        live = self._yahoo_chart(interval=interval, range_=range_)
+        if live:
+            self._candle_cache = live
+            self._candle_cache_ts = now
+            self._seeded = True
+            return live[-count:] if len(live) > count else live
+
+        spot = self._spot_gold_api() or self._last_price or 2650.0
+        self._last_price = spot
+        bars = self._synthetic_around(spot, max(count, 120))
+        self._candle_cache = bars
+        self._candle_cache_ts = now
+        self._feed_source = "gold_api_synth"
+        self._seeded = True
+        return bars[-count:] if len(bars) > count else bars
+
+    def _cached_spot(self) -> float | None:
+        now = time.time()
+        if self._last_price and now - self._spot_cache_ts < 20:
+            return self._last_price
+        return self._spot_gold_api() or (self._last_price or None)
 
     def tick(self) -> dict:
         if self.mode == "mt5" and self._mt5 is not None:
             tick = self._mt5.symbol_info_tick(settings.symbol)
             if tick is None:
                 return {"bid": self._last_price, "ask": self._last_price + 0.2, "spread_points": 20.0, "source": "stale"}
-            spread = (tick.ask - tick.bid) / 0.01  # points approx for gold
+            spread = (tick.ask - tick.bid) / 0.01
             self._last_price = float(tick.bid)
             return {
                 "bid": float(tick.bid),
@@ -250,10 +292,18 @@ class Bridge:
                 "spread_points": round(spread, 2),
                 "source": "mt5",
             }
-        last = self._yahoo_last() or self._last_price
+        last = self._cached_spot() or self._last_price
+        if not last:
+            # ensure candles path fills price
+            self.fetch_candles(count=30)
+            last = self._last_price
         self._last_price = last
-        spread = 2.5  # typical demo proxy
-        return {"bid": last, "ask": last + 0.25, "spread_points": spread * 10, "source": "paper_yahoo"}
+        return {
+            "bid": float(last),
+            "ask": float(last) + 0.25,
+            "spread_points": 25.0,
+            "source": self._feed_source or "paper",
+        }
 
     def order_market(self, side: str, lot: float, sl: float, tp: float, comment: str = "AURUM") -> dict:
         if self.mode == "mt5" and self._mt5 is not None:
