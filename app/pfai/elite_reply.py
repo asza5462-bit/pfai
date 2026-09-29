@@ -354,6 +354,12 @@ def compose_elite(
         if line:
             insights.append(line)
 
+    # If live continuous tools ran, treat as train_learn even on weak followup intent
+    tool_names = {t.get("tool") for t in ok}
+    if tool_names & {"live_monitor_pulse", "continuous_start", "continuous_tick", "smart_training_start"}:
+        if intent in {"followup", "general"}:
+            intent = "train_learn"
+
     # Intent-specific lead
     lead = _lead_for_intent(intent, latent, message, en=en)
 
