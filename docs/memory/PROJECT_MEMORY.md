@@ -1,6 +1,6 @@
 # PFAI Project Memory
 
-Last updated: 2026-09-29 (PFAI 8.12.0 — elite natural reply brain)
+Last updated: 2026-09-29 (PFAI 8.13.0 — 24/7 live monitor + continuous learn/train)
 
 ## Snapshot
 
@@ -34,12 +34,14 @@ Last updated: 2026-09-29 (PFAI 8.12.0 — elite natural reply brain)
 - Command Chat sole runtime when PFAI_UNIFIED_BRAIN=1
 - Soft-degrade lanes; never invent; never silent weight promote
 
-## Legendary chat mind (8.12)
+## Legendary chat mind (8.13)
 
 - Deep comprehension before plan/compose (internal only — not dumped to user)
 - Legendary memory: facts + digests + ranked recall + desire ingest + guardian
 - Elite replies: natural Arabic/EN via `elite_reply.py`; provider `pfai-brain`
 - Short-circuits: remember confirm, name recall, honest empty-name (no JSON/timeline fog)
+- `live_monitor.py`: 24/7 ensure continuous + evolution + LoRA-when-eligible + heal/develop
+- Weight activation still never silent; monitor starts real jobs only
 
 ## Free Sovereign Integrity (8.9)
 
