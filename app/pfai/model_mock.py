@@ -203,9 +203,9 @@ class MockCommandProvider(ModelProvider):
         ):
             add("memory_status")
             add("memory_audit")
-            add("memory_search")
             if re.search(r"أصلح|heal|تعارض|تسريب|conflict|افحص", text + ar, re.I):
-                add("memory_heal")
+                add("memory_heal")  # before search so budget keeps heal
+            add("memory_search")
         # Unified one-mind asks — single pulse (speed + coherence)
         elif re.search(
             r"عقل\s*واحد|unified\s*brain|كل\s*شيء\s*يعمل|سلاسة|سرعة\s*متناه|"
