@@ -152,12 +152,18 @@ class TestAdvancedChatAPI(unittest.TestCase):
             "training_eligibility" in tools or "training_control_status" in tools or body.get("status") == "completed",
             body,
         )
-        # Ensure no training execution flag sneaks in
+        # Eligibility is a write-path probe (not read-only) but does not claim trained yet
         for t in body.get("tools") or []:
             res = t.get("result") or {}
             if t.get("tool") in {"training_eligibility", "training_control_status"}:
                 self.assertTrue(res.get("can_start_from_chat"))
+                self.assertFalse(res.get("read_only", False))
                 self.assertFalse(res.get("trained"))
+        reply = body.get("reply") or ""
+        self.assertTrue(
+            any(x in reply for x in ("مسار كتابة", "write path", "ليس وهماً", "ابدأ التدريب", "أهلية")),
+            reply,
+        )
 
     def test_exercise_submit_never_marks_trained(self):
         r = self.client.post(

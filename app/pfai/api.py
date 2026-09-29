@@ -594,22 +594,30 @@ def _tool_learner_snapshot(owner: str = 'owner'):
     }
 
 def _tool_training_eligibility():
-    """Next-training eligibility. Write path = training_cycle_start / smart_training_start."""
+    """Next-training eligibility — write path via unified/smart training (not read-only)."""
     stats = AUTONOMOUS_TRAINING.learning_statistics()
     elig = stats.get('next_training_eligibility') or {}
+    st = SMART_TRAINING.status()
     return {
         'ok': True,
         'eligible': bool(elig.get('eligible')),
         'eligibility': elig,
+        'status': elig.get('status'),
         'accepted_candidates': stats.get('accepted_candidates'),
         'dataset_growth_since_last_trained': stats.get('dataset_growth_since_last_trained'),
         'dataset_version': stats.get('dataset_version'),
         'trained': False,
+        'async_running': bool(st.get('async_running')),
         'can_start_from_chat': True,
         'write_path': True,
         'read_only': False,
-        'next_write_tool': 'smart_training_start',
-        'note': 'Not read-only: call smart_training_start / training_cycle_start to run REAL LoRA (no silent activate)',
+        'next_write_tool': 'unified_train_learn_cycle',
+        'start_tools': ['unified_train_learn_cycle', 'smart_training_start', 'training_cycle_start'],
+        'weight_promotion': 'never_auto',
+        'note': (
+            'Not read-only: say «ابدأ التدريب» or call unified_train_learn_cycle / '
+            'smart_training_start for REAL LoRA (no silent activate).'
+        ),
     }
 
 def _tool_training_control_status():
@@ -3911,10 +3919,11 @@ def platform_learning_verification(owner: str = Depends(access_public)):
 
 @app.get('/platform/training/eligibility')
 def platform_training_eligibility(owner: str = Depends(access_public)):
-    """Authoritative training eligibility with per-gate breakdown (owner-only)."""
+    """Authoritative training eligibility — write path from chat (not read-only)."""
     _ = owner
     stats = AUTONOMOUS_TRAINING.learning_statistics()
     elig = stats.get('next_training_eligibility') or {}
+    async_running = bool(SMART_TRAINING.status().get('async_running'))
     return {
         'ok': True,
         'eligible': bool(elig.get('eligible')),
@@ -3929,7 +3938,18 @@ def platform_training_eligibility(owner: str = Depends(access_public)):
         'dataset_growth_since_previous_version': stats.get('dataset_growth_since_previous_version'),
         'scheduler': stats.get('scheduler'),
         'trainer_probe': stats.get('trainer_probe'),
-        'note': elig.get('note') or stats.get('note'),
+        'can_start_from_chat': True,
+        'write_path': True,
+        'read_only': False,
+        'async_running': async_running,
+        'next_write_tool': 'unified_train_learn_cycle',
+        'start_tools': ['unified_train_learn_cycle', 'smart_training_start', 'training_cycle_start'],
+        'weight_promotion': 'never_auto',
+        'note': (
+            elig.get('note')
+            or 'Write path: say «ابدأ التدريب» / call unified_train_learn_cycle for REAL LoRA. '
+               'Weight activation stays owner-gated.'
+        ),
     }
 
 

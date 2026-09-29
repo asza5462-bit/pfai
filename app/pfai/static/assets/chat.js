@@ -392,10 +392,27 @@
       });
       const chip = $('chatTrainElig');
       if (chip && elig) {
-        chip.textContent = elig.eligible
-          ? 'Eligible · كتابة من الشات · ليس قراءة فقط'
-          : `Not eligible · ${(elig.reason || (elig.blockers || [])[0] || '—').toString().slice(0, 48)}`;
-        chip.className = 'chat-chip ' + (elig.eligible ? 'ok' : 'warn');
+        if (elig.async_running) {
+          chip.textContent = 'LoRA يعمل الآن · تدريب حقيقي خلفي';
+          chip.className = 'chat-chip ok';
+        } else if (elig.eligible) {
+          chip.textContent = 'جاهز · مسار كتابة · ابدأ التدريب';
+          chip.className = 'chat-chip ok';
+          chip.title = 'ليس قراءة فقط — اضغط «تدريب حقيقي» أو اكتب: ابدأ التدريب';
+          chip.style.cursor = 'pointer';
+          chip.onclick = () => {
+            const input = $('chatInput');
+            if (input) {
+              input.value = 'ابدأ التدريب الحقيقي الآن';
+              sendChat();
+            }
+          };
+        } else {
+          chip.textContent = `Not eligible · ${(elig.reason || (elig.blockers || [])[0] || '—').toString().slice(0, 48)}`;
+          chip.className = 'chat-chip warn';
+          chip.onclick = null;
+          chip.style.cursor = '';
+        }
       }
     } catch (e) {
       /* rail is best-effort */

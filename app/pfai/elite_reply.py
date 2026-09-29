@@ -321,9 +321,37 @@ def humanize_tool(name: str, res: Any, *, en: bool) -> str | None:
         if elig is None and isinstance(res.get("eligibility"), dict):
             elig = res["eligibility"].get("eligible")
         status = res.get("status") or (res.get("last") or {}).get("status")
+        write = res.get("write_path")
+        async_run = res.get("async_running")
         if en:
-            return f"Training eligibility={'YES' if elig else 'NO'}" + (f" · status {status}." if status else ".")
-        return f"أهلية التدريب={'نعم' if elig else 'لا'}" + (f" · الحالة {status}." if status else ".")
+            parts = [
+                f"Training eligibility={'YES' if elig else 'NO'}"
+                + (f" · status {status}" if status else "")
+                + ".",
+            ]
+            if write is False:
+                parts.append("Read-only probe.")
+            else:
+                parts.append("Write path OPEN from chat — real LoRA, not simulated.")
+            if async_run:
+                parts.append("LoRA already running in background.")
+            else:
+                parts.append("Say «start training» / «ابدأ التدريب» to run.")
+            return " ".join(parts)
+        parts = [
+            f"أهلية التدريب={'نعم' if elig else 'لا'}"
+            + (f" · الحالة {status}" if status else "")
+            + ".",
+        ]
+        if write is False:
+            parts.append("فحص قراءة فقط.")
+        else:
+            parts.append("مسار كتابة مفتوح من الشات — LoRA حقيقي وليس وهماً.")
+        if async_run:
+            parts.append("تدريب LoRA يعمل الآن في الخلفية.")
+        else:
+            parts.append("قل «ابدأ التدريب» لتشغيل دورة حقيقية.")
+        return " ".join(parts)
 
     # Generic: prefer answer/message fields over raw JSON
     for key in ("answer", "message", "summary", "detail", "status"):

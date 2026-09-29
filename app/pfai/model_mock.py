@@ -104,9 +104,14 @@ class MockCommandProvider(ModelProvider):
             re.I,
         ):
             add("training_eligibility")
+            add("unified_train_learn_status")
             add("smart_training_status")
-            add("training_control_status")
-            add("smart_training_start")
+            # Status probe with write-path flags — do NOT auto-start LoRA here
+            add("unified_train_learn_cycle")
+            # Explicit start tools only when user asked to begin
+            if re.search(r"ابدأ|شغ[ّل]|درّب|درب|start|run\s*train", text + ar, re.I):
+                add("smart_training_start")
+                add("unified_train_learn_cycle")
         elif re.search(r"continuous|تعلم\s*مستمر|continuous\s*learning", text + ar):
             add("continuous_status")
             add("live_monitor_status")
@@ -359,17 +364,18 @@ class MockCommandProvider(ModelProvider):
             if name == "live_monitor_pulse":
                 args = {"deep": bool(re.search(r"عميق|deep|أصلح|طور|sovereign", message or "", re.I))}
             if name == "unified_train_learn_cycle":
-                force = bool(re.search(r"الآن|now|فوري|force|اجبر", message or "", re.I))
-                # Pure status questions: learn heartbeat only — do not stampede LoRA
+                force = bool(re.search(
+                    r"(?:الآن|now|فوري|force|اجبر).*(?:تدريب|train)|(?:ابدأ|شغ[ّل]|درّب|درب|start|run).*(?:تدريب|train)",
+                    message or "",
+                    re.I,
+                ))
+                # Eligibility / status probes: learn heartbeat only — do not stampede LoRA
                 status_ask = bool(re.search(
-                    r"هل\s*(?:ال)?(?:تدريب|تعل[يّ]م)|يعمل|status|حالة\s*(?:ال)?(?:تدريب|تعل[يّ]م)",
+                    r"هل\s*(?:ال)?(?:تدريب|تعل[يّ]م)|يعمل|status|أهلية|eligib|جاهزية|"
+                    r"حالة\s*(?:ال)?(?:تدريب|تعل[يّ]م)|ما\s*هي\s*(?:ال)?(?:أهلية|حالة)",
                     message or "",
                     re.I,
-                )) and not re.search(
-                    r"ابدأ|شغ[ّل]|طور|درّب|درب|start|run\s*train|force|أكما?ل|استمر",
-                    message or "",
-                    re.I,
-                )
+                )) and not force
                 args = {
                     "force_train": force,
                     "train_if_eligible": bool(force) or not status_ask,

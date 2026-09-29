@@ -1,5 +1,14 @@
 # Agent Context Changelog
 
+## 2026-09-29 — Training eligibility is a real write path (not read-only)
+
+### Fixed
+- UI label «أهلية تدريب النماذج (قراءة فقط)» → «مسار كتابة حقيقي»
+- `/platform/training/eligibility` + chat tool: `write_path=true`, `can_start_from_chat`, next tools
+- Rail chip clickable → «ابدأ التدريب الحقيقي الآن»; quick button «تدريب حقيقي»
+- Elite reply states write path + how to start real LoRA
+- Broken web-control quick buttons in `index.html` repaired
+
 ## 2026-09-29 — Audit fixes: HEAD probes, status-ask no LoRA stampede, UI honesty
 
 ### Fixed

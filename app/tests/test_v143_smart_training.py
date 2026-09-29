@@ -142,11 +142,17 @@ class TestSmartTrainingRouting(unittest.TestCase):
         m = MockCommandProvider()
         allowed = [
             "training_eligibility", "smart_training_status", "training_control_status",
-            "smart_training_start",
+            "smart_training_start", "unified_train_learn_status", "unified_train_learn_cycle",
         ]
-        tools = {t["tool"] for t in m.plan_tools("ما هي أهلية التدريب الآن؟", allowed)}
+        planned = m.plan_tools("ما هي أهلية التدريب الآن؟", allowed)
+        tools = {t["tool"] for t in planned}
         self.assertIn("training_eligibility", tools)
-        self.assertIn("smart_training_start", tools)
+        # Probe shows write-path status; does not auto-fire smart_training_start
+        self.assertTrue(tools & {"unified_train_learn_status", "smart_training_status"})
+        self.assertNotIn("smart_training_start", tools)
+        cycle = next((t for t in planned if t["tool"] == "unified_train_learn_cycle"), None)
+        if cycle:
+            self.assertFalse(cycle["args"].get("train_if_eligible"))
 
     def test_comprehension_train_intent(self):
         c = comprehend("أعد ترتيب التدريب واجعله حقيقي فعلي ليس وهم")
@@ -198,7 +204,10 @@ class TestSmartTrainingAPI(unittest.TestCase):
         self.assertTrue(elig["can_start_from_chat"])
         self.assertTrue(elig["write_path"])
         self.assertFalse(elig["read_only"])
-        self.assertEqual(elig["next_write_tool"], "smart_training_start")
+        self.assertIn(elig["next_write_tool"], {
+            "unified_train_learn_cycle", "smart_training_start", "training_cycle_start",
+        })
+        self.assertEqual(elig.get("weight_promotion"), "never_auto")
 
     def test_smart_training_status_tool(self):
         from pfai.api import _tool_smart_training_status
@@ -248,10 +257,18 @@ class TestSmartTrainingAPI(unittest.TestCase):
         html = self.client.get("/").text
         self.assertIn("activate_if_pass:false", html)
         self.assertTrue("PFAI v8." in html)
+        self.assertIn("مسار كتابة حقيقي", html)
+        self.assertNotIn("أهلية تدريب النماذج (قراءة فقط)", html)
+        self.assertIn("تدريب حقيقي", html)
         js = self.client.get("/assets/chat.js").text
         self.assertIn("smart_training_start", js)
         self.assertIn("unified_train_learn_cycle", js)
         self.assertIn("ليس قراءة فقط", js)
+        # Eligibility HTTP API is write-path (owner header — not public-mode in this suite)
+        elig = self.client.get("/platform/training/eligibility", headers=self.h).json()
+        self.assertTrue(elig.get("write_path"))
+        self.assertFalse(elig.get("read_only"))
+        self.assertTrue(elig.get("can_start_from_chat"))
 
 
 if __name__ == "__main__":
