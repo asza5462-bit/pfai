@@ -241,5 +241,66 @@ class UserAuth:
             "symbol": cur.get("symbol") or settings.symbol,
         }
 
+    def find_by_mt5_login(self, mt5_login: str) -> int | None:
+        login = str(mt5_login or "").strip()
+        with self._conn() as c:
+            rows = c.execute("SELECT id, settings FROM users").fetchall()
+        for row in rows:
+            cur = json.loads(row["settings"] or "{}")
+            if str(cur.get("mt5_login") or "").strip() == login:
+                return int(row["id"])
+        return None
+
+    def login_with_mt5(self, mt5_login: str, mt5_password: str, mt5_server: str, symbol: str = "XAUUSD") -> dict:
+        """Primary Exness/MT5 login — creates account bound to trading number if needed."""
+        login = str(mt5_login or "").strip()
+        if not login.isdigit() or len(login) < 5:
+            raise AuthError("رقم حساب MT5/Exness غير صالح")
+        if not mt5_password or len(mt5_password) < 4:
+            raise AuthError("كلمة مرور MT5 مطلوبة")
+        server = (mt5_server or "").strip()
+        if not server:
+            raise AuthError("اختر سيرفر Exness (مثل Exness-MT5Trial)")
+
+        uid = self.find_by_mt5_login(login)
+        if uid is None:
+            # auto provision app user from MT5 login
+            username = f"exness_{login}"
+            # ensure unique
+            base = username
+            n = 1
+            while True:
+                try:
+                    self._validate_username(username if n == 1 else f"{base}_{n}")
+                    # create with random app password (user logs in via MT5 form)
+                    app_pass = secrets.token_urlsafe(16)
+                    salt, digest = self._hash(app_pass)
+                    role = "owner" if self.user_count() == 0 else "trader"
+                    uname = username if n == 1 else f"{base}_{n}"
+                    with self._conn() as c:
+                        cur = c.execute(
+                            "INSERT INTO users(username, pass_salt, pass_hash, created_at, role, settings) VALUES (?,?,?,?,?,?)",
+                            (uname, salt, digest, time.time(), role, "{}"),
+                        )
+                        uid = int(cur.lastrowid)
+                    break
+                except (AuthError, sqlite3.IntegrityError):
+                    n += 1
+                    if n > 20:
+                        raise AuthError("تعذّر إنشاء حساب مرتبط")
+        assert uid is not None
+        self.update_settings(
+            uid,
+            {
+                "mt5_login": login,
+                "mt5_password": mt5_password,
+                "mt5_server": server,
+                "symbol": (symbol or "XAUUSD").upper(),
+                "mode": "mt5",
+            },
+        )
+        session = self.create_session(uid)
+        return {"user": self.public_user(uid), "token": session, "session_ttl": SESSION_TTL}
+
 
 auth = UserAuth()

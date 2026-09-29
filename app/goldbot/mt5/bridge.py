@@ -53,6 +53,7 @@ class Bridge:
     mode: str = field(default_factory=lambda: settings.mode)
     paper_balance: float = field(default_factory=lambda: settings.paper_balance)
     paper_equity: float = field(default_factory=lambda: settings.paper_balance)
+    remote_user_id: int | None = None
     _mt5: Any = None
     _last_price: float = 0.0
     _seeded: bool = False
@@ -64,7 +65,44 @@ class Bridge:
     _yahoo_backoff_until: float = 0.0
     _yahoo_ok_until: float = 0.0
 
+    def bind_remote_user(self, user_id: int | None) -> None:
+        self.remote_user_id = int(user_id) if user_id else None
+        if self.remote_user_id:
+            self.mode = "mt5"
+
     def connect(self) -> AccountSnapshot:
+        # Prefer live Exness account snapshot from Windows agent when available
+        if self.mode == "mt5" and self.remote_user_id:
+            from goldbot.mt5.remote_hub import hub
+
+            st = hub.status_for_user(self.remote_user_id)
+            acc = st.get("account") or {}
+            if st.get("online") and acc:
+                return AccountSnapshot(
+                    balance=float(acc.get("balance") or 0),
+                    equity=float(acc.get("equity") or 0),
+                    margin=float(acc.get("margin") or 0),
+                    free_margin=float(acc.get("free_margin") or 0),
+                    currency=str(acc.get("currency") or "USD"),
+                    mode="mt5",
+                    connected=True,
+                    server=str(acc.get("server") or settings.mt5_server),
+                    login=int(acc.get("login") or settings.mt5_login or 0),
+                    detail=st.get("detail") or "Exness via MT5 agent",
+                )
+            # Agent not online yet — still mark mt5 pending (not silent paper)
+            return AccountSnapshot(
+                balance=float(acc.get("balance") or 0),
+                equity=float(acc.get("equity") or 0),
+                margin=0.0,
+                free_margin=0.0,
+                currency="USD",
+                mode="mt5",
+                connected=False,
+                server=settings.mt5_server or "Exness",
+                login=int(settings.mt5_login or 0),
+                detail=st.get("detail") or "بانتظار وكيل Windows MT5",
+            )
         if self.mode == "mt5":
             return self._connect_mt5()
         return AccountSnapshot(
@@ -77,7 +115,7 @@ class Bridge:
             connected=True,
             server="AURUM-PAPER",
             login=0,
-            detail="Paper desk — set AURUM_MODE=mt5 + MT5_* on Windows VPS for Exness live/demo.",
+            detail="Paper desk — اربط Exness من تسجيل MT5 ثم شغّل وكيل Windows.",
         )
 
     def _connect_mt5(self) -> AccountSnapshot:
@@ -360,6 +398,31 @@ class Bridge:
         }
 
     def order_market(self, side: str, lot: float, sl: float, tp: float, comment: str = "AURUM") -> dict:
+        # Real Exness path: queue to Windows MT5 agent
+        if self.mode == "mt5" and self.remote_user_id:
+            from goldbot.mt5.remote_hub import hub
+
+            enq = hub.enqueue(
+                self.remote_user_id,
+                "order_market",
+                {
+                    "side": side,
+                    "lot": float(lot),
+                    "sl": float(sl),
+                    "tp": float(tp),
+                    "symbol": settings.symbol,
+                    "comment": comment,
+                },
+            )
+            if not enq.get("ok"):
+                return {"ok": False, "error": enq.get("error"), "detail": enq.get("detail"), "mode": "mt5"}
+            result = hub.wait_result(int(enq["command_id"]), timeout=15.0)
+            result.setdefault("mode", "mt5")
+            result.setdefault("side", side)
+            result.setdefault("lot", lot)
+            result.setdefault("sl", sl)
+            result.setdefault("tp", tp)
+            return result
         if self.mode == "mt5" and self._mt5 is not None:
             return self._order_mt5(side, lot, sl, tp, comment)
         # paper fill at bid/ask

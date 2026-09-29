@@ -345,3 +345,34 @@ button.tiny {
   font-size: 0.75rem;
 }
 #deskApp { position: relative; z-index: 2; }
+
+.auth-card.wide { width: min(520px, 100%); }
+.auth-tabs { grid-template-columns: 1fr; }
+@media (min-width: 640px) {
+  .auth-tabs { grid-template-columns: 1fr 1fr 1fr; }
+}
+textarea#agentCmd {
+  width: 100%;
+  font-family: ui-monospace, monospace;
+  font-size: 0.8rem;
+  border: 1px solid var(--line);
+  background: #fffdf8;
+  padding: 0.75rem;
+  direction: ltr;
+  text-align: left;
+}
+.primary-link {
+  display: inline-block;
+  margin: 0.75rem 0;
+  padding: 0.75rem 1rem;
+  background: var(--ink);
+  color: var(--paper);
+  text-decoration: none;
+  font-weight: 600;
+}
+#bridgePill.on {
+  background: rgba(31, 122, 76, 0.14);
+  border-color: rgba(31, 122, 76, 0.45);
+  color: var(--bull);
+  font-weight: 600;
+}

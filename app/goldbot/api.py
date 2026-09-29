@@ -16,6 +16,7 @@ from goldbot.auth.users import SESSION_COOKIE, AuthError, auth
 from goldbot.config import settings
 from goldbot.execution.desk import desk
 from goldbot.mt5.bridge import bridge
+from goldbot.mt5.remote_hub import EXNESS_SERVERS, hub
 from goldbot.storage.state import store
 
 log = logging.getLogger("aurum.api")
@@ -47,6 +48,14 @@ class LoginBody(BaseModel):
     password: str
 
 
+class Mt5LoginBody(BaseModel):
+    mt5_login: str
+    mt5_password: str
+    mt5_server: str = "Exness-MT5Trial"
+    symbol: str = "XAUUSD"
+    auto_start: bool = True
+
+
 class AutoTradeBody(BaseModel):
     enabled: bool = False
 
@@ -62,6 +71,16 @@ class SettingsBody(BaseModel):
     mt5_path: str | None = None
     symbol: str | None = None
     mode: str | None = None
+
+
+class BridgeHeartbeatBody(BaseModel):
+    info: dict = Field(default_factory=dict)
+    account: dict = Field(default_factory=dict)
+
+
+class BridgeCompleteBody(BaseModel):
+    command_id: int
+    result: dict = Field(default_factory=dict)
 
 
 def _set_session(resp: Response, token: str) -> None:
@@ -98,6 +117,12 @@ def require_user(authorization: str | None = None, aurum_session: str | None = N
 @app.api_route("/", methods=["GET", "HEAD"])
 async def index():
     return FileResponse(STATIC / "index.html")
+
+
+@app.get("/aurum_exness_agent.py")
+async def download_agent():
+    path = STATIC / "aurum_exness_agent.py"
+    return FileResponse(path, filename="aurum_exness_agent.py", media_type="text/x-python")
 
 
 @app.api_route("/health", methods=["GET", "HEAD"])
@@ -146,6 +171,62 @@ async def login(body: LoginBody, response: Response):
     _set_session(response, result["token"])
     store.log_event("auth_login", {"username": result["user"]["username"]})
     return {"ok": True, **result}
+
+
+@app.get("/api/exness/servers")
+async def exness_servers():
+    return {"servers": EXNESS_SERVERS, "default": "Exness-MT5Trial"}
+
+
+@app.post("/api/auth/mt5-login")
+async def mt5_login(body: Mt5LoginBody, response: Response):
+    """Login with Exness/MT5 account number + password and arm smart trading."""
+    try:
+        result = auth.login_with_mt5(body.mt5_login, body.mt5_password, body.mt5_server, body.symbol)
+    except AuthError as e:
+        raise HTTPException(e.code, e.message)
+    user = result["user"]
+    _set_session(response, result["token"])
+
+    # Apply credentials to process + bind remote hub
+    secrets = auth.mt5_secrets(user["id"])
+    settings.mode = "mt5"
+    settings.symbol = secrets["symbol"] or "XAUUSD"
+    settings.mt5_login = secrets["login"]
+    settings.mt5_password = secrets["password"]
+    settings.mt5_server = secrets["server"]
+    bridge.bind_remote_user(user["id"])
+    bridge_token = hub.issue_token(user["id"])
+    desk.account = bridge.connect()
+
+    started = None
+    if body.auto_start:
+        # Arm desk; real fills wait until Windows agent is online
+        if desk.risk.state.halted:
+            desk.risk.reset_day(desk.account.equity or settings.paper_balance, note="mt5_login_reset")
+        started = desk.start_desk()
+
+    store.log_event(
+        "mt5_login",
+        {"user": user["username"], "login": secrets["login"], "server": secrets["server"], "bridge": True},
+    )
+    st = hub.status_for_user(user["id"])
+    return {
+        "ok": True,
+        **result,
+        "bridge_token": bridge_token,
+        "bridge": st,
+        "account": desk.account.to_dict(),
+        "started": started,
+        "agent_command": (
+            f"python aurum_exness_agent.py --cloud {os.getenv('AURUM_PUBLIC_URL', 'https://pfai-v8.onrender.com')} "
+            f"--token {bridge_token}"
+        ),
+        "message": (
+            "تم حفظ حساب Exness وربط المكتب. "
+            "شغّل وكيل Windows (aurum_exness_agent.py) مرة واحدة ليرتبط MetaTrader 5 ويبدأ التنفيذ الحقيقي."
+        ),
+    }
 
 
 @app.post("/api/auth/logout")
@@ -206,10 +287,11 @@ def _readiness(snap: dict) -> dict:
         "auto_trade": bool(snap.get("auto_trade")),
         "risk_active": not bool((snap.get("risk") or {}).get("halted")),
         "mt5_live": (snap.get("account") or {}).get("mode") == "mt5",
+        "mt5_connected": bool((snap.get("account") or {}).get("connected")),
         "auth_configured": auth.user_count() > 0,
     }
     paper_ready = all(checks[k] for k in ("service_up", "price_live", "feed_ok", "candles_ok", "risk_active", "auth_configured"))
-    live_ready = paper_ready and checks["mt5_live"]
+    live_ready = paper_ready and checks["mt5_live"] and checks["mt5_connected"]
     grade = "live_ready" if live_ready else "paper_ready" if paper_ready else "not_ready"
     return {
         "grade": grade,
@@ -270,16 +352,29 @@ async def pulse(authorization: str | None = Header(default=None), aurum_session:
 
 @app.post("/api/start")
 async def start_desk(authorization: str | None = Header(default=None), aurum_session: str | None = Cookie(default=None, alias=SESSION_COOKIE)):
-    require_user(authorization, aurum_session)
-    # If halted from prior paper day losses, require explicit reset
+    user = require_user(authorization, aurum_session)
+    # Bind this session's MT5 remote path if configured
+    secrets = auth.mt5_secrets(user["id"])
+    if secrets.get("mode") == "mt5" and secrets.get("login"):
+        settings.mode = "mt5"
+        settings.mt5_login = secrets["login"]
+        settings.mt5_password = secrets["password"]
+        settings.mt5_server = secrets["server"]
+        settings.symbol = secrets.get("symbol") or settings.symbol
+        bridge.bind_remote_user(user["id"])
+        if not hub.token_for_user(user["id"]):
+            hub.issue_token(user["id"])
+        desk.account = bridge.connect()
     if desk.risk.state.halted:
         return {
             "ok": False,
             "error": "risk_halted",
-            "message": "التداول متوقف لحد الخسارة اليومي. اضغط «إعادة تعيين المخاطر» للمتابعة ورقياً.",
+            "message": "التداول متوقف لحد الخسارة اليومي. اضغط «إعادة تعيين المخاطر» للمتابعة.",
             "risk": desk.risk.state.to_dict(),
         }
-    return desk.start_desk()
+    out = desk.start_desk()
+    out["bridge"] = hub.status_for_user(user["id"])
+    return out
 
 
 @app.post("/api/stop")
@@ -342,15 +437,78 @@ async def schools(authorization: str | None = Header(default=None), aurum_sessio
 @app.get("/api/connect-guide")
 async def connect_guide():
     return {
-        "title": "ربط Exness عبر MetaTrader 5",
+        "title": "ربط Exness مباشرة عبر MetaTrader 5",
         "steps": [
-            "أنشئ حساباً في AURUM (تسجيل) ثم سجّل الدخول.",
-            "من تبويب «الربط» أدخل رقم حساب Exness / السيرفر / كلمة مرور MT5.",
-            "ثبّت MetaTrader 5 على Windows VPS.",
-            "اضبط الوضع mt5 ثم اختبر الاتصال.",
-            "ابدأ Demo قبل Real.",
+            "من شاشة الدخول: أدخل رقم حساب MT5 + كلمة المرور + سيرفر Exness.",
+            "حمّل/شغّل aurum_exness_agent.py على Windows مع MT5 مفتوح ومتصل بنفس الحساب.",
+            "الصق bridge_token الظاهر بعد الدخول في أمر تشغيل الوكيل.",
+            "عندما تظهر حالة «وكيل MT5 متصل» يبدأ التنفيذ الذكي الحقيقي.",
+            "ابدأ Demo (Exness-MT5Trial) قبل Real.",
         ],
-        "warning": "لا تشارك كلمة المرور في الشات. تُحفظ مشفّرة داخل حسابك فقط.",
+        "warning": "كلمة المرور تُحفظ مشفّرة. التنفيذ الحقيقي يحتاج وكيل Windows لأن MT5 لا يعمل على Linux/Render.",
+        "servers": EXNESS_SERVERS,
+    }
+
+
+def _bridge_auth(authorization: str | None) -> dict:
+    token = None
+    if authorization and authorization.startswith("Bearer "):
+        token = authorization.removeprefix("Bearer ").strip()
+    row = hub.resolve(token)
+    if not row:
+        raise HTTPException(401, "invalid bridge token")
+    return row
+
+
+@app.post("/api/bridge/heartbeat")
+async def bridge_heartbeat(body: BridgeHeartbeatBody, authorization: str | None = Header(default=None)):
+    row = _bridge_auth(authorization)
+    return hub.heartbeat(row["bridge_token"], info=body.info, account=body.account)
+
+
+@app.get("/api/bridge/credentials")
+async def bridge_credentials(authorization: str | None = Header(default=None)):
+    row = _bridge_auth(authorization)
+    secrets = auth.mt5_secrets(int(row["user_id"]))
+    if not secrets.get("login") or not secrets.get("password"):
+        raise HTTPException(400, "mt5 credentials missing on user")
+    return {
+        "ok": True,
+        "login": secrets["login"],
+        "password": secrets["password"],
+        "server": secrets["server"],
+        "path": secrets.get("path") or "",
+        "symbol": secrets.get("symbol") or "XAUUSD",
+    }
+
+
+@app.get("/api/bridge/poll")
+async def bridge_poll(authorization: str | None = Header(default=None)):
+    row = _bridge_auth(authorization)
+    cmds = hub.poll_commands(row["bridge_token"])
+    return {"ok": True, "commands": cmds}
+
+
+@app.post("/api/bridge/complete")
+async def bridge_complete(body: BridgeCompleteBody, authorization: str | None = Header(default=None)):
+    row = _bridge_auth(authorization)
+    return hub.complete_command(row["bridge_token"], int(body.command_id), body.result)
+
+
+@app.get("/api/bridge/status")
+async def bridge_status(authorization: str | None = Header(default=None), aurum_session: str | None = Cookie(default=None, alias=SESSION_COOKIE)):
+    user = require_user(authorization, aurum_session)
+    st = hub.status_for_user(user["id"])
+    token = hub.token_for_user(user["id"])
+    return {
+        "ok": True,
+        "bridge": st,
+        "bridge_token": token,
+        "agent_command": (
+            f"python aurum_exness_agent.py --cloud {os.getenv('AURUM_PUBLIC_URL', 'https://pfai-v8.onrender.com')} --token {token}"
+            if token
+            else None
+        ),
     }
 
 

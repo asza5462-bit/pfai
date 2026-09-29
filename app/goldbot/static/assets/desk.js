@@ -4,6 +4,7 @@
   const ctx = canvas.getContext("2d");
   let candles = [];
   let user = null;
+  let bridgeToken = null;
   let pulseTimer = null;
   let refreshTimer = null;
   let pulseAnim = 0;
@@ -25,39 +26,18 @@
       const max = Math.max(...view.map((c) => c.high));
       const min = Math.min(...view.map((c) => c.low));
       const pad = (max - min) * 0.08 || 1;
-      const top = max + pad;
-      const bot = min - pad;
-      const left = w * 0.08;
-      const right = w * 0.96;
-      const midY = h * 0.42;
-      const chartH = h * 0.38;
+      const top = max + pad, bot = min - pad;
+      const left = w * 0.08, right = w * 0.96, midY = h * 0.42, chartH = h * 0.38;
       const slot = (right - left) / view.length;
       ctx.beginPath();
       view.forEach((c, i) => {
         const x = left + i * slot + slot * 0.5;
         const y = midY - ((c.close - bot) / (top - bot) - 0.5) * chartH;
-        if (i === 0) ctx.moveTo(x, y);
-        else ctx.lineTo(x, y);
+        i === 0 ? ctx.moveTo(x, y) : ctx.lineTo(x, y);
       });
       ctx.strokeStyle = "rgba(138,106,40,0.55)";
       ctx.lineWidth = 2;
       ctx.stroke();
-      view.forEach((c, i) => {
-        const x = left + i * slot + slot * 0.5;
-        const yH = midY - ((c.high - bot) / (top - bot) - 0.5) * chartH;
-        const yL = midY - ((c.low - bot) / (top - bot) - 0.5) * chartH;
-        const yO = midY - ((c.open - bot) / (top - bot) - 0.5) * chartH;
-        const yC = midY - ((c.close - bot) / (top - bot) - 0.5) * chartH;
-        const bull = c.close >= c.open;
-        ctx.strokeStyle = bull ? "rgba(31,122,76,0.75)" : "rgba(163,59,43,0.75)";
-        ctx.beginPath();
-        ctx.moveTo(x, yH);
-        ctx.lineTo(x, yL);
-        ctx.stroke();
-        const bw = Math.max(2, slot * 0.45);
-        ctx.fillStyle = bull ? "rgba(31,122,76,0.55)" : "rgba(163,59,43,0.55)";
-        ctx.fillRect(x - bw / 2, Math.min(yO, yC), bw, Math.max(1.5, Math.abs(yC - yO)));
-      });
       pulseAnim = (pulseAnim + 0.01) % 1;
       ctx.fillStyle = "rgba(200,162,74,0.14)";
       ctx.fillRect(left + pulseAnim * (right - left), midY - chartH * 0.55, 2, chartH * 1.1);
@@ -92,28 +72,52 @@
     el.classList.toggle("ok", !!ok);
   }
 
-  function setGate(authenticated) {
-    $("authGate").classList.toggle("hidden", authenticated);
-    $("deskApp").classList.toggle("hidden", !authenticated);
+  function setGate(on) {
+    $("authGate").classList.toggle("hidden", on);
+    $("deskApp").classList.toggle("hidden", !on);
   }
 
-  function fillSettings(u) {
-    const s = (u && u.settings) || {};
-    $("setMode").value = s.mode || "paper";
-    $("setSymbol").value = s.symbol || "XAUUSD";
-    $("setLogin").value = s.mt5_login || "";
-    $("setServer").value = s.mt5_server || "";
-    $("setPath").value = s.mt5_path || "";
-    $("setPassword").value = "";
-    $("setPassword").placeholder = s.has_mt5_password ? " محفوظة مشفّرة — اكتب فقط للتغيير" : "لن تُعرض بعد الحفظ";
+  function showTab(name) {
+    ["mt5FormLogin", "loginForm", "registerForm"].forEach((id) => $(id).classList.add("hidden"));
+    ["tabMt5", "tabLogin", "tabRegister"].forEach((id) => $(id).classList.remove("on"));
+    if (name === "mt5") { $("mt5FormLogin").classList.remove("hidden"); $("tabMt5").classList.add("on"); }
+    if (name === "login") { $("loginForm").classList.remove("hidden"); $("tabLogin").classList.add("on"); }
+    if (name === "register") { $("registerForm").classList.remove("hidden"); $("tabRegister").classList.add("on"); }
+  }
+
+  async function loadServers() {
+    try {
+      const j = await api("/api/exness/servers");
+      const sel = $("mt5Server");
+      sel.innerHTML = "";
+      (j.servers || []).forEach((s) => {
+        const o = document.createElement("option");
+        o.value = s; o.textContent = s;
+        if (s === (j.default || "Exness-MT5Trial")) o.selected = true;
+        sel.appendChild(o);
+      });
+    } catch (_) {
+      $("mt5Server").innerHTML = "<option>Exness-MT5Trial</option><option>Exness-MT5Real</option>";
+    }
+  }
+
+  function setBridgeUI(bridge, token, agentCommand) {
+    const online = !!(bridge && bridge.online);
+    $("bridgePill").textContent = online ? "الجسر: متصل Exness" : "الجسر: بانتظار Windows";
+    $("bridgePill").classList.toggle("on", online);
+    if ($("bridgeStatusText")) {
+      $("bridgeStatusText").textContent = (bridge && bridge.detail) || (online ? "متصل" : "بانتظار الوكيل");
+    }
+    if (token) bridgeToken = token;
+    if (agentCommand && $("agentCmd")) $("agentCmd").value = agentCommand;
+    else if (bridgeToken && $("agentCmd") && !$("agentCmd").value) {
+      $("agentCmd").value = `python aurum_exness_agent.py --cloud ${location.origin} --token ${bridgeToken}`;
+    }
   }
 
   function renderTrades(list, el) {
     el.innerHTML = "";
-    if (!list.length) {
-      el.innerHTML = "<li>لا صفقات بعد</li>";
-      return;
-    }
+    if (!list.length) { el.innerHTML = "<li>لا صفقات بعد</li>"; return; }
     list.slice(0, 20).forEach((t) => {
       const li = document.createElement("li");
       li.innerHTML = `<strong class="${biasClass(t.side)}">${t.side}</strong> ${t.lot} @ ${t.entry}<span>${t.status} · pnl ${Number(t.pnl || 0).toFixed(2)} · ${t.mode}</span>`;
@@ -129,10 +133,8 @@
     const risk = data.risk || {};
     const pulse = data.pulse || {};
     const ready = data.readiness || {};
-    const session = ((sig.schools || []).find((s) => s.school && s.school.startsWith("Session")) || {}).detail || {};
-
     $("readyPill").textContent = ready.summary_ar || ready.grade || "—";
-    $("readyPill").classList.toggle("on", !!ready.paper_ready);
+    $("readyPill").classList.toggle("on", !!ready.paper_ready || !!ready.exness_mt5_ready);
     $("statePill").textContent = data.state || "—";
     $("modePill").textContent = acc.mode || "—";
     $("symbolPill").textContent = data.symbol || "XAUUSD";
@@ -142,18 +144,16 @@
     $("action").textContent = sig.action || "—";
     $("action").className = biasClass(sig.action === "flat" ? "neutral" : sig.action);
     $("pulseBias").textContent = pulse.bias ? `${pulse.bias} ${Math.round((pulse.score || 0) * 100)}` : "—";
-    $("pulseBias").className = biasClass(pulse.bias || "neutral");
     $("qualityPill").textContent = sig.quality && sig.quality !== "none" ? sig.quality : "—";
     $("equity").textContent = acc.equity != null ? Number(acc.equity).toFixed(2) : "—";
     $("riskState").textContent = risk.halted ? "متوقف" : "نشط";
     $("narrative").textContent = sig.narrative || data.disclaimer || "";
     $("headline").textContent =
-      risk.halted ? "المخاطرة متوقفة — أعد التعيين للمتابعة" :
-      data.state === "MANAGING" ? "إدارة ذكية للصفقة" :
-      data.state === "IN_TRADE" ? "صفقة مفتوحة" :
+      !acc.connected && acc.mode === "mt5" ? "بانتظار وكيل Windows للارتباط بـ Exness" :
+      risk.halted ? "المخاطرة متوقفة" :
+      data.state === "IN_TRADE" ? "صفقة مفتوحة على الحساب" :
       sig.action === "buy" ? "تقارب شراء" :
-      sig.action === "sell" ? "تقارب بيع" :
-      "انتظار الانضباط";
+      sig.action === "sell" ? "تقارب بيع" : "تحليل حي — بانتظار إشارة قوية";
 
     const schools = $("schools");
     schools.innerHTML = "";
@@ -163,13 +163,7 @@
       schools.appendChild(li);
     });
     const inst = sig.institutional || {};
-    $("inst").textContent = [
-      `التحيز: ${inst.bias || "—"} | الدرجة: ${inst.institutional_score ?? "—"}`,
-      `أسباب: ${(inst.reasons || []).join(" · ") || "—"}`,
-      `الجلسة: ${session.killzone || "—"}`,
-      inst.disclaimer || "",
-    ].join("\n");
-
+    $("inst").textContent = `التحيز: ${inst.bias || "—"} | ${inst.institutional_score ?? "—"}\n${(inst.reasons || []).join(" · ") || "—"}`;
     $("btnStart").classList.toggle("on", !!data.auto_trade);
     $("btnStart").textContent = data.auto_trade ? "المكتب يعمل" : "ابدأ التداول";
   }
@@ -180,10 +174,11 @@
     renderTrades(j.trades || [], $("tradesFull"));
   }
 
-  async function refresh() {
-    const j = await api("/api/status");
-    // status is public; enrich after login via scan if needed
-    render(j);
+  async function refreshBridge() {
+    try {
+      const j = await api("/api/bridge/status");
+      setBridgeUI(j.bridge, j.bridge_token, j.agent_command);
+    } catch (_) {}
   }
 
   async function pulse() {
@@ -192,29 +187,23 @@
       $("statePill").textContent = j.state || "—";
       $("latencyPill").textContent = j.elapsed_ms != null ? `${j.elapsed_ms}ms` : "—";
       if (j.tick) $("price").textContent = j.tick.bid;
-      if (j.pulse) {
-        $("pulseBias").textContent = `${j.pulse.bias} ${Math.round((j.pulse.score || 0) * 100)}`;
-        $("pulseBias").className = biasClass(j.pulse.bias || "neutral");
-      }
       if (j.account) $("equity").textContent = Number(j.account.equity).toFixed(2);
-      if ((j.manage && ((j.manage.closed || []).length || (j.manage.updated || []).length)) || j.executed_pending) {
+      if ((j.manage && (j.manage.closed || []).length) || j.executed_pending) {
         await loadTrades();
-        await api("/api/scan", { method: "POST" }).then(render).catch(() => {});
       }
     } catch (e) {
       if (e.status === 401) enterLoggedOut();
     }
   }
 
-  function startDeskTimers() {
-    clearInterval(pulseTimer);
-    clearInterval(refreshTimer);
+  function startTimers() {
+    clearInterval(pulseTimer); clearInterval(refreshTimer);
     pulseTimer = setInterval(pulse, 1000);
     refreshTimer = setInterval(async () => {
       try {
-        const s = await api("/api/scan", { method: "POST" });
-        render(s);
+        render(await api("/api/scan", { method: "POST" }));
         await loadTrades();
+        await refreshBridge();
       } catch (e) {
         if (e.status === 401) enterLoggedOut();
       }
@@ -222,64 +211,67 @@
   }
 
   function enterLoggedOut() {
-    user = null;
+    user = null; bridgeToken = null;
     setGate(false);
-    clearInterval(pulseTimer);
-    clearInterval(refreshTimer);
+    clearInterval(pulseTimer); clearInterval(refreshTimer);
+    showTab("mt5");
   }
 
-  async function enterLoggedIn(u) {
+  async function enterLoggedIn(u, extra = {}) {
     user = u;
     setGate(true);
     $("userPill").textContent = u.username;
-    fillSettings(u);
-    showAuth("");
-    try {
-      const s = await api("/api/scan", { method: "POST" });
-      render(s);
-    } catch {
-      await refresh();
+    if (extra.bridge_token || extra.agent_command || extra.bridge) {
+      setBridgeUI(extra.bridge, extra.bridge_token, extra.agent_command);
+    } else {
+      await refreshBridge();
     }
+    try { render(await api("/api/scan", { method: "POST" })); }
+    catch { render(await fetch("/api/status").then((r) => r.json())); }
     await loadTrades();
-    startDeskTimers();
+    startTimers();
+    if (extra.message) alert(extra.message);
   }
 
-  // tabs auth (explicit handlers + keyboard)
-  function showLoginTab() {
-    $("tabLogin").classList.add("on");
-    $("tabRegister").classList.remove("on");
-    $("loginForm").classList.remove("hidden");
-    $("registerForm").classList.add("hidden");
-    $("loginUser").focus();
-  }
-  function showRegisterTab() {
-    $("tabRegister").classList.add("on");
-    $("tabLogin").classList.remove("on");
-    $("registerForm").classList.remove("hidden");
-    $("loginForm").classList.add("hidden");
-    $("regUser").focus();
-  }
-  $("tabLogin").addEventListener("click", (e) => { e.preventDefault(); showLoginTab(); });
-  $("tabRegister").addEventListener("click", (e) => { e.preventDefault(); showRegisterTab(); });
+  $("tabMt5").onclick = () => showTab("mt5");
+  $("tabLogin").onclick = () => showTab("login");
+  $("tabRegister").onclick = () => showTab("register");
+
+  $("mt5FormLogin").onsubmit = async (e) => {
+    e.preventDefault();
+    showAuth("جاري الارتباط بحساب Exness/MT5…");
+    try {
+      const j = await api("/api/auth/mt5-login", {
+        method: "POST",
+        body: JSON.stringify({
+          mt5_login: $("mt5Login").value.trim(),
+          mt5_password: $("mt5Pass").value,
+          mt5_server: $("mt5Server").value,
+          symbol: $("mt5Symbol").value.trim() || "XAUUSD",
+          auto_start: true,
+        }),
+      });
+      showAuth("تم حفظ الحساب — أكمل بتشغيل وكيل Windows", true);
+      await enterLoggedIn(j.user, j);
+      document.querySelector('.tabs button[data-tab="connect"]').click();
+    } catch (err) {
+      showAuth(err.message || "فشل الارتباط");
+    }
+  };
 
   $("loginForm").onsubmit = async (e) => {
     e.preventDefault();
-    showAuth("جاري الدخول…");
     try {
       const j = await api("/api/auth/login", {
         method: "POST",
         body: JSON.stringify({ username: $("loginUser").value.trim(), password: $("loginPass").value }),
       });
-      showAuth("تم الدخول", true);
       await enterLoggedIn(j.user);
-    } catch (err) {
-      showAuth(err.message || "فشل الدخول");
-    }
+    } catch (err) { showAuth(err.message); }
   };
 
   $("registerForm").onsubmit = async (e) => {
     e.preventDefault();
-    showAuth("جاري إنشاء الحساب…");
     try {
       const j = await api("/api/auth/register", {
         method: "POST",
@@ -289,19 +281,12 @@
           password_confirm: $("regPass2").value,
         }),
       });
-      showAuth("تم إنشاء الحساب", true);
       await enterLoggedIn(j.user);
-    } catch (err) {
-      showAuth(err.message || "فشل التسجيل");
-    }
+    } catch (err) { showAuth(err.message); }
   };
 
-  $("btnLogout").onclick = async () => {
-    await api("/api/auth/logout", { method: "POST" });
-    enterLoggedOut();
-  };
+  $("btnLogout").onclick = async () => { await api("/api/auth/logout", { method: "POST" }); enterLoggedOut(); };
 
-  // desk tabs
   document.querySelectorAll(".tabs button").forEach((btn) => {
     btn.onclick = () => {
       document.querySelectorAll(".tabs button").forEach((b) => b.classList.remove("on"));
@@ -315,81 +300,43 @@
   $("btnStart").onclick = async () => {
     try {
       const j = await api("/api/start", { method: "POST" });
-      if (!j.ok) {
-        alert(j.message || j.error || "تعذّر البدء");
-        return;
-      }
+      if (!j.ok) return alert(j.message || j.error);
       if (j.scan) render(j.scan);
-      alert(j.message || "بدأ المكتب");
-    } catch (e) {
-      alert(e.message);
-    }
+      if (j.bridge) setBridgeUI(j.bridge);
+      alert(j.message || "بدأ");
+    } catch (e) { alert(e.message); }
   };
-
   $("btnStop").onclick = async () => {
-    const j = await api("/api/stop", { method: "POST" });
-    alert(j.message || "توقف");
+    await api("/api/stop", { method: "POST" });
     $("btnStart").classList.remove("on");
     $("btnStart").textContent = "ابدأ التداول";
   };
-
-  $("btnScan").onclick = async () => {
-    const j = await api("/api/scan", { method: "POST" });
-    render(j);
-    await loadTrades();
-  };
-
+  $("btnScan").onclick = async () => { render(await api("/api/scan", { method: "POST" })); await loadTrades(); };
   $("btnResetRisk").onclick = async () => {
-    if (!confirm("إعادة تعيين حد الخسارة اليومي للمتابعة الورقية؟")) return;
-    const j = await api("/api/risk/reset", { method: "POST" });
-    alert(j.ok ? "تمت إعادة تعيين المخاطر" : "فشل");
+    if (!confirm("إعادة تعيين المخاطر؟")) return;
+    await api("/api/risk/reset", { method: "POST" });
     await $("btnScan").onclick();
   };
-
-  $("mt5Form").onsubmit = async (e) => {
-    e.preventDefault();
-    $("connectMsg").textContent = "جاري الحفظ…";
-    try {
-      const body = {
-        mode: $("setMode").value,
-        symbol: $("setSymbol").value.trim() || "XAUUSD",
-        mt5_login: $("setLogin").value.trim(),
-        mt5_server: $("setServer").value.trim(),
-        mt5_path: $("setPath").value.trim(),
-      };
-      if ($("setPassword").value) body.mt5_password = $("setPassword").value;
-      const j = await api("/api/settings", { method: "POST", body: JSON.stringify(body) });
-      user = j.user;
-      fillSettings(user);
-      $("connectMsg").textContent = "تم حفظ الربط";
-      $("connectMsg").classList.add("ok");
-      $("modePill").textContent = (j.account && j.account.mode) || body.mode;
-    } catch (err) {
-      $("connectMsg").textContent = err.message || "فشل الحفظ";
-      $("connectMsg").classList.remove("ok");
-    }
+  $("btnRefreshBridge").onclick = refreshBridge;
+  $("btnCopyAgent").onclick = async () => {
+    const t = $("agentCmd").value;
+    try { await navigator.clipboard.writeText(t); $("connectMsg").textContent = "تم النسخ"; $("connectMsg").classList.add("ok"); }
+    catch { $("connectMsg").textContent = "انسخ يدوياً من الصندوق"; }
   };
 
-  // boot
   (async () => {
+    await loadServers();
+    showTab("mt5");
     try {
       const st = await api("/api/auth/status");
-      if (st.needs_setup || st.open_register) {
-        showRegisterTab();
-        showAuth(st.needs_setup ? "أنشئ أول حساب مالك للمكتب" : "يمكنك إنشاء حساب جديد أو تسجيل الدخول", true);
-      }
-      if (st.authenticated && st.user) {
-        await enterLoggedIn(st.user);
-      } else {
+      if (st.authenticated && st.user) await enterLoggedIn(st.user);
+      else {
         setGate(false);
-        // ambient chart from public status
         try {
           const s = await fetch("/api/status").then((r) => r.json());
           candles = s.candles_tail || [];
         } catch (_) {}
       }
-    } catch (_) {
-      setGate(false);
-    }
+    } catch (_) { setGate(false); }
   })();
 })();

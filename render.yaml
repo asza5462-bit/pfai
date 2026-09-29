@@ -30,6 +30,8 @@ services:
         value: "1"
       - key: AURUM_COOKIE_SECURE
         value: "1"
+      - key: AURUM_PUBLIC_URL
+        value: "https://pfai-v8.onrender.com"
       - key: AURUM_RISK_PCT
         value: "0.35"
       - key: AURUM_MAX_DAILY_LOSS_PCT
