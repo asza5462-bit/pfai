@@ -174,9 +174,47 @@ class Bridge:
                         detail=str(snap.get("detail") or "منفّذ Linux غير متصل — افتح VNC وسجّل Exness مرة واحدة"),
                     )
 
-        # 3) Legacy Windows agent hub
+        # 3) MetaApi configured but account id not ready yet — never pretend Windows agent is required
+        if self.mode == "mt5" and settings.prefer_metaapi:
+            from goldbot.mt5.metaapi_cloud import metaapi
+
+            if metaapi.configured and not self.metaapi_account_id:
+                return AccountSnapshot(
+                    balance=0.0,
+                    equity=0.0,
+                    margin=0.0,
+                    free_margin=0.0,
+                    currency="USD",
+                    mode="mt5",
+                    connected=False,
+                    server=settings.mt5_server or "Exness",
+                    login=int(settings.mt5_login or 0),
+                    detail="توكن MetaApi جاهز — جاري إنشاء الطرفية السحابية على Exness (بدون Windows)",
+                )
+
+        # 4) Legacy Windows agent hub (only when MetaApi/Linux are not the active path)
         if self.mode == "mt5" and self.remote_user_id and self.execution not in {"metaapi", "mt5_linux"}:
+            from goldbot.mt5.metaapi_cloud import metaapi
             from goldbot.mt5.remote_hub import hub
+
+            # Skip Windows fallback while MetaApi is the preferred real path
+            if settings.prefer_metaapi and metaapi.configured:
+                return AccountSnapshot(
+                    balance=0.0,
+                    equity=0.0,
+                    margin=0.0,
+                    free_margin=0.0,
+                    currency="USD",
+                    mode="mt5",
+                    connected=False,
+                    server=settings.mt5_server or "Exness",
+                    login=int(settings.mt5_login or 0),
+                    detail=(
+                        "حساب MetaApi قيد الربط — بدون Windows"
+                        if self.metaapi_account_id
+                        else "اضغط «إعادة ربط كامل» لإكمال الطرفية السحابية على Exness"
+                    ),
+                )
 
             st = hub.status_for_user(self.remote_user_id)
             acc = st.get("account") or {}
@@ -193,20 +231,6 @@ class Bridge:
                     server=str(acc.get("server") or settings.mt5_server),
                     login=int(acc.get("login") or settings.mt5_login or 0),
                     detail=st.get("detail") or "Exness via MT5 agent",
-                )
-            # If MetaApi id is set but not yet connected, prefer that messaging
-            if self.metaapi_account_id:
-                return AccountSnapshot(
-                    balance=float(acc.get("balance") or 0),
-                    equity=float(acc.get("equity") or 0),
-                    margin=0.0,
-                    free_margin=0.0,
-                    currency="USD",
-                    mode="mt5",
-                    connected=False,
-                    server=settings.mt5_server or "Exness",
-                    login=int(settings.mt5_login or 0),
-                    detail="حساب MetaApi قيد الربط — بدون Windows",
                 )
             return AccountSnapshot(
                 balance=float(acc.get("balance") or 0),

@@ -454,9 +454,19 @@ async def mt5_login(body: Mt5LoginBody, response: Response):
             if e.code == "E_PROVISION_PENDING":
                 cloud = {"ok": True, "configured": True, "pending": True, "code": e.code}
                 message = e.message
+                # Keep finishing in background with saved credentials
+                _finish_cloud_in_background(
+                    user["id"],
+                    str(secrets["login"]),
+                    secrets["password"],
+                    secrets["server"],
+                    settings.symbol,
+                    secrets.get("metaapi_account_id") or "",
+                )
             else:
                 cloud = {"ok": False, "configured": True, "error": e.message, "code": e.code, "details": e.details}
                 message = arabic_metaapi_error(e)
+                store.set_kv("metaapi_last_error", {"error": e.message, "code": e.code, "ts": __import__("time").time()})
             store.log_event("metaapi_login_error", {"user": user["username"], "error": e.message, "code": e.code})
     else:
         message = (

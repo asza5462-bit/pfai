@@ -22,6 +22,8 @@ services:
         value: "paper"
       - key: AURUM_PREFER_METAAPI
         value: "true"
+      - key: AURUM_PREFER_MT5_LINUX
+        value: "false"
       - key: METAAPI_REGION
         value: "new-york"
       - key: AURUM_SYMBOL

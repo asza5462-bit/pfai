@@ -57,7 +57,8 @@ class Settings:
     # Linux Docker/Wine MT5 executor (headless-mt5 compatible) — no Windows OS
     mt5_linux_url: str = field(default_factory=lambda: os.getenv("AURUM_MT5_LINUX_URL", "").rstrip("/"))
     mt5_linux_token: str = field(default_factory=lambda: os.getenv("AURUM_MT5_LINUX_TOKEN", ""))
-    prefer_mt5_linux: bool = field(default_factory=lambda: _env_bool("AURUM_PREFER_MT5_LINUX", True))
+    # Off by default — MetaApi is the primary no-Windows path; enable only with a Linux executor URL
+    prefer_mt5_linux: bool = field(default_factory=lambda: _env_bool("AURUM_PREFER_MT5_LINUX", False))
 
     # Risk — elite desk defaults (capital preservation first)
     risk_per_trade_pct: float = field(default_factory=lambda: _env_float("AURUM_RISK_PCT", 0.35))
