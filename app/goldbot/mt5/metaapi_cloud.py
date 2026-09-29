@@ -322,7 +322,7 @@ class MetaApiCloud:
         server: str,
         *,
         name: str | None = None,
-        symbol: str = "XAUUSD",
+        symbol: str = "XAUUSDm",
         keywords: list[str] | None = None,
         resource_slots: int | None = None,
         fast: bool = False,
@@ -386,8 +386,9 @@ class MetaApiCloud:
                     try:
                         from goldbot.storage.state import store
 
+                        key = f"metaapi_cooldown:{str(login).strip()}:{str(server).strip().lower()}"
                         store.set_kv(
-                            "metaapi_validation_cooldown",
+                            key,
                             {
                                 "until": time.time() + 3600,
                                 "login": str(login).strip(),
@@ -476,15 +477,17 @@ class MetaApiCloud:
         password: str,
         server: str,
         *,
-        symbol: str = "XAUUSD",
+        symbol: str = "XAUUSDm",
         existing_id: str | None = None,
         wait: bool = True,
         fast: bool = False,
         deploy_wait: float | None = None,
+        force_new: bool = False,
     ) -> dict:
         """Find or create cloud account; optionally wait until CONNECTED.
 
         Use fast=True for HTTP login paths (Render/Safari kill long requests).
+        force_new=True skips find-by-login so «إعادة ربط كامل» creates a fresh terminal.
         """
         if not self.configured:
             raise MetaApiError(
@@ -493,11 +496,12 @@ class MetaApiCloud:
                 status=503,
             )
 
-        # Honor MetaApi "retry in 1 hour" lockout — do not keep hammering credentials
+        # Honor MetaApi "retry in 1 hour" lockout — per login+server only
         try:
             from goldbot.storage.state import store
 
-            cool = store.get_kv("metaapi_validation_cooldown") or {}
+            cool_key = f"metaapi_cooldown:{str(login).strip()}:{str(server).strip().lower()}"
+            cool = store.get_kv(cool_key) or {}
             until = float((cool or {}).get("until") or 0)
             if until > time.time():
                 mins = max(1, int((until - time.time()) / 60))
@@ -513,8 +517,8 @@ class MetaApiCloud:
             pass
 
         acc = None
-        existing = normalize_account_id(existing_id) if is_metaapi_account_id(existing_id) else ""
-        if existing_id and not existing:
+        existing = "" if force_new else (normalize_account_id(existing_id) if is_metaapi_account_id(existing_id) else "")
+        if existing_id and not force_new and not existing:
             log.warning("ignoring invalid metaapi_account_id=%r", existing_id)
         if existing:
             try:
@@ -522,34 +526,49 @@ class MetaApiCloud:
             except MetaApiError as e:
                 log.warning("stale metaapi account %s: %s — will recreate", existing, e.message)
                 acc = None
-        if not acc:
+        if not acc and not force_new:
             acc = self.find_account_by_login(login, server)
         if not acc:
-            created = self.create_account(login, password, server, symbol=symbol, fast=fast)
-            account_id = normalize_account_id(str(created["id"]))
-            if not account_id:
-                raise MetaApiError("MetaApi أعاد معرّفاً غير صالح بعد الإنشاء", code="E_BAD_ACCOUNT_ID")
             try:
-                acc = self.get_account(account_id)
-            except MetaApiError as e:
-                # Race: account created but not yet readable — use create payload
-                if "not found" in (e.message or "").lower():
-                    acc = {"id": account_id, "state": created.get("state") or "DEPLOYED", "login": login, "server": server}
+                created = self.create_account(login, password, server, symbol=symbol, fast=fast)
+            except MetaApiError:
+                # Duplicate login / force_new race: reuse existing terminal + refresh password
+                found = self.find_account_by_login(login, server)
+                if found and is_metaapi_account_id(str(found.get("id") or "")):
+                    acc = found
+                    created = None
                 else:
                     raise
-        else:
-            account_id = normalize_account_id(str(acc.get("id") or ""))
-            if not account_id:
-                raise MetaApiError("الحساب الموجود بلا معرّف UUID صالح", code="E_BAD_ACCOUNT_ID")
-            try:
-                self._http(
-                    "PUT",
-                    self._prov_url(f"/users/current/accounts/{account_id}/password"),
-                    {"password": password},
-                    transaction=True,
-                )
-            except MetaApiError as e:
-                log.info("password update skipped: %s", e.message)
+            if not acc:
+                account_id = normalize_account_id(str(created["id"]))
+                if not account_id:
+                    raise MetaApiError("MetaApi أعاد معرّفاً غير صالح بعد الإنشاء", code="E_BAD_ACCOUNT_ID")
+                try:
+                    acc = self.get_account(account_id)
+                except MetaApiError as e:
+                    # Race: account created but not yet readable — use create payload
+                    if "not found" in (e.message or "").lower():
+                        acc = {
+                            "id": account_id,
+                            "state": created.get("state") or "DEPLOYED",
+                            "login": login,
+                            "server": server,
+                        }
+                    else:
+                        raise
+
+        account_id = normalize_account_id(str((acc or {}).get("id") or ""))
+        if not account_id:
+            raise MetaApiError("الحساب الموجود بلا معرّف UUID صالح", code="E_BAD_ACCOUNT_ID")
+        try:
+            self._http(
+                "PUT",
+                self._prov_url(f"/users/current/accounts/{account_id}/password"),
+                {"password": password},
+                transaction=True,
+            )
+        except MetaApiError as e:
+            log.info("password update skipped: %s", e.message)
 
         deploy_budget = deploy_wait if deploy_wait is not None else (8.0 if fast else 60.0)
         try:
@@ -655,7 +674,7 @@ class MetaApiCloud:
         sl: float,
         tp: float,
         *,
-        symbol: str = "XAUUSD",
+        symbol: str = "XAUUSDm",
         comment: str = "AURUM",
         region: str | None = None,
     ) -> dict:
@@ -689,21 +708,72 @@ class MetaApiCloud:
             ok = (numeric in SUCCESS_CODES) or (string_code in SUCCESS_STRINGS)
             if not ok and isinstance(resp.get("numericCode"), (int, float)):
                 ok = int(resp["numericCode"]) in SUCCESS_CODES
-            ticket = resp.get("orderId") or resp.get("positionId") or 0
+            # Prefer positionId for closes; keep orderId separately
+            pos_raw = resp.get("positionId") or resp.get("orderId") or 0
+            ord_raw = resp.get("orderId")
             try:
-                ticket_i = int(ticket) if ticket not in (None, "") else 0
+                ticket_i = int(pos_raw) if pos_raw not in (None, "") else 0
             except (TypeError, ValueError):
                 ticket_i = 0
+            # Resolve fill / open price so desk never stores null entry
+            fill_price = 0.0
+            for key in ("openPrice", "price", "averagePrice", "fillPrice", "currentPrice"):
+                if resp.get(key) not in (None, ""):
+                    try:
+                        fill_price = float(resp[key])
+                        break
+                    except (TypeError, ValueError):
+                        pass
+            if ok and fill_price <= 0:
+                try:
+                    pos_id = resp.get("positionId") or resp.get("orderId")
+                    if pos_id:
+                        for p in self.positions(account_id, region=region):
+                            if str(p.get("id") or p.get("positionId") or "") == str(pos_id):
+                                fill_price = float(p.get("openPrice") or p.get("price") or 0)
+                                break
+                    if fill_price <= 0:
+                        px = self.symbol_price(account_id, sym, region=region)
+                        fill_price = float(px.get("ask") or px.get("bid") or px.get("price") or 0)
+                except Exception:
+                    pass
+            if ok and fill_price <= 0:
+                # Broker may have filled — do not store entry=0 (breaks R / exits)
+                last = {
+                    "ok": False,
+                    "mode": "metaapi",
+                    "execution": "metaapi",
+                    "side": side,
+                    "lot": float(lot),
+                    "price": 0.0,
+                    "entry": 0.0,
+                    "sl": float(sl or 0),
+                    "tp": float(tp or 0),
+                    "ticket": ticket_i,
+                    "order_id": ord_raw,
+                    "position_id": resp.get("positionId"),
+                    "retcode": numeric,
+                    "string_code": string_code,
+                    "symbol": sym,
+                    "comment": comment,
+                    "error": "filled_no_price",
+                    "detail": "تم التنفيذ على الوسيط لكن تعذّر قراءة سعر الدخول — راجع الصفقات في Exness",
+                    "raw": resp,
+                }
+                return last
             last = {
                 "ok": ok,
                 "mode": "metaapi",
+                "execution": "metaapi",
                 "side": side,
                 "lot": float(lot),
+                "price": fill_price,
+                "entry": fill_price,
                 "sl": float(sl or 0),
                 "tp": float(tp or 0),
                 "ticket": ticket_i,
-                "order_id": resp.get("orderId"),
-                "position_id": resp.get("positionId"),
+                "order_id": ord_raw,
+                "position_id": resp.get("positionId") or (str(pos_raw) if pos_raw else None),
                 "retcode": numeric,
                 "string_code": string_code,
                 "symbol": sym,
@@ -728,13 +798,18 @@ class MetaApiCloud:
             return last
         return last
 
-    def close_position(self, account_id: str, position_id: str | int, region: str | None = None) -> dict:
+    def close_position(
+        self,
+        account_id: str,
+        position_id: str | int,
+        region: str | None = None,
+        volume: float | None = None,
+    ) -> dict:
+        payload: dict[str, Any] = {"actionType": "POSITION_CLOSE_ID", "positionId": str(position_id)}
+        if volume is not None and float(volume) > 0:
+            payload["volume"] = float(volume)
         try:
-            resp = self.trade(
-                account_id,
-                {"actionType": "POSITION_CLOSE_ID", "positionId": str(position_id)},
-                region=region,
-            )
+            resp = self.trade(account_id, payload, region=region)
         except MetaApiError as e:
             return {"ok": False, "error": e.message, "code": e.code}
         numeric = resp.get("numericCode")

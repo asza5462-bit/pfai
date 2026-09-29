@@ -4,6 +4,7 @@ from __future__ import annotations
 import logging
 import os
 import threading
+import time
 from contextlib import asynccontextmanager
 from pathlib import Path
 from typing import Any
@@ -162,8 +163,19 @@ def _provision_cloud_fast(
     existing_id: str | None,
     *,
     timeout_sec: float = 22.0,
+    force_new: bool = False,
 ) -> dict:
     """Run MetaApi provisioning with a hard timeout so Render/Safari do not drop the request."""
+    job_key = f"fast:{user_id}:{str(login).strip()}"
+    with _bg_lock:
+        if job_key in _bg_jobs:
+            raise MetaApiError(
+                "ربط سحابي جارٍ بالفعل لهذا الحساب — انتظر قليلاً ثم حدّث الحالة.",
+                code="E_PROVISION_PENDING",
+                status=202,
+            )
+        _bg_jobs.add(job_key)
+
     box: dict = {}
     _set_provision_state("pending", "جاري إنشاء الطرفية السحابية على MetaApi…", login=login, server=server)
 
@@ -174,10 +186,11 @@ def _provision_cloud_fast(
                 password,
                 server,
                 symbol=symbol or "XAUUSDm",
-                existing_id=existing_id,
+                existing_id=None if force_new else existing_id,
                 wait=False,
                 fast=True,
                 deploy_wait=6.0,
+                force_new=force_new,
             )
             _apply_cloud_binding(user_id, cloud)
             box["cloud"] = cloud
@@ -226,6 +239,10 @@ def _provision_cloud_fast(
             box["error"] = e
             msg = arabic_metaapi_error(e) if isinstance(e, MetaApiError) else str(e)
             _set_provision_state("error", msg, code=getattr(e, "code", None), login=login, server=server)
+        finally:
+            # Always release when THIS thread ends (including after HTTP early-return pending)
+            with _bg_lock:
+                _bg_jobs.discard(job_key)
 
     t = threading.Thread(target=_call, name=f"aurum-provision-{user_id}", daemon=True)
     t.start()
@@ -236,10 +253,12 @@ def _provision_cloud_fast(
         if not cloud.get("connected") and t.is_alive():
             cloud = dict(cloud)
             cloud["pending"] = True
+            # Thread keeps job_key until it finishes CONNECTED wait
+            return cloud
         return cloud
 
     if t.is_alive():
-        # Creation still running in THIS thread only — do not start a second job
+        # Creation still running — do not start a second job; thread owns job_key
         raise MetaApiError(
             "جاري تجهيز الطرفية السحابية — أكملنا الحفظ وستكتمل خلال دقيقة. حدّث من تبويب الربط.",
             code="E_PROVISION_PENDING",
@@ -259,6 +278,13 @@ async def lifespan(_: FastAPI):
     # Load MetaApi token / Linux executor from env or app-saved store
     metaapi.refresh_token()
     mt5_linux.refresh()
+    # Always disarm on boot — user must press «ابدأ» after live connect.
+    # Prevents KV auto_trade=True + AURUM_MODE=paper from paper-filling after redeploy.
+    try:
+        store.set_kv("auto_trade", False)
+    except Exception:
+        pass
+    desk.armed = False
     desk.start_background()
     log.info(
         "AURUM desk online mode=%s symbol=%s metaapi=%s mt5_linux=%s",
@@ -291,7 +317,7 @@ class Mt5LoginBody(BaseModel):
     mt5_login: str
     mt5_password: str
     mt5_server: str = "Exness-MT5Trial15"
-    symbol: str = "XAUUSD"
+    symbol: str = "XAUUSDm"
     auto_start: bool = True
     metaapi_token: str | None = None  # optional — paste once to unlock cloud trading
 
@@ -501,7 +527,7 @@ async def mt5_login(body: Mt5LoginBody, response: Response):
     metaapi.refresh_token()
     secrets = auth.mt5_secrets(user["id"])
     settings.mode = "mt5"
-    settings.symbol = secrets["symbol"] or "XAUUSD"
+    settings.symbol = secrets["symbol"] or "XAUUSDm"
     settings.mt5_login = secrets["login"]
     settings.mt5_password = secrets["password"]
     settings.mt5_server = secrets["server"]
@@ -728,7 +754,7 @@ def _readiness(snap: dict) -> dict:
     checks = {
         "service_up": True,
         "product_aurum": True,
-        "price_live": bid >= 3000,
+        "price_live": bid >= 1000,  # gold can print below 3000; reject only absurd feeds
         "feed_ok": feed_ok,
         "candles_ok": int(snap.get("candle_count") or 0) >= 50,
         "auto_trade": bool(snap.get("auto_trade")),
@@ -905,6 +931,15 @@ async def risk_reset(authorization: str | None = Header(default=None), aurum_ses
 @app.post("/api/auto-trade")
 async def auto_trade(body: AutoTradeBody, authorization: str | None = Header(default=None), aurum_session: str | None = Cookie(default=None, alias=SESSION_COOKIE)):
     require_user(authorization, aurum_session)
+    if body.enabled and settings.mode == "mt5":
+        desk.account = bridge.connect()
+        if not (bridge.is_live_execution() and desk.account.connected):
+            desk.set_auto_trade(False)
+            desk.armed = False
+            raise HTTPException(
+                409,
+                "لا يمكن تفعيل التداول التلقائي قبل اتصال Exness الحقيقي عبر MetaApi.",
+            )
     desk.set_auto_trade(body.enabled)
     desk.armed = bool(body.enabled)
     return {"ok": True, "auto_trade": desk.auto_trade, "armed": desk.armed}
@@ -913,6 +948,13 @@ async def auto_trade(body: AutoTradeBody, authorization: str | None = Header(def
 @app.post("/api/execute")
 async def execute(body: ExecuteBody = ExecuteBody(), authorization: str | None = Header(default=None), aurum_session: str | None = Cookie(default=None, alias=SESSION_COOKIE)):
     require_user(authorization, aurum_session)
+    if settings.mode == "mt5":
+        desk.account = bridge.connect()
+        if not (bridge.is_live_execution() and desk.account.connected):
+            raise HTTPException(
+                409,
+                "التنفيذ الحقيقي غير متصل — لن نفتح صفقة وهمية. أعد الربط السحابي أولاً.",
+            )
     return desk.execute_signal(force=body.force)
 
 
@@ -1033,7 +1075,7 @@ async def bridge_credentials(authorization: str | None = Header(default=None)):
         "password": secrets["password"],
         "server": secrets["server"],
         "path": secrets.get("path") or "",
-        "symbol": secrets.get("symbol") or "XAUUSD",
+        "symbol": secrets.get("symbol") or "XAUUSDm",
     }
 
 
@@ -1077,6 +1119,35 @@ async def cloud_status(authorization: str | None = Header(default=None), aurum_s
     if live and provision.get("status") != "ok":
         _set_provision_state("ok", "متصل بسحابة Exness — التنفيذ الحقيقي جاهز", connected=True)
         provision = _get_provision_state()
+    secrets = auth.mt5_secrets(user["id"])
+    cooldown = None
+    try:
+        login = str(secrets.get("login") or "").strip()
+        server = str(secrets.get("server") or "").strip()
+        if login and server:
+            cool = store.get_kv(f"metaapi_cooldown:{login}:{server.lower()}") or {}
+            until = float((cool or {}).get("until") or 0)
+            if until > time.time():
+                mins = max(1, int((until - time.time()) / 60))
+                cooldown = {
+                    "until": until,
+                    "minutes_left": mins,
+                    "login": login,
+                    "server": server,
+                    "message": (
+                        f"MetaApi يمنع التحقق مؤقتاً — انتظر حوالي {mins} دقيقة "
+                        "بعد تصحيح كلمة مرور التداول/السيرفر."
+                    ),
+                }
+                if provision.get("status") != "error":
+                    provision = {
+                        **provision,
+                        "status": "error",
+                        "message": cooldown["message"],
+                        "code": "E_VALIDATION_COOLDOWN",
+                    }
+    except Exception:
+        pass
     return {
         "ok": True,
         "metaapi_configured": metaapi.configured,
@@ -1087,6 +1158,7 @@ async def cloud_status(authorization: str | None = Header(default=None), aurum_s
         "live_execution": live,
         "real_orders_only": True,
         "provision": provision,
+        "cooldown": cooldown,
         "last_error": last_err,
         "signup_url": "https://app.metaapi.cloud/api-access/generate-token",
     }
@@ -1200,6 +1272,10 @@ async def cloud_reconnect(
     if existing_id and not is_metaapi_account_id(existing_id):
         existing_id = None
         auth.update_settings(user["id"], {"metaapi_account_id": ""})
+    if body.force_new:
+        auth.update_settings(user["id"], {"metaapi_account_id": "", "execution": ""})
+        bridge.metaapi_account_id = ""
+        bridge.execution = ""
 
     cloud = None
     if metaapi.configured and secrets.get("login") and secrets.get("password"):
@@ -1212,6 +1288,7 @@ async def cloud_reconnect(
                 secrets.get("symbol") or "XAUUSDm",
                 existing_id,
                 timeout_sec=22.0,
+                force_new=bool(body.force_new),
             )
         except MetaApiError as e:
             if "not found" in (e.message or "").lower() or e.code in {"E_BAD_ACCOUNT_ID", "NotFoundError"}:
@@ -1226,6 +1303,7 @@ async def cloud_reconnect(
                         secrets.get("symbol") or "XAUUSDm",
                         None,
                         timeout_sec=22.0,
+                        force_new=True,
                     )
                 except MetaApiError as e2:
                     if e2.code == "E_PROVISION_PENDING":

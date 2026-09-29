@@ -219,11 +219,17 @@ class UserAuth:
             if "mt5_password" in patch and patch.get("mt5_password"):
                 cur["mt5_password_enc"] = self._encrypt(str(patch["mt5_password"]))
             if "symbol" in patch and patch.get("symbol"):
-                cur["symbol"] = str(patch["symbol"]).upper()
+                from goldbot.mt5.symbols import normalize_symbol
+
+                cur["symbol"] = normalize_symbol(str(patch["symbol"]))
             if "mode" in patch and patch.get("mode") in {"paper", "mt5"}:
                 cur["mode"] = patch["mode"]
             if "metaapi_account_id" in patch:
-                cur["metaapi_account_id"] = str(patch.get("metaapi_account_id") or "").strip()
+                from goldbot.mt5.metaapi_cloud import is_metaapi_account_id, normalize_account_id
+
+                raw_id = str(patch.get("metaapi_account_id") or "").strip()
+                # Never persist bare numbers like 1215 — MetaApi only accepts UUIDs
+                cur["metaapi_account_id"] = normalize_account_id(raw_id) if is_metaapi_account_id(raw_id) else ""
             if "metaapi_region" in patch:
                 cur["metaapi_region"] = str(patch.get("metaapi_region") or "").strip()
             if "execution" in patch:
@@ -263,8 +269,10 @@ class UserAuth:
                 return int(row["id"])
         return None
 
-    def login_with_mt5(self, mt5_login: str, mt5_password: str, mt5_server: str, symbol: str = "XAUUSD") -> dict:
+    def login_with_mt5(self, mt5_login: str, mt5_password: str, mt5_server: str, symbol: str = "XAUUSDm") -> dict:
         """Primary Exness/MT5 login — creates account bound to trading number if needed."""
+        from goldbot.mt5.symbols import normalize_symbol
+
         login = str(mt5_login or "").strip()
         if not login.isdigit() or len(login) < 5:
             raise AuthError("رقم حساب MT5/Exness غير صالح")
@@ -307,7 +315,7 @@ class UserAuth:
                 "mt5_login": login,
                 "mt5_password": mt5_password,
                 "mt5_server": server,
-                "symbol": (symbol or "XAUUSD").upper(),
+                "symbol": normalize_symbol(symbol or "XAUUSDm"),
                 "mode": "mt5",
             },
         )

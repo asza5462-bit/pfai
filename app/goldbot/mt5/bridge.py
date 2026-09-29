@@ -260,30 +260,37 @@ class Bridge:
         )
 
     def _connect_mt5(self) -> AccountSnapshot:
+        """Local MetaTrader5 package path — never silently switch product mode to paper."""
+        fail = AccountSnapshot(
+            balance=0.0,
+            equity=0.0,
+            margin=0.0,
+            free_margin=0.0,
+            currency="USD",
+            mode="mt5",
+            connected=False,
+            server=settings.mt5_server or "Exness",
+            login=int(settings.mt5_login or 0),
+            detail="",
+        )
         try:
             import MetaTrader5 as mt5  # type: ignore
         except Exception as e:
-            self.mode = "paper"
-            snap = self.connect()
-            snap.detail = f"MetaTrader5 package unavailable ({e}); fell back to paper."
-            return snap
+            fail.detail = f"حزمة MetaTrader5 غير متاحة على السيرفر ({e}) — استخدم MetaApi السحابي"
+            return fail
 
         kwargs = {}
         if settings.mt5_path:
             kwargs["path"] = settings.mt5_path
         if not mt5.initialize(**kwargs):
-            self.mode = "paper"
-            snap = self.connect()
-            snap.detail = f"mt5.initialize failed: {mt5.last_error()}; paper fallback."
-            return snap
+            fail.detail = f"mt5.initialize فشل: {mt5.last_error()}"
+            return fail
         if settings.mt5_login and settings.mt5_password and settings.mt5_server:
             ok = mt5.login(settings.mt5_login, password=settings.mt5_password, server=settings.mt5_server)
             if not ok:
-                self.mode = "paper"
                 mt5.shutdown()
-                snap = self.connect()
-                snap.detail = f"mt5.login failed: {mt5.last_error()}; paper fallback."
-                return snap
+                fail.detail = f"mt5.login فشل: {mt5.last_error()}"
+                return fail
         self._mt5 = mt5
         info = mt5.account_info()
         if info is None:
@@ -577,8 +584,10 @@ class Bridge:
                 result["execution"] = "metaapi"
                 if result.get("ok"):
                     return result
-                # if MetaApi fails, try Linux executor before giving up
                 log.warning("metaapi order failed: %s", result.get("error"))
+                # Do not swallow broker rejects when MetaApi is the active path
+                if self.execution == "metaapi" or not settings.prefer_mt5_linux:
+                    return result
 
         # Secondary: Linux Docker MT5 (no Windows OS)
         if self.mode == "mt5" and settings.prefer_mt5_linux:
@@ -653,13 +662,13 @@ class Bridge:
         }
 
     def is_live_execution(self) -> bool:
-        """True only when orders would hit a real broker path (not paper)."""
+        """True only when a real broker path is bound (MetaApi/Linux/local MT5)."""
         if self.mode != "mt5":
             return False
         if self.execution == "metaapi" and self.metaapi_account_id:
-            from goldbot.mt5.metaapi_cloud import metaapi
+            from goldbot.mt5.metaapi_cloud import is_metaapi_account_id, metaapi
 
-            return bool(metaapi.configured)
+            return bool(metaapi.configured and is_metaapi_account_id(self.metaapi_account_id))
         if self.execution == "mt5_linux":
             from goldbot.mt5.mt5_linux import mt5_linux
 
@@ -670,6 +679,67 @@ class Bridge:
         if self._mt5 is not None:
             return True
         return False
+
+    def close_position(
+        self,
+        position_id: str | int,
+        *,
+        ticket: str | int | None = None,
+        volume: float | None = None,
+    ) -> dict:
+        """Close a live position on the active executor. Never fakes paper closes for mt5 mode."""
+        pid = position_id or ticket
+        if self.mode == "mt5" and self.metaapi_account_id and self.execution == "metaapi":
+            from goldbot.mt5.metaapi_cloud import metaapi
+
+            if metaapi.configured and pid not in (None, "", 0, "0"):
+                return metaapi.close_position(
+                    self.metaapi_account_id,
+                    pid,
+                    region=self.metaapi_region or None,
+                    volume=volume,
+                )
+            return {"ok": False, "error": "no_position_id", "execution": "metaapi"}
+        if self.mode == "mt5" and self.execution == "mt5_linux":
+            from goldbot.mt5.mt5_linux import mt5_linux
+
+            mt5_linux.refresh()
+            if mt5_linux.configured and hasattr(mt5_linux, "close_position"):
+                return mt5_linux.close_position(pid)
+            return {"ok": False, "error": "linux_close_unsupported", "execution": "mt5_linux"}
+        if self.mode == "paper":
+            return {"ok": True, "mode": "paper", "execution": "paper"}
+        return {"ok": False, "error": "no_live_executor", "execution": self.execution or "none"}
+
+    def modify_position_sl_tp(self, position_id: str | int, sl: float | None = None, tp: float | None = None) -> dict:
+        if self.mode == "mt5" and self.metaapi_account_id and self.execution == "metaapi":
+            from goldbot.mt5.metaapi_cloud import SUCCESS_CODES, SUCCESS_STRINGS, metaapi
+
+            if not metaapi.configured or position_id in (None, "", 0, "0"):
+                return {"ok": False, "error": "no_position_id"}
+            payload: dict = {"actionType": "POSITION_MODIFY", "positionId": str(position_id)}
+            if sl and float(sl) > 0:
+                payload["stopLoss"] = float(sl)
+            if tp and float(tp) > 0:
+                payload["takeProfit"] = float(tp)
+            try:
+                resp = metaapi.trade(self.metaapi_account_id, payload, region=self.metaapi_region or None)
+                numeric = resp.get("numericCode")
+                string_code = str(resp.get("stringCode") or "")
+                ok = (numeric in SUCCESS_CODES) or (string_code in SUCCESS_STRINGS)
+                if not ok and isinstance(numeric, (int, float)):
+                    ok = int(numeric) in SUCCESS_CODES
+                return {
+                    "ok": ok,
+                    "raw": resp,
+                    "execution": "metaapi",
+                    "error": None if ok else (resp.get("message") or string_code or "modify_failed"),
+                }
+            except Exception as e:
+                return {"ok": False, "error": str(e), "execution": "metaapi"}
+        if self.mode == "paper":
+            return {"ok": True, "mode": "paper"}
+        return {"ok": False, "error": "modify_unsupported"}
 
     def _order_mt5(self, side: str, lot: float, sl: float, tp: float, comment: str) -> dict:
         mt5 = self._mt5

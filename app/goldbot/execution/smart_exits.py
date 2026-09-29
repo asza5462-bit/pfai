@@ -31,6 +31,19 @@ def _meta(trade: dict) -> dict:
     return {}
 
 
+def _is_live_trade(trade: dict) -> bool:
+    mode = str(trade.get("mode") or trade.get("execution") or "paper").lower()
+    return mode in {"mt5", "metaapi"} or str((_meta(trade) or {}).get("execution") or "").lower() == "metaapi"
+
+
+def _broker_position_id(trade: dict) -> str | int | None:
+    meta = _meta(trade)
+    pid = trade.get("position_id") or meta.get("position_id") or trade.get("ticket") or meta.get("order_id") or trade.get("order_id")
+    if pid in (None, "", 0, "0"):
+        return None
+    return pid
+
+
 def _r_multiple(side: str, entry: float, sl: float, price: float) -> float:
     risk = abs(entry - sl)
     if risk <= 1e-9:
@@ -57,8 +70,7 @@ def manage_trade(
     lot = float(trade.get("lot") or 0.01)
     meta = _meta(trade)
     mark = bid if side == "buy" else ask
-    fill = ask if side == "buy" else bid  # conservative exit side for buys/sells on close
-    # For buys exit at bid; sells exit at ask
+    # Buys exit at bid; sells exit at ask
     exit_mark = bid if side == "buy" else ask
 
     r_now = _r_multiple(side, entry, sl if sl else entry * 0.999, mark)
@@ -70,17 +82,17 @@ def manage_trade(
     a = atr(candles, 14) if candles else abs(entry) * 0.0005
     risk = abs(entry - sl) if sl else a * 1.15
 
-    # 1) Hard SL / TP
+    # 1) Hard SL / TP — use exit side (bid for buys, ask for sells)
     if side == "buy":
         if sl and bid <= sl:
             return None, {"reason": "sl", "exit": bid, "lot": lot, "pnl_r": r_now}, {"type": "hard_sl"}
-        if tp and ask >= tp:
-            return None, {"reason": "tp", "exit": ask, "lot": lot, "pnl_r": r_now}, {"type": "hard_tp"}
+        if tp and bid >= tp:
+            return None, {"reason": "tp", "exit": bid, "lot": lot, "pnl_r": r_now}, {"type": "hard_tp"}
     else:
         if sl and ask >= sl:
             return None, {"reason": "sl", "exit": ask, "lot": lot, "pnl_r": r_now}, {"type": "hard_sl"}
-        if tp and bid <= tp:
-            return None, {"reason": "tp", "exit": bid, "lot": lot, "pnl_r": r_now}, {"type": "hard_tp"}
+        if tp and ask <= tp:
+            return None, {"reason": "tp", "exit": ask, "lot": lot, "pnl_r": r_now}, {"type": "hard_tp"}
 
     update = None
     event = None
@@ -122,22 +134,55 @@ def manage_trade(
                 event = {"type": "trail", "sl": sl, "r": r_now}
 
     # 4) Partial take-profit at +1.2R (once)
+    # Live: only after broker partial succeeds. Paper: local lot shrink + equity.
     if r_now >= 1.2 and not meta.get("partial_taken") and lot >= 0.02:
         part = round(max(0.01, lot * 0.4), 2)
         remain = round(lot - part, 2)
         if remain >= 0.01:
-            part_exit = exit_mark
-            move = (part_exit - entry) if side == "buy" else (entry - part_exit)
-            part_pnl = move * part * 100.0
-            meta["partial_taken"] = True
-            meta["partial_pnl"] = round(part_pnl, 2)
-            update = {"lot": remain, "meta": meta, "sl": sl}
-            # Apply partial PnL immediately to paper equity
-            if (trade.get("mode") or "paper") == "paper":
+            live = _is_live_trade(trade)
+            if live:
+                pid = _broker_position_id(trade)
+                if pid and bridge.is_live_execution():
+                    broker = bridge.close_position(pid, volume=part)
+                    if broker.get("ok"):
+                        part_exit = exit_mark
+                        move = (part_exit - entry) if side == "buy" else (entry - part_exit)
+                        part_pnl = move * part * 100.0
+                        meta["partial_taken"] = True
+                        meta["partial_pnl"] = round(part_pnl, 2)
+                        update = {"lot": remain, "meta": meta, "sl": sl}
+                        event = {
+                            "type": "partial_tp",
+                            "closed_lot": part,
+                            "remain": remain,
+                            "pnl": round(part_pnl, 2),
+                            "r": r_now,
+                            "broker": True,
+                        }
+                        store.log_event("partial_tp", {"trade_id": trade.get("id"), **event})
+                    else:
+                        store.log_event(
+                            "partial_tp_fail",
+                            {"trade_id": trade.get("id"), "position_id": pid, **broker},
+                        )
+                # else: skip partial until live executor is up — do not shrink local lot
+            else:
+                part_exit = exit_mark
+                move = (part_exit - entry) if side == "buy" else (entry - part_exit)
+                part_pnl = move * part * 100.0
+                meta["partial_taken"] = True
+                meta["partial_pnl"] = round(part_pnl, 2)
+                update = {"lot": remain, "meta": meta, "sl": sl}
                 bridge.paper_equity += part_pnl
                 bridge.paper_balance = bridge.paper_equity
-            event = {"type": "partial_tp", "closed_lot": part, "remain": remain, "pnl": round(part_pnl, 2), "r": r_now}
-            store.log_event("partial_tp", {"trade_id": trade.get("id"), **event})
+                event = {
+                    "type": "partial_tp",
+                    "closed_lot": part,
+                    "remain": remain,
+                    "pnl": round(part_pnl, 2),
+                    "r": r_now,
+                }
+                store.log_event("partial_tp", {"trade_id": trade.get("id"), **event})
 
     # 5) Momentum fade exit — protect open profit
     if r_now >= 0.45 and pulse:
@@ -182,11 +227,47 @@ def run_smart_manager(
         if upd:
             store.update_trade(int(t["id"]), **{k: v for k, v in upd.items() if k in {"sl", "tp", "lot", "meta", "status", "pnl"}})
             updated.append({"trade_id": t["id"], **upd})
+        if upd and not cls:
+            # Push SL/TP changes to live broker when possible
+            if _is_live_trade(t) and bridge.is_live_execution():
+                pid = _broker_position_id(t)
+                if pid and ("sl" in upd or "tp" in upd):
+                    mod = bridge.modify_position_sl_tp(pid, sl=upd.get("sl"), tp=upd.get("tp") or t.get("tp"))
+                    if not mod.get("ok"):
+                        store.log_event("sl_tp_modify_fail", {"trade_id": t["id"], **mod})
         if cls:
             exit_px = float(cls["exit"])
             lot = float(cls["lot"])
             entry = float(t.get("entry") or 0)
             side = t.get("side")
+            # Live trades: close on broker FIRST — never mark local-only close as success
+            if _is_live_trade(t):
+                if not bridge.is_live_execution():
+                    store.log_event(
+                        "broker_close_skip",
+                        {"trade_id": t["id"], "reason": cls.get("reason"), "detail": "executor_offline"},
+                    )
+                    if ev:
+                        events.append({"trade_id": t["id"], **ev, "broker_close": "offline"})
+                    continue
+                pid = _broker_position_id(t)
+                if not pid:
+                    store.log_event(
+                        "broker_close_fail",
+                        {"trade_id": t["id"], "reason": cls.get("reason"), "error": "no_position_id"},
+                    )
+                    if ev:
+                        events.append({"trade_id": t["id"], **ev, "broker_close": "no_position_id"})
+                    continue
+                broker = bridge.close_position(pid)
+                if not broker.get("ok"):
+                    store.log_event(
+                        "broker_close_fail",
+                        {"trade_id": t["id"], "position_id": pid, "reason": cls.get("reason"), **broker},
+                    )
+                    if ev:
+                        events.append({"trade_id": t["id"], **ev, "broker_close": "failed"})
+                    continue
             move = (exit_px - entry) if side == "buy" else (entry - exit_px)
             pnl = move * lot * 100.0
             # include prior partial pnl in meta only for reporting
@@ -195,7 +276,7 @@ def run_smart_manager(
                 meta = upd["meta"]
             total_pnl = pnl + float(meta.get("partial_pnl") or 0)
             store.close_trade(int(t["id"]), pnl=total_pnl, status=f"closed_{cls['reason']}")
-            if (t.get("mode") or "paper") == "paper":
+            if not _is_live_trade(t):
                 bridge.paper_equity += pnl
                 bridge.paper_balance = bridge.paper_equity
             row = {"trade_id": t["id"], "pnl": round(total_pnl, 2), **cls}

@@ -315,6 +315,12 @@
       try {
         const st = await refreshCloudStatusOnly();
         const prov = (st && st.provision) || {};
+        const cool = (st && st.cooldown) || null;
+        if (cool && cool.message) {
+          $("connectMsg").textContent = cool.message;
+          $("connectMsg").classList.remove("ok");
+          return;
+        }
         if (prov.status === "error" && /ساعة|دقيقة|cooldown|rejected/i.test(prov.message || "")) {
           $("connectMsg").textContent = prov.message;
           $("connectMsg").classList.remove("ok");

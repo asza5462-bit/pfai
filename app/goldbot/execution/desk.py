@@ -214,6 +214,10 @@ class TradingDesk:
         result = bridge.order_market(action, lot, sl, tp, comment="AURUM-FAST")
         if not result.get("ok"):
             return False
+        fill = float(result.get("price") or result.get("entry") or 0)
+        if fill <= 0 and result.get("mode") != "paper":
+            store.log_event("trade_reject", {**result, "error": "filled_no_price"})
+            return False
         self.risk.register_open()
         trade_id = store.add_trade(
             {
@@ -225,6 +229,9 @@ class TradingDesk:
                     "pulse": pulse,
                     "narrative": sig.get("narrative"),
                     "fast_entry": True,
+                    "position_id": result.get("position_id"),
+                    "order_id": result.get("order_id"),
+                    "execution": result.get("execution") or result.get("mode"),
                 },
             }
         )
@@ -333,10 +340,24 @@ class TradingDesk:
         if not force and settings.require_pulse_confirm and not snap.get("pulse_confirm"):
             self._pending_signal = sig
             return {"ok": False, "error": "awaiting_pulse_confirm", "scan": snap}
+        # Hard gate: never paper-fill or order while claiming live MT5
+        if settings.mode == "mt5":
+            self._refresh_account()
+            if not (bridge.is_live_execution() and self.account.connected):
+                return {
+                    "ok": False,
+                    "error": "not_live",
+                    "message": "التنفيذ الحقيقي غير متصل — لن نفتح صفقة وهمية.",
+                    "scan": snap,
+                }
 
         lot = gate["lot"] or 0.01
         result = bridge.order_market(sig["action"], lot, sig["stop"], sig["take"], comment="AURUM-ELITE")
         if result.get("ok"):
+            fill = float(result.get("price") or result.get("entry") or 0)
+            if fill <= 0 and result.get("mode") != "paper":
+                store.log_event("trade_reject", {**result, "error": "filled_no_price"})
+                return {"ok": False, "error": "filled_no_price", "result": result, "scan": snap}
             self.risk.register_open()
             trade_id = store.add_trade(
                 {
@@ -347,6 +368,9 @@ class TradingDesk:
                         "quality": sig.get("quality"),
                         "narrative": sig["narrative"],
                         "pulse": snap.get("pulse"),
+                        "position_id": result.get("position_id"),
+                        "order_id": result.get("order_id"),
+                        "execution": result.get("execution") or result.get("mode"),
                     },
                 }
             )
