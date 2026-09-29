@@ -593,7 +593,6 @@
     await api("/api/risk/reset", { method: "POST" });
     await $("btnScan").onclick();
   };
-  $("btnRefreshBridge").onclick = refreshBridge;
   $("btnCopyAgent").onclick = async () => {
     const t = $("agentCmd").value;
     try { await navigator.clipboard.writeText(t); $("connectMsg").textContent = "تم النسخ"; $("connectMsg").classList.add("ok"); }
