@@ -25,7 +25,7 @@ services:
       - key: AURUM_TIMEFRAME
         value: "M15"
       - key: AURUM_AUTO_TRADE
-        value: "false"
+        value: "true"
       - key: AURUM_RISK_PCT
         value: "0.35"
       - key: AURUM_MAX_DAILY_LOSS_PCT
@@ -33,11 +33,11 @@ services:
       - key: AURUM_MIN_RR
         value: "2.2"
       - key: AURUM_MIN_CONFLUENCE
-        value: "0.72"
+        value: "0.62"
       - key: AURUM_MAX_SPREAD
-        value: "35"
+        value: "45"
       - key: AURUM_LOOP_SECONDS
-        value: "30"
+        value: "20"
       - key: AURUM_DATA_DIR
         value: "data/goldbot"
       - key: AURUM_PAPER_BALANCE

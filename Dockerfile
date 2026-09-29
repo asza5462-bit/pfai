@@ -6,7 +6,9 @@ ENV PYTHONDONTWRITEBYTECODE=1 \
     PORT=8000 \
     AURUM_MODE=paper \
     AURUM_SYMBOL=XAUUSD \
-    AURUM_AUTO_TRADE=false
+    AURUM_AUTO_TRADE=true \
+    AURUM_MIN_CONFLUENCE=0.62 \
+    AURUM_LOOP_SECONDS=20
 WORKDIR /app
 COPY app/requirements.txt /app/requirements.txt
 RUN pip install --no-cache-dir -r /app/requirements.txt

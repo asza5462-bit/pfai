@@ -84,6 +84,18 @@ class DeskStore:
             rows = c.execute("SELECT * FROM trades ORDER BY id DESC LIMIT ?", (limit,)).fetchall()
         return [dict(r) for r in rows]
 
+    def open_trades(self) -> list[dict]:
+        with self._conn() as c:
+            rows = c.execute("SELECT * FROM trades WHERE status='open' ORDER BY id ASC").fetchall()
+        return [dict(r) for r in rows]
+
+    def close_trade(self, trade_id: int, pnl: float, status: str = "closed") -> None:
+        with self._conn() as c:
+            c.execute(
+                "UPDATE trades SET status=?, pnl=? WHERE id=?",
+                (status, float(pnl), int(trade_id)),
+            )
+
     def recent_events(self, limit: int = 40) -> list[dict]:
         with self._conn() as c:
             rows = c.execute("SELECT * FROM events ORDER BY id DESC LIMIT ?", (limit,)).fetchall()

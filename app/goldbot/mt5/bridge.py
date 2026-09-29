@@ -164,35 +164,61 @@ class Bridge:
             self._last_price = out[-1].close
         return out
 
-    def _yahoo_last(self) -> float | None:
-        # GC=F gold futures as liquid proxy when MT5 unavailable
+    def _yahoo_chart(self, interval: str = "15m", range_: str = "5d") -> list[Candle] | None:
+        """Live gold OHLC proxy (GC futures / XAU) when MT5 is unavailable."""
         urls = [
-            "https://query1.finance.yahoo.com/v8/finance/chart/GC=F?interval=15m&range=5d",
-            "https://query1.finance.yahoo.com/v8/finance/chart/XAUUSD=X?interval=15m&range=5d",
+            f"https://query1.finance.yahoo.com/v8/finance/chart/GC=F?interval={interval}&range={range_}",
+            f"https://query1.finance.yahoo.com/v8/finance/chart/XAUUSD=X?interval={interval}&range={range_}",
         ]
         for url in urls:
             try:
                 req = Request(url, headers={"User-Agent": "AURUM/1.0"})
-                with urlopen(req, timeout=8) as resp:
+                with urlopen(req, timeout=10) as resp:
                     data = json.loads(resp.read().decode())
                 result = data["chart"]["result"][0]
-                closes = result["indicators"]["quote"][0]["close"]
-                for c in reversed(closes):
-                    if c is not None:
-                        return float(c)
+                ts = result.get("timestamp") or []
+                quote = (result.get("indicators") or {}).get("quote") or [{}]
+                q = quote[0]
+                opens, highs, lows, closes = q.get("open") or [], q.get("high") or [], q.get("low") or [], q.get("close") or []
+                vols = q.get("volume") or []
+                out: list[Candle] = []
+                for i, t in enumerate(ts):
+                    o, h, l, c = (
+                        opens[i] if i < len(opens) else None,
+                        highs[i] if i < len(highs) else None,
+                        lows[i] if i < len(lows) else None,
+                        closes[i] if i < len(closes) else None,
+                    )
+                    if None in (o, h, l, c):
+                        continue
+                    vol = float(vols[i] or 0) if i < len(vols) else 0.0
+                    out.append(Candle(time=int(t), open=float(o), high=float(h), low=float(l), close=float(c), volume=vol))
+                if out:
+                    self._last_price = out[-1].close
+                    return out
             except Exception as e:
-                log.debug("yahoo fetch fail %s: %s", url, e)
+                log.warning("yahoo chart fail %s: %s", url, e)
+        return None
+
+    def _yahoo_last(self) -> float | None:
+        bars = self._yahoo_chart()
+        if bars:
+            return bars[-1].close
         return None
 
     def _fetch_paper(self, count: int) -> list[Candle]:
-        last = self._yahoo_last()
-        if last:
-            self._last_price = last
-        # Build a deterministic synthetic series around last price for structure analysis
+        tf = (settings.timeframe or "M15").upper()
+        interval = {"M1": "1m", "M5": "5m", "M15": "15m", "M30": "30m", "H1": "60m", "H4": "60m", "D1": "1d"}.get(tf, "15m")
+        range_ = "5d" if interval.endswith("m") else "3mo"
+        live = self._yahoo_chart(interval=interval, range_=range_)
+        if live:
+            self._seeded = True
+            return live[-count:] if len(live) > count else live
+
+        # Offline fallback — synthetic walk only if market feed unreachable
         price = self._last_price
         now = int(time.time()) // 900 * 900
         candles: list[Candle] = []
-        # mild seeded walk so patterns exist offline
         x = price * 0.985
         for i in range(count):
             t = now - (count - i) * 900
@@ -204,13 +230,10 @@ class Bridge:
             vol = 800 + abs(wave) * 50 + (1200 if i % 17 == 0 else 0)
             candles.append(Candle(time=t, open=o, high=h, low=l, close=c, volume=vol))
             x = c
-        # pin last close to live quote
         if candles:
-            adj = price - candles[-1].close
             candles[-1].close = price
             candles[-1].high = max(candles[-1].high, price)
             candles[-1].low = min(candles[-1].low, price)
-            candles[-1].open = candles[-1].open + adj * 0.2
         self._seeded = True
         return candles
 

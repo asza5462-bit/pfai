@@ -127,8 +127,11 @@
     ].join("\n");
 
     autoOn = !!data.auto_trade;
-    $("btnAuto").classList.toggle("on", autoOn);
-    $("btnAuto").textContent = autoOn ? "التلقائي يعمل" : "تفعيل تلقائي";
+    const startBtn = $("btnStart");
+    if (startBtn) {
+      startBtn.classList.toggle("on", autoOn);
+      startBtn.textContent = autoOn ? "المكتب يعمل" : "ابدأ التداول";
+    }
   }
 
   async function loadTrades() {
@@ -172,16 +175,22 @@
     if (!j.ok) alert(j.error || "تعذّر التنفيذ");
   };
 
-  $("btnAuto").onclick = async () => {
-    const r = await fetch("/api/auto-trade", {
-      method: "POST",
-      headers: { "Content-Type": "application/json" },
-      body: JSON.stringify({ enabled: !autoOn }),
-    });
+  $("btnStart").onclick = async () => {
+    const r = await fetch("/api/start", { method: "POST" });
     const j = await r.json();
-    autoOn = !!j.auto_trade;
-    $("btnAuto").classList.toggle("on", autoOn);
-    $("btnAuto").textContent = autoOn ? "التلقائي يعمل" : "تفعيل تلقائي";
+    if (j.scan) render(j.scan);
+    else await refresh();
+    await loadTrades();
+    alert(j.message || (j.ok ? "بدأ المكتب" : (j.error || "تعذّر البدء")));
+  };
+
+  $("btnStop").onclick = async () => {
+    const r = await fetch("/api/stop", { method: "POST" });
+    const j = await r.json();
+    autoOn = false;
+    $("btnStart").classList.remove("on");
+    $("btnStart").textContent = "ابدأ التداول";
+    alert(j.message || "توقف التلقائي");
   };
 
   refresh();

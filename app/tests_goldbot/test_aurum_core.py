@@ -53,3 +53,9 @@ def test_api_health_and_status():
     g = client.get("/api/connect-guide")
     assert g.status_code == 200
     assert "MT5" in g.json()["title"] or "MetaTrader" in g.json()["title"]
+    start = client.post("/api/start")
+    assert start.status_code == 200
+    assert start.json()["auto_trade"] is True
+    stop = client.post("/api/stop")
+    assert stop.status_code == 200
+    assert stop.json()["auto_trade"] is False

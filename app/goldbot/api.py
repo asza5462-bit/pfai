@@ -21,8 +21,11 @@ STATIC = Path(__file__).resolve().parent / "static"
 
 @asynccontextmanager
 async def lifespan(_: FastAPI):
-    desk.start_background()
-    log.info("AURUM desk online mode=%s symbol=%s", settings.mode, settings.symbol)
+    if settings.auto_trade:
+        desk.start_desk()
+    else:
+        desk.start_background()
+    log.info("AURUM desk online mode=%s symbol=%s auto=%s", settings.mode, settings.symbol, desk.auto_trade)
     yield
     desk.stop_background()
     from goldbot.mt5.bridge import bridge
@@ -89,11 +92,28 @@ async def scan():
     return desk.scan()
 
 
+@app.post("/api/start")
+async def start_desk(authorization: str | None = Header(default=None)):
+    """Arm desk: enable auto-trade and begin live scan/execute loop."""
+    _auth(authorization)
+    return desk.start_desk()
+
+
+@app.post("/api/stop")
+async def stop_desk(authorization: str | None = Header(default=None)):
+    _auth(authorization)
+    desk.set_auto_trade(False)
+    desk.armed = False
+    store.log_event("desk_stop", {"armed": False})
+    return {"ok": True, "armed": False, "auto_trade": False, "message": "توقف التنفيذ التلقائي — المسح اليدوي ما زال متاحاً."}
+
+
 @app.post("/api/auto-trade")
 async def auto_trade(body: AutoTradeBody, authorization: str | None = Header(default=None)):
     _auth(authorization)
     desk.set_auto_trade(body.enabled)
-    return {"ok": True, "auto_trade": desk.auto_trade}
+    desk.armed = bool(body.enabled)
+    return {"ok": True, "auto_trade": desk.auto_trade, "armed": desk.armed}
 
 
 @app.post("/api/execute")
