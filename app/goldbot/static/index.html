@@ -3,74 +3,163 @@
 <head>
   <meta charset="utf-8" />
   <meta name="viewport" content="width=device-width, initial-scale=1" />
-  <title>AURUM — Elite Gold Desk</title>
+  <title>AURUM — تسجيل الدخول | مكتب الذهب</title>
   <link rel="preconnect" href="https://fonts.googleapis.com" />
   <link rel="preconnect" href="https://fonts.gstatic.com" crossorigin />
-  <link href="https://fonts.googleapis.com/css2?family=Syne:wght@600;700;800&family=IBM+Plex+Sans+Arabic:wght@300;400;500;600&display=swap" rel="stylesheet" />
+  <link href="https://fonts.googleapis.com/css2?family=Syne:wght@600;700;800&family=IBM+Plex+Sans+Arabic:wght@300;400;500;600;700&display=swap" rel="stylesheet" />
   <link rel="stylesheet" href="/assets/desk.css" />
 </head>
 <body>
   <canvas id="chart" aria-hidden="true"></canvas>
   <div class="veil"></div>
 
-  <header class="top">
-    <div class="brand-lock">AURUM</div>
-    <div class="meta">
-      <span id="readyPill">…</span>
-      <span id="statePill">IDLE</span>
-      <span id="modePill">paper</span>
-      <span id="symbolPill">XAUUSD</span>
-      <span id="sessionPill">—</span>
-      <span id="qualityPill">—</span>
-      <span id="latencyPill">—</span>
-    </div>
-  </header>
+  <!-- AUTH GATE -->
+  <section id="authGate" class="auth-gate">
+    <div class="auth-card">
+      <div class="brand-lock">AURUM</div>
+      <p class="auth-tag">Elite Gold Desk · تسجيل حقيقي · تداول XAUUSD</p>
+      <div class="auth-tabs">
+        <button type="button" id="tabLogin" class="on">دخول</button>
+        <button type="button" id="tabRegister">إنشاء حساب</button>
+      </div>
 
-  <main class="hero">
-    <p class="eyebrow">Elite Gold Desk · MetaTrader 5 · Exness-ready</p>
-    <h1 id="headline">يقرأ الذهب قبل أن يتحرّك الجميع</h1>
-    <p class="sub" id="narrative">جاري مسح السوق…</p>
-    <div class="cta">
-      <button id="btnStart" type="button">ابدأ التداول</button>
-      <button id="btnScan" type="button" class="ghost">مسح الآن</button>
-      <button id="btnExec" type="button" class="ghost">تنفيذ إشارة (يدوي)</button>
-      <button id="btnStop" type="button" class="ghost">إيقاف تلقائي</button>
-    </div>
-  </main>
+      <form id="loginForm" class="auth-form">
+        <label>اسم المستخدم
+          <input id="loginUser" name="username" autocomplete="username" required minlength="3" placeholder="مثلاً: trader01" />
+        </label>
+        <label>كلمة المرور
+          <input id="loginPass" name="password" type="password" autocomplete="current-password" required minlength="8" placeholder="••••••••" />
+        </label>
+        <button type="submit" class="primary">تسجيل الدخول</button>
+      </form>
 
-  <section class="desk" id="deskPanel" aria-label="لوحة المكتب">
-    <div class="strip">
-      <div><label>السعر</label><strong id="price">—</strong></div>
-      <div><label>التقارب</label><strong id="conf">—</strong></div>
-      <div><label>الإشارة</label><strong id="action">—</strong></div>
-      <div><label>نبض سريع</label><strong id="pulseBias">—</strong></div>
-      <div><label>RR</label><strong id="rr">—</strong></div>
-      <div><label>الرصيد</label><strong id="equity">—</strong></div>
-      <div><label>المخاطرة</label><strong id="riskState">—</strong></div>
-    </div>
+      <form id="registerForm" class="auth-form hidden">
+        <label>اسم المستخدم
+          <input id="regUser" name="username" autocomplete="username" required minlength="3" placeholder="اختر اسم مستخدم" />
+        </label>
+        <label>كلمة المرور
+          <input id="regPass" name="password" type="password" autocomplete="new-password" required minlength="8" placeholder="8 أحرف على الأقل" />
+        </label>
+        <label>تأكيد كلمة المرور
+          <input id="regPass2" name="password_confirm" type="password" autocomplete="new-password" required minlength="8" />
+        </label>
+        <button type="submit" class="primary">إنشاء الحساب والدخول</button>
+      </form>
 
-    <div class="cols">
-      <article>
-        <h2>مدارس التداول</h2>
-        <ul id="schools"></ul>
-      </article>
-      <article>
-        <h2>قراءة المؤسسات / السيولة</h2>
-        <pre id="inst"></pre>
-      </article>
-      <article>
-        <h2>الصفقات</h2>
-        <ul id="trades"></ul>
-      </article>
+      <p id="authMsg" class="auth-msg"></p>
+      <p class="auth-note">أول حساب يُنشأ يصبح مالك المكتب. بيانات MT5/Exness تُحفظ من داخل الحساب بعد الدخول.</p>
     </div>
-
-    <p class="disclaimer">
-      تحذير: لا يوجد بوت بنسبة خسارة صفر. الأسواق تتحرك ضد الجميع أحياناً.
-      AURUM يرفض الصفقات الضعيفة، يوقف التداول عند حد الخسارة اليومي، ويدير اللوت بصرامة —
-      هذا تقليل ضرر وليس ضمان ربح.
-    </p>
-    <p class="connect"><a href="/api/connect-guide" target="_blank" rel="noopener">دليل ربط Exness / MT5</a></p>
   </section>
+
+  <!-- DESK -->
+  <div id="deskApp" class="hidden">
+    <header class="top">
+      <div class="brand-lock">AURUM</div>
+      <div class="meta">
+        <span id="userPill">—</span>
+        <span id="readyPill">…</span>
+        <span id="statePill">IDLE</span>
+        <span id="modePill">paper</span>
+        <span id="symbolPill">XAUUSD</span>
+        <span id="latencyPill">—</span>
+        <button type="button" id="btnLogout" class="tiny">خروج</button>
+      </div>
+    </header>
+
+    <nav class="tabs" aria-label="أقسام المكتب">
+      <button type="button" data-tab="trade" class="on">التداول</button>
+      <button type="button" data-tab="connect">الربط Exness/MT5</button>
+      <button type="button" data-tab="history">الصفقات</button>
+    </nav>
+
+    <main id="tab-trade" class="panel">
+      <section class="hero compact">
+        <p class="eyebrow">مكتب ذهب حي · نبض سريع · إدارة مخاطر</p>
+        <h1 id="headline">بانتظار إشارتك</h1>
+        <p class="sub" id="narrative">سجّل وابدأ المكتب بعد ضبط المخاطر.</p>
+        <div class="cta">
+          <button id="btnStart" type="button">ابدأ التداول</button>
+          <button id="btnScan" type="button" class="ghost">مسح الآن</button>
+          <button id="btnResetRisk" type="button" class="ghost">إعادة تعيين المخاطر</button>
+          <button id="btnStop" type="button" class="ghost">إيقاف</button>
+        </div>
+      </section>
+
+      <section class="desk">
+        <div class="strip">
+          <div><label>السعر</label><strong id="price">—</strong></div>
+          <div><label>التقارب</label><strong id="conf">—</strong></div>
+          <div><label>الإشارة</label><strong id="action">—</strong></div>
+          <div><label>نبض</label><strong id="pulseBias">—</strong></div>
+          <div><label>الجودة</label><strong id="qualityPill">—</strong></div>
+          <div><label>الرصيد</label><strong id="equity">—</strong></div>
+          <div><label>المخاطرة</label><strong id="riskState">—</strong></div>
+        </div>
+        <div class="cols">
+          <article>
+            <h2>مدارس التداول</h2>
+            <ul id="schools"></ul>
+          </article>
+          <article>
+            <h2>السيولة / المؤسسات</h2>
+            <pre id="inst"></pre>
+          </article>
+          <article>
+            <h2>آخر الصفقات</h2>
+            <ul id="trades"></ul>
+          </article>
+        </div>
+        <p class="disclaimer">
+          تحذير: لا يوجد بوت «معتمد عالمياً» يضمن ربحاً. AURUM منصة تداول حقيقية البنية (تحليل + تنفيذ + مخاطر + حسابات)،
+          والنتائج تعتمد على السوق وإعداداتك. ابدأ Demo دائماً.
+        </p>
+      </section>
+    </main>
+
+    <main id="tab-connect" class="panel hidden">
+      <section class="connect-box">
+        <h1>ربط MetaTrader 5 / Exness</h1>
+        <p>أدخل بيانات حساب التداول. كلمة المرور تُحفظ مشفّرة ولا تُعرض لاحقاً.</p>
+        <form id="mt5Form" class="auth-form">
+          <label>الوضع
+            <select id="setMode">
+              <option value="paper">Paper (تجريبي على السيرفر)</option>
+              <option value="mt5">MT5 حي (يحتاج Windows + طرفية)</option>
+            </select>
+          </label>
+          <label>الرمز
+            <input id="setSymbol" value="XAUUSD" />
+          </label>
+          <label>رقم الحساب (MT5 Login)
+            <input id="setLogin" inputmode="numeric" placeholder="مثلاً 12345678" />
+          </label>
+          <label>السيرفر
+            <input id="setServer" placeholder="Exness-MT5Trial أو Exness-MT5Real" />
+          </label>
+          <label>كلمة مرور MT5
+            <input id="setPassword" type="password" placeholder="لن تُعرض بعد الحفظ" />
+          </label>
+          <label>مسار MT5 (اختياري على Windows)
+            <input id="setPath" placeholder="C:\\Program Files\\MetaTrader 5\\terminal64.exe" />
+          </label>
+          <button type="submit" class="primary">حفظ إعدادات الربط</button>
+        </form>
+        <p id="connectMsg" class="auth-msg"></p>
+        <ol class="steps">
+          <li>أنشئ حساب Demo في Exness وثبّت MT5 على Windows VPS.</li>
+          <li>احفظ البيانات هنا، ثم اختر الوضع MT5 على جهاز ويندوز الذي فيه الطرفية.</li>
+          <li>ارجع لتبويب التداول واضغط «ابدأ التداول».</li>
+        </ol>
+      </section>
+    </main>
+
+    <main id="tab-history" class="panel hidden">
+      <section class="desk">
+        <h2>سجل الصفقات</h2>
+        <ul id="tradesFull"></ul>
+      </section>
+    </main>
+  </div>
 
   <script src="/assets/desk.js"></script>
 </body>

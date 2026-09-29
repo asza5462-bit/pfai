@@ -84,3 +84,10 @@ class RiskManager:
         if self.state.last_trade_ts and now - self.state.last_trade_ts < settings.cooldown_seconds:
             return False, "cooldown"
         return True, "ok"
+
+    def reset_day(self, equity: float, note: str = "manual_reset") -> dict:
+        """Owner-triggered paper reset — does not erase trade history."""
+        today = datetime.now(timezone.utc).strftime("%Y-%m-%d")
+        open_n = self.state.open_trades
+        self.state = RiskState(day=today, starting_equity=equity, open_trades=open_n)
+        return {"ok": True, "note": note, "risk": self.state.to_dict()}

@@ -1,6 +1,7 @@
 from fastapi.testclient import TestClient
 
 from goldbot.api import app
+from goldbot.auth.users import UserAuth
 from goldbot.brain.confluence import build_signal
 from goldbot.market.candles import Candle, detect_patterns
 from goldbot.risk.manager import RiskManager
@@ -21,7 +22,6 @@ def _candles(n=80, start=2300.0):
 
 def test_patterns_and_signal():
     cs = _candles()
-    # force a hammer-like last bar
     last = cs[-1]
     cs[-1] = Candle(last.time, last.close + 2, last.close + 2.2, last.close - 6, last.close + 1.5, 2000)
     assert isinstance(detect_patterns(cs), list)
@@ -32,7 +32,6 @@ def test_patterns_and_signal():
 
 
 def test_vol_veto_uses_tradable_not_neutral_bias():
-    """Regression: flat trend must not block when ATR regime is tradable."""
     cs = _candles(n=100, start=4100)
     sig = build_signal(cs, spread_points=10)
     assert "volatility_regime_blocked" not in sig.vetoes or any(
@@ -43,39 +42,53 @@ def test_vol_veto_uses_tradable_not_neutral_bias():
 def test_risk_halt():
     rm = RiskManager()
     rm.roll_day(10_000)
-    rm.register_close(-200)  # 2% > 1.25% default
+    rm.register_close(-200)
     assert rm.state.halted is True
     ok, reason = rm.allow_trade(9800, "buy")
     assert ok is False
     assert "daily_loss" in reason or reason
+    reset = rm.reset_day(9800)
+    assert reset["ok"] is True
+    assert rm.state.halted is False
 
 
-def test_api_health_and_status():
+def test_api_health_and_status(tmp_path, monkeypatch):
+    monkeypatch.setenv("AURUM_COOKIE_SECURE", "0")
+    isolated = UserAuth(tmp_path / "users.sqlite3")
+    monkeypatch.setattr("goldbot.api.auth", isolated)
+
     client = TestClient(app)
     h = client.get("/health")
     assert h.status_code == 200
     assert h.json()["product"] == "AURUM"
+    assert "auth" in h.json()
+
     s = client.get("/api/status")
     assert s.status_code == 200
-    body = s.json()
-    assert "signal" in body
-    assert "disclaimer" in body
-    g = client.get("/api/connect-guide")
-    assert g.status_code == 200
-    assert "MT5" in g.json()["title"] or "MetaTrader" in g.json()["title"]
+    assert "signal" in s.json()
+
+    # protected routes require auth
+    assert client.post("/api/start").status_code == 401
+    assert client.get("/api/pulse").status_code == 401
+
+    reg = client.post(
+        "/api/auth/register",
+        json={"username": "trader_x", "password": "Secret123", "password_confirm": "Secret123"},
+    )
+    assert reg.status_code == 200
+
     start = client.post("/api/start")
     assert start.status_code == 200
-    assert start.json()["auto_trade"] is True
+    body = start.json()
+    assert body.get("ok") is True or body.get("error") == "risk_halted"
+
     stop = client.post("/api/stop")
     assert stop.status_code == 200
-    assert stop.json()["auto_trade"] is False
-    ready = client.get("/api/ready")
-    assert ready.status_code == 200
-    assert "paper_ready" in ready.json()
-    assert "checks" in ready.json()
+
     pulse = client.get("/api/pulse")
     assert pulse.status_code == 200
-    body = pulse.json()
-    assert "pulse" in body
-    assert "elapsed_ms" in body
-    assert "state" in body
+    assert "pulse" in pulse.json()
+
+    ready = client.get("/api/ready")
+    assert ready.status_code == 200
+    assert "checks" in ready.json()

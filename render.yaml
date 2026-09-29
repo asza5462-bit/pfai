@@ -25,7 +25,11 @@ services:
       - key: AURUM_TIMEFRAME
         value: "M15"
       - key: AURUM_AUTO_TRADE
-        value: "true"
+        value: "false"
+      - key: AURUM_OPEN_REGISTER
+        value: "1"
+      - key: AURUM_COOKIE_SECURE
+        value: "1"
       - key: AURUM_RISK_PCT
         value: "0.35"
       - key: AURUM_MAX_DAILY_LOSS_PCT

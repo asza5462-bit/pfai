@@ -54,7 +54,7 @@ class Settings:
     max_spread_points: float = field(default_factory=lambda: _env_float("AURUM_MAX_SPREAD", 35.0))
     min_confluence: float = field(default_factory=lambda: _env_float("AURUM_MIN_CONFLUENCE", 0.62))
     cooldown_seconds: int = field(default_factory=lambda: _env_int("AURUM_COOLDOWN_SEC", 120))
-    auto_trade: bool = field(default_factory=lambda: _env_bool("AURUM_AUTO_TRADE", False))
+    auto_trade: bool = field(default_factory=lambda: _env_bool("AURUM_AUTO_TRADE", False))  # arm only after login/start
     # Dual-loop cadence: fast pulse/manage + slower strategy scan
     loop_seconds: float = field(default_factory=lambda: _env_float("AURUM_LOOP_SECONDS", 6.0))
     tick_seconds: float = field(default_factory=lambda: _env_float("AURUM_TICK_SECONDS", 0.5))
