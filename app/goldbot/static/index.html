@@ -16,7 +16,7 @@
   <section id="authGate" class="auth-gate">
     <div class="auth-card wide">
       <div class="brand-lock">AURUM</div>
-      <p class="auth-tag">اربط Exness مباشرة · رقم الحساب + كلمة المرور · تداول ذكي</p>
+      <p class="auth-tag">Exness مباشر من التطبيق · سحابة MetaApi · بدون Windows</p>
 
       <div class="auth-tabs">
         <button type="button" id="tabMt5" class="on">دخول Exness/MT5</button>
@@ -37,10 +37,10 @@
         <label>الرمز
           <input id="mt5Symbol" value="XAUUSD" />
         </label>
-        <button type="submit" class="primary">ارتباط وابدأ التداول الذكي</button>
+        <button type="submit" class="primary">ارتباط سحابي وابدأ التداول</button>
         <p class="auth-note">
-          بعد الدخول سيظهر أمر تشغيل وكيل Windows. ثبّت MetaTrader 5 على ويندوز/VPS،
-          سجّل نفس الحساب، ثم شغّل الوكيل ليرتبط التطبيق بحسابك وينفّذ الصفقات.
+          التطبيق يفتح طرفية MT5 سحابية ويربط حساب Exness مباشرة — بدون Windows.
+          استخدم حساب تجريبي (Trial) أولاً قبل الحساب الحقيقي.
         </p>
       </form>
 
@@ -66,7 +66,7 @@
       <div class="brand-lock">AURUM</div>
       <div class="meta">
         <span id="userPill">—</span>
-        <span id="bridgePill">الجسر: —</span>
+        <span id="bridgePill">السحابة: —</span>
         <span id="readyPill">…</span>
         <span id="statePill">IDLE</span>
         <span id="modePill">paper</span>
@@ -78,15 +78,15 @@
 
     <nav class="tabs">
       <button type="button" data-tab="trade" class="on">التداول</button>
-      <button type="button" data-tab="connect">ربط الوكيل Windows</button>
+      <button type="button" data-tab="connect">ربط Exness السحابي</button>
       <button type="button" data-tab="history">الصفقات</button>
     </nav>
 
     <main id="tab-trade" class="panel">
       <section class="hero compact">
-        <p class="eyebrow">Exness · MetaTrader 5 · نبض سريع · إدارة ذكية</p>
+        <p class="eyebrow">Exness · MetaApi Cloud · نبض سريع · إدارة ذكية</p>
         <h1 id="headline">بانتظار الارتباط</h1>
-        <p class="sub" id="narrative">أدخل حساب Exness ثم شغّل وكيل Windows.</p>
+        <p class="sub" id="narrative">أدخل حساب Exness — الربط والتنفيذ من التطبيق مباشرة.</p>
         <div class="cta">
           <button id="btnStart" type="button">ابدأ التداول</button>
           <button id="btnScan" type="button" class="ghost">مسح الآن</button>
@@ -109,27 +109,25 @@
           <article><h2>السيولة / المؤسسات</h2><pre id="inst"></pre></article>
           <article><h2>آخر الصفقات</h2><ul id="trades"></ul></article>
         </div>
-        <p class="disclaimer">التنفيذ الحقيقي على Exness يتم عبر MetaTrader 5 على Windows. التطبيق السحابي يحلل ويأمر؛ الوكيل ينفّذ.</p>
+        <p class="disclaimer">التنفيذ الحقيقي على Exness يتم عبر طرفية MetaApi السحابية من هذا التطبيق — بدون Windows.</p>
       </section>
     </main>
 
     <main id="tab-connect" class="panel hidden">
       <section class="connect-box">
-        <h1>وكيل Windows لـ MetaTrader 5 / Exness</h1>
-        <p id="bridgeStatusText">حالة الجسر: —</p>
+        <h1>ربط Exness السحابي المباشر</h1>
+        <p id="bridgeStatusText">حالة السحابة: —</p>
         <ol class="steps">
-          <li>ثبّت MetaTrader 5 على Windows VPS وسجّل دخول نفس حساب Exness.</li>
-          <li>حمّل ملف الوكيل من الزر أدناه.</li>
-          <li>شغّل الأمر الظاهر (يحتوي التوكن السري).</li>
-          <li>عندما يصبح الجسر «متصل» يبدأ التنفيذ الذكي الكامل.</li>
+          <li>أدخل رقم حساب Exness/MT5 وكلمة المرور والسيرفر من شاشة الدخول.</li>
+          <li>AURUM ينشئ طرفية MT5 في السحابة ويربط حسابك تلقائياً.</li>
+          <li>عندما تصبح الحالة «متصل سحابياً» يعمل التنفيذ الذكي الكامل.</li>
+          <li>لا حاجة لتثبيت MetaTrader أو تشغيل وكيل Windows.</li>
         </ol>
-        <p><a class="primary-link" href="/aurum_exness_agent.py" download>تحميل aurum_exness_agent.py</a></p>
-        <label>أمر التشغيل
-          <textarea id="agentCmd" rows="3" readonly></textarea>
-        </label>
-        <button type="button" id="btnCopyAgent" class="primary">نسخ الأمر</button>
-        <button type="button" id="btnRefreshBridge" class="ghost">تحديث حالة الجسر</button>
+        <p id="cloudAccountLine" class="auth-note">معرّف الحساب السحابي: —</p>
+        <button type="button" id="btnRefreshBridge" class="primary">تحديث / إعادة ربط السحابة</button>
         <p id="connectMsg" class="auth-msg"></p>
+        <textarea id="agentCmd" class="hidden" rows="1" readonly aria-hidden="true"></textarea>
+        <button type="button" id="btnCopyAgent" class="hidden" aria-hidden="true">نسخ</button>
       </section>
     </main>
 

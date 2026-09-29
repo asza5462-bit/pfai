@@ -103,16 +103,22 @@
 
   function setBridgeUI(bridge, token, agentCommand) {
     const online = !!(bridge && bridge.online);
-    $("bridgePill").textContent = online ? "الجسر: متصل Exness" : "الجسر: بانتظار Windows";
+    const provider = (bridge && bridge.provider) || (bridge && bridge.execution) || "";
+    const cloud = provider === "metaapi" || !!(bridge && bridge.account_id);
+    $("bridgePill").textContent = online
+      ? (cloud ? "السحابة: متصل Exness" : "متصل Exness")
+      : (cloud ? "السحابة: جاري الربط" : "السحابة: غير متصل");
     $("bridgePill").classList.toggle("on", online);
     if ($("bridgeStatusText")) {
-      $("bridgeStatusText").textContent = (bridge && bridge.detail) || (online ? "متصل" : "بانتظار الوكيل");
+      $("bridgeStatusText").textContent =
+        (bridge && bridge.detail) || (online ? "متصل سحابياً بـ Exness" : "بانتظار الربط السحابي");
+    }
+    if ($("cloudAccountLine")) {
+      const id = (bridge && (bridge.account_id || (bridge.account && bridge.account.login))) || "—";
+      $("cloudAccountLine").textContent = `معرّف الحساب السحابي: ${bridge && bridge.account_id ? bridge.account_id : id}`;
     }
     if (token) bridgeToken = token;
     if (agentCommand && $("agentCmd")) $("agentCmd").value = agentCommand;
-    else if (bridgeToken && $("agentCmd") && !$("agentCmd").value) {
-      $("agentCmd").value = `python aurum_exness_agent.py --cloud ${location.origin} --token ${bridgeToken}`;
-    }
   }
 
   function renderTrades(list, el) {
@@ -149,7 +155,7 @@
     $("riskState").textContent = risk.halted ? "متوقف" : "نشط";
     $("narrative").textContent = sig.narrative || data.disclaimer || "";
     $("headline").textContent =
-      !acc.connected && acc.mode === "mt5" ? "بانتظار وكيل Windows للارتباط بـ Exness" :
+      !acc.connected && acc.mode === "mt5" ? "بانتظار اكتمال الربط السحابي بـ Exness" :
       risk.halted ? "المخاطرة متوقفة" :
       data.state === "IN_TRADE" ? "صفقة مفتوحة على الحساب" :
       sig.action === "buy" ? "تقارب شراء" :
@@ -176,9 +182,24 @@
 
   async function refreshBridge() {
     try {
-      const j = await api("/api/bridge/status");
-      setBridgeUI(j.bridge, j.bridge_token, j.agent_command);
-    } catch (_) {}
+      const j = await api("/api/cloud/reconnect", { method: "POST" });
+      setBridgeUI(j.bridge || j.cloud);
+      if (j.account) {
+        $("equity").textContent = Number(j.account.equity || 0).toFixed(2);
+        $("modePill").textContent = j.account.mode || "mt5";
+      }
+      if ($("connectMsg")) {
+        $("connectMsg").textContent = j.message || "";
+        $("connectMsg").classList.toggle("ok", !!(j.account && j.account.connected));
+      }
+    } catch (e) {
+      try {
+        const j = await api("/api/bridge/status");
+        setBridgeUI(j.bridge || j.cloud);
+      } catch (_) {
+        if ($("connectMsg")) $("connectMsg").textContent = e.message || "تعذّر تحديث السحابة";
+      }
+    }
   }
 
   async function pulse() {
@@ -251,9 +272,11 @@
           auto_start: true,
         }),
       });
-      showAuth("تم حفظ الحساب — أكمل بتشغيل وكيل Windows", true);
+      showAuth(j.message || "تم الربط السحابي", true);
       await enterLoggedIn(j.user, j);
-      document.querySelector('.tabs button[data-tab="connect"]').click();
+      if (!(j.account && j.account.connected)) {
+        document.querySelector('.tabs button[data-tab="connect"]').click();
+      }
     } catch (err) {
       showAuth(err.message || "فشل الارتباط");
     }

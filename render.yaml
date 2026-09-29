@@ -1,5 +1,5 @@
-# AURUM — Elite Gold Desk on Render (control plane + paper mode)
-# Live Exness execution requires Windows VPS with MetaTrader 5 (see /api/connect-guide).
+# AURUM — Elite Gold Desk on Render
+# Live Exness execution via MetaApi cloud (no Windows). Set METAAPI_TOKEN in dashboard.
 
 services:
   - type: web
@@ -20,6 +20,10 @@ services:
         value: "8000"
       - key: AURUM_MODE
         value: "paper"
+      - key: AURUM_PREFER_METAAPI
+        value: "true"
+      - key: METAAPI_REGION
+        value: "new-york"
       - key: AURUM_SYMBOL
         value: "XAUUSD"
       - key: AURUM_TIMEFRAME
@@ -57,4 +61,5 @@ services:
       - key: AURUM_PAPER_BALANCE
         value: "10000"
       # Secrets — set in Render dashboard, never commit:
-      # AURUM_OWNER_TOKEN, MT5_LOGIN, MT5_PASSWORD, MT5_SERVER, MT5_PATH
+      # METAAPI_TOKEN (required for direct Exness cloud trading)
+      # AURUM_OWNER_TOKEN, AURUM_AUTH_SECRET

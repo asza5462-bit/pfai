@@ -46,6 +46,14 @@ class Settings:
     mt5_server: str = field(default_factory=lambda: os.getenv("MT5_SERVER", "Exness-MT5Real"))
     mt5_path: str = field(default_factory=lambda: os.getenv("MT5_PATH", ""))
 
+    # MetaApi cloud — real Exness execution from Linux/Render (no Windows)
+    metaapi_token: str = field(default_factory=lambda: os.getenv("METAAPI_TOKEN", os.getenv("META_API_TOKEN", "")))
+    metaapi_region: str = field(default_factory=lambda: os.getenv("METAAPI_REGION", "new-york"))
+    metaapi_magic: int = field(default_factory=lambda: _env_int("METAAPI_MAGIC", 908070))
+    metaapi_connect_timeout: int = field(default_factory=lambda: _env_int("METAAPI_CONNECT_TIMEOUT", 120))
+    # Prefer cloud MetaApi over legacy Windows bridge when token is present
+    prefer_metaapi: bool = field(default_factory=lambda: _env_bool("AURUM_PREFER_METAAPI", True))
+
     # Risk — elite desk defaults (capital preservation first)
     risk_per_trade_pct: float = field(default_factory=lambda: _env_float("AURUM_RISK_PCT", 0.35))
     max_daily_loss_pct: float = field(default_factory=lambda: _env_float("AURUM_MAX_DAILY_LOSS_PCT", 1.25))

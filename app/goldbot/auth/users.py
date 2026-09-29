@@ -171,6 +171,9 @@ class UserAuth:
             "has_mt5_password": bool(settings_obj.get("mt5_password_enc")),
             "symbol": settings_obj.get("symbol") or settings.symbol,
             "mode": settings_obj.get("mode") or settings.mode,
+            "metaapi_account_id": settings_obj.get("metaapi_account_id") or "",
+            "metaapi_region": settings_obj.get("metaapi_region") or "",
+            "execution": settings_obj.get("execution") or "",
         }
         return {
             "id": int(row["id"]),
@@ -219,6 +222,12 @@ class UserAuth:
                 cur["symbol"] = str(patch["symbol"]).upper()
             if "mode" in patch and patch.get("mode") in {"paper", "mt5"}:
                 cur["mode"] = patch["mode"]
+            if "metaapi_account_id" in patch:
+                cur["metaapi_account_id"] = str(patch.get("metaapi_account_id") or "").strip()
+            if "metaapi_region" in patch:
+                cur["metaapi_region"] = str(patch.get("metaapi_region") or "").strip()
+            if "execution" in patch:
+                cur["execution"] = str(patch.get("execution") or "").strip()
             c.execute("UPDATE users SET settings=? WHERE id=?", (json.dumps(cur), user_id))
         return self.public_user(user_id)
 
@@ -239,6 +248,9 @@ class UserAuth:
             "path": cur.get("mt5_path") or "",
             "mode": cur.get("mode") or "paper",
             "symbol": cur.get("symbol") or settings.symbol,
+            "metaapi_account_id": cur.get("metaapi_account_id") or "",
+            "metaapi_region": cur.get("metaapi_region") or settings.metaapi_region,
+            "execution": cur.get("execution") or "",
         }
 
     def find_by_mt5_login(self, mt5_login: str) -> int | None:

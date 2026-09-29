@@ -1,8 +1,9 @@
 """
 MT5 / Exness bridge.
 
-- `paper` mode: works on Linux/Render with live gold quotes (Yahoo) + simulated fills.
-- `mt5` mode: requires Windows host with MetaTrader5 terminal + Exness account.
+- `paper` mode: works on Linux/Render with live gold quotes + simulated fills.
+- `mt5` + MetaApi: real Exness execution from cloud (no Windows).
+- Legacy Windows agent hub remains as optional fallback.
 """
 from __future__ import annotations
 
@@ -54,6 +55,9 @@ class Bridge:
     paper_balance: float = field(default_factory=lambda: settings.paper_balance)
     paper_equity: float = field(default_factory=lambda: settings.paper_balance)
     remote_user_id: int | None = None
+    metaapi_account_id: str = ""
+    metaapi_region: str = ""
+    execution: str = ""  # metaapi | windows_bridge | local_mt5 | paper
     _mt5: Any = None
     _last_price: float = 0.0
     _seeded: bool = False
@@ -70,14 +74,55 @@ class Bridge:
         if self.remote_user_id:
             self.mode = "mt5"
 
+    def bind_metaapi(self, account_id: str, region: str | None = None) -> None:
+        self.metaapi_account_id = str(account_id or "").strip()
+        self.metaapi_region = (region or settings.metaapi_region or "new-york").strip()
+        if self.metaapi_account_id:
+            self.mode = "mt5"
+            self.execution = "metaapi"
+
     def connect(self) -> AccountSnapshot:
-        # Prefer live Exness account snapshot from Windows agent when available
-        if self.mode == "mt5" and self.remote_user_id:
+        # 1) MetaApi cloud — primary real path (no Windows)
+        if self.mode == "mt5" and self.metaapi_account_id and settings.prefer_metaapi:
+            from goldbot.mt5.metaapi_cloud import metaapi
+
+            if metaapi.configured:
+                snap = metaapi.snapshot(self.metaapi_account_id, region=self.metaapi_region or None)
+                if snap.get("connected"):
+                    self.execution = "metaapi"
+                    return AccountSnapshot(
+                        balance=float(snap["balance"]),
+                        equity=float(snap["equity"]),
+                        margin=float(snap["margin"]),
+                        free_margin=float(snap["free_margin"]),
+                        currency=str(snap.get("currency") or "USD"),
+                        mode="mt5",
+                        connected=True,
+                        server=str(snap.get("server") or settings.mt5_server),
+                        login=int(snap.get("login") or settings.mt5_login or 0),
+                        detail=str(snap.get("detail") or "MetaApi cloud"),
+                    )
+                return AccountSnapshot(
+                    balance=0.0,
+                    equity=0.0,
+                    margin=0.0,
+                    free_margin=0.0,
+                    currency="USD",
+                    mode="mt5",
+                    connected=False,
+                    server=settings.mt5_server or "Exness",
+                    login=int(settings.mt5_login or 0),
+                    detail=str(snap.get("detail") or "بانتظار اتصال MetaApi السحابي"),
+                )
+
+        # 2) Legacy Windows agent hub
+        if self.mode == "mt5" and self.remote_user_id and self.execution != "metaapi":
             from goldbot.mt5.remote_hub import hub
 
             st = hub.status_for_user(self.remote_user_id)
             acc = st.get("account") or {}
             if st.get("online") and acc:
+                self.execution = "windows_bridge"
                 return AccountSnapshot(
                     balance=float(acc.get("balance") or 0),
                     equity=float(acc.get("equity") or 0),
@@ -90,7 +135,20 @@ class Bridge:
                     login=int(acc.get("login") or settings.mt5_login or 0),
                     detail=st.get("detail") or "Exness via MT5 agent",
                 )
-            # Agent not online yet — still mark mt5 pending (not silent paper)
+            # If MetaApi id is set but not yet connected, prefer that messaging
+            if self.metaapi_account_id:
+                return AccountSnapshot(
+                    balance=float(acc.get("balance") or 0),
+                    equity=float(acc.get("equity") or 0),
+                    margin=0.0,
+                    free_margin=0.0,
+                    currency="USD",
+                    mode="mt5",
+                    connected=False,
+                    server=settings.mt5_server or "Exness",
+                    login=int(settings.mt5_login or 0),
+                    detail="حساب MetaApi قيد الربط — بدون Windows",
+                )
             return AccountSnapshot(
                 balance=float(acc.get("balance") or 0),
                 equity=float(acc.get("equity") or 0),
@@ -101,7 +159,7 @@ class Bridge:
                 connected=False,
                 server=settings.mt5_server or "Exness",
                 login=int(settings.mt5_login or 0),
-                detail=st.get("detail") or "بانتظار وكيل Windows MT5",
+                detail=st.get("detail") or "بانتظار اتصال السحابة بـ Exness",
             )
         if self.mode == "mt5":
             return self._connect_mt5()
@@ -115,7 +173,7 @@ class Bridge:
             connected=True,
             server="AURUM-PAPER",
             login=0,
-            detail="Paper desk — اربط Exness من تسجيل MT5 ثم شغّل وكيل Windows.",
+            detail="Paper desk — سجّل دخول Exness من التطبيق للربط السحابي الحقيقي.",
         )
 
     def _connect_mt5(self) -> AccountSnapshot:
@@ -372,6 +430,25 @@ class Bridge:
         return self._spot_gold_api() or (self._last_price or None)
 
     def tick(self) -> dict:
+        if self.mode == "mt5" and self.metaapi_account_id and settings.prefer_metaapi:
+            from goldbot.mt5.metaapi_cloud import metaapi
+
+            if metaapi.configured:
+                try:
+                    px = metaapi.symbol_price(self.metaapi_account_id, settings.symbol, region=self.metaapi_region or None)
+                    bid = float(px.get("bid") or px.get("price") or 0)
+                    ask = float(px.get("ask") or (bid + 0.2 if bid else 0))
+                    if bid > 0:
+                        self._last_price = bid
+                        spread = (ask - bid) / 0.01 if ask >= bid else 20.0
+                        return {
+                            "bid": bid,
+                            "ask": ask,
+                            "spread_points": round(spread, 2),
+                            "source": "metaapi",
+                        }
+                except Exception as e:
+                    log.warning("metaapi tick fail: %s", e)
         if self.mode == "mt5" and self._mt5 is not None:
             tick = self._mt5.symbol_info_tick(settings.symbol)
             if tick is None:
@@ -398,8 +475,27 @@ class Bridge:
         }
 
     def order_market(self, side: str, lot: float, sl: float, tp: float, comment: str = "AURUM") -> dict:
-        # Real Exness path: queue to Windows MT5 agent
-        if self.mode == "mt5" and self.remote_user_id:
+        # Primary: MetaApi cloud (no Windows)
+        if self.mode == "mt5" and self.metaapi_account_id and settings.prefer_metaapi:
+            from goldbot.mt5.metaapi_cloud import metaapi
+
+            if metaapi.configured:
+                result = metaapi.order_market(
+                    self.metaapi_account_id,
+                    side,
+                    float(lot),
+                    float(sl),
+                    float(tp),
+                    symbol=settings.symbol,
+                    comment=comment,
+                    region=self.metaapi_region or None,
+                )
+                result.setdefault("mode", "mt5")
+                result["execution"] = "metaapi"
+                return result
+
+        # Fallback: queue to Windows MT5 agent
+        if self.mode == "mt5" and self.remote_user_id and self.execution != "metaapi":
             from goldbot.mt5.remote_hub import hub
 
             enq = hub.enqueue(
@@ -422,6 +518,7 @@ class Bridge:
             result.setdefault("lot", lot)
             result.setdefault("sl", sl)
             result.setdefault("tp", tp)
+            result["execution"] = "windows_bridge"
             return result
         if self.mode == "mt5" and self._mt5 is not None:
             return self._order_mt5(side, lot, sl, tp, comment)

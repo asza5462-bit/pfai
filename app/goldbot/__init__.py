@@ -1,5 +1,5 @@
 """AURUM — Elite XAUUSD trading desk (MT5 / Exness ready)."""
 
-__version__ = "3.1.0"
+__version__ = "3.2.0"
 PRODUCT_NAME = "AURUM"
-PRODUCT_TAGLINE = "Exness/MT5 Direct Login · Smart Desk · Windows Bridge"
+PRODUCT_TAGLINE = "Exness Direct · MetaApi Cloud · Smart Desk"

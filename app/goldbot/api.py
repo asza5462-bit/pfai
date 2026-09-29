@@ -16,6 +16,7 @@ from goldbot.auth.users import SESSION_COOKIE, AuthError, auth
 from goldbot.config import settings
 from goldbot.execution.desk import desk
 from goldbot.mt5.bridge import bridge
+from goldbot.mt5.metaapi_cloud import MetaApiError, metaapi
 from goldbot.mt5.remote_hub import EXNESS_SERVERS, hub
 from goldbot.storage.state import store
 
@@ -180,7 +181,7 @@ async def exness_servers():
 
 @app.post("/api/auth/mt5-login")
 async def mt5_login(body: Mt5LoginBody, response: Response):
-    """Login with Exness/MT5 account number + password and arm smart trading."""
+    """Login with Exness/MT5 — provision MetaApi cloud terminal (no Windows)."""
     try:
         result = auth.login_with_mt5(body.mt5_login, body.mt5_password, body.mt5_server, body.symbol)
     except AuthError as e:
@@ -188,7 +189,6 @@ async def mt5_login(body: Mt5LoginBody, response: Response):
     user = result["user"]
     _set_session(response, result["token"])
 
-    # Apply credentials to process + bind remote hub
     secrets = auth.mt5_secrets(user["id"])
     settings.mode = "mt5"
     settings.symbol = secrets["symbol"] or "XAUUSD"
@@ -196,37 +196,125 @@ async def mt5_login(body: Mt5LoginBody, response: Response):
     settings.mt5_password = secrets["password"]
     settings.mt5_server = secrets["server"]
     bridge.bind_remote_user(user["id"])
-    bridge_token = hub.issue_token(user["id"])
+
+    cloud: dict = {"ok": False, "configured": metaapi.configured}
+    message = ""
+    if metaapi.configured and settings.prefer_metaapi:
+        try:
+            cloud = metaapi.ensure_account(
+                str(secrets["login"]),
+                secrets["password"],
+                secrets["server"],
+                symbol=settings.symbol,
+                existing_id=secrets.get("metaapi_account_id") or None,
+                wait=True,
+            )
+            auth.update_settings(
+                user["id"],
+                {
+                    "metaapi_account_id": cloud["account_id"],
+                    "metaapi_region": cloud.get("region") or settings.metaapi_region,
+                    "execution": "metaapi",
+                    "mode": "mt5",
+                },
+            )
+            bridge.bind_metaapi(cloud["account_id"], cloud.get("region"))
+            if cloud.get("connected"):
+                message = "تم الربط السحابي المباشر بـ Exness عبر MetaApi — التنفيذ الحقيقي من التطبيق بدون Windows."
+            else:
+                message = (
+                    "تم إنشاء الطرفية السحابية. الاتصال بالوسيط قيد التثبيت — "
+                    "حدّث الحالة خلال دقيقة ثم ابدأ التداول."
+                )
+        except MetaApiError as e:
+            cloud = {"ok": False, "configured": True, "error": e.message, "code": e.code, "details": e.details}
+            # Map broker auth errors clearly
+            if e.code in {"E_AUTH", "ValidationError"} or "authenticate" in (e.message or "").lower():
+                message = "رفض الوسيط بيانات Exness — تحقق من الرقم وكلمة المرور والسيرفر."
+            elif e.code == "NO_TOKEN":
+                message = e.message
+            else:
+                message = f"تعذّر الربط السحابي: {e.message}"
+            store.log_event("metaapi_login_error", {"user": user["username"], "error": e.message, "code": e.code})
+    else:
+        message = (
+            "حساب Exness محفوظ، لكن METAAPI_TOKEN غير مضبوط على السيرفر. "
+            "أضِف توكن MetaApi في Render لتفعيل التنفيذ الحقيقي المباشر بدون Windows."
+        )
+
     desk.account = bridge.connect()
+    # Refresh public user with metaapi fields
+    result["user"] = auth.public_user(user["id"])
 
     started = None
-    if body.auto_start:
-        # Arm desk; real fills wait until Windows agent is online
+    if body.auto_start and desk.account.connected:
         if desk.risk.state.halted:
             desk.risk.reset_day(desk.account.equity or settings.paper_balance, note="mt5_login_reset")
         started = desk.start_desk()
+    elif body.auto_start and not desk.account.connected:
+        # Arm later — still allow start attempt after cloud connects
+        pass
 
     store.log_event(
         "mt5_login",
-        {"user": user["username"], "login": secrets["login"], "server": secrets["server"], "bridge": True},
+        {
+            "user": user["username"],
+            "login": secrets["login"],
+            "server": secrets["server"],
+            "execution": bridge.execution or "pending",
+            "metaapi_account_id": bridge.metaapi_account_id,
+            "connected": desk.account.connected,
+        },
     )
-    st = hub.status_for_user(user["id"])
+    cloud_status = _cloud_status_for_user(user["id"])
     return {
         "ok": True,
         **result,
-        "bridge_token": bridge_token,
-        "bridge": st,
+        "cloud": cloud,
+        "bridge": cloud_status,  # UI uses this pill — now cloud-first
         "account": desk.account.to_dict(),
         "started": started,
-        "agent_command": (
-            f"python aurum_exness_agent.py --cloud {os.getenv('AURUM_PUBLIC_URL', 'https://pfai-v8.onrender.com')} "
-            f"--token {bridge_token}"
-        ),
-        "message": (
-            "تم حفظ حساب Exness وربط المكتب. "
-            "شغّل وكيل Windows (aurum_exness_agent.py) مرة واحدة ليرتبط MetaTrader 5 ويبدأ التنفيذ الحقيقي."
-        ),
+        "execution": bridge.execution or ("metaapi" if bridge.metaapi_account_id else "pending"),
+        "message": message,
     }
+
+
+def _cloud_status_for_user(user_id: int) -> dict:
+    secrets = auth.mt5_secrets(user_id)
+    account_id = secrets.get("metaapi_account_id") or bridge.metaapi_account_id
+    region = secrets.get("metaapi_region") or bridge.metaapi_region or settings.metaapi_region
+    if account_id and metaapi.configured:
+        # Rebind process bridge if needed
+        if bridge.metaapi_account_id != account_id:
+            bridge.bind_metaapi(account_id, region)
+        snap = metaapi.snapshot(account_id, region=region or None)
+        online = bool(snap.get("connected"))
+        return {
+            "online": online,
+            "execution": "metaapi",
+            "provider": "metaapi",
+            "account_id": account_id,
+            "region": region,
+            "account": snap,
+            "detail": snap.get("detail") or ("متصل سحابياً" if online else "غير متصل"),
+            "windows_required": False,
+        }
+    # Legacy windows status for fallback visibility
+    st = hub.status_for_user(user_id)
+    st = dict(st)
+    st.setdefault("execution", "windows_bridge" if st.get("online") else "pending")
+    st.setdefault("provider", "windows_bridge")
+    st.setdefault("windows_required", not metaapi.configured)
+    st.setdefault(
+        "detail",
+        st.get("detail")
+        or (
+            "METAAPI_TOKEN مطلوب للربط المباشر"
+            if not metaapi.configured
+            else "بانتظار إنشاء الطرفية السحابية"
+        ),
+    )
+    return st
 
 
 @app.post("/api/auth/logout")
@@ -278,16 +366,25 @@ def _readiness(snap: dict) -> dict:
     tick = snap.get("tick") or {}
     bid = float(tick.get("bid") or 0)
     feed = str(snap.get("feed") or tick.get("source") or "")
+    feed_ok = (
+        feed.startswith("gold_api")
+        or feed.startswith("yahoo")
+        or feed in {"mt5", "metaapi"}
+        or feed.endswith("_live")
+        or feed.endswith("_synth")
+    )
     checks = {
         "service_up": True,
         "product_aurum": True,
         "price_live": bid >= 3000,
-        "feed_ok": feed.startswith("gold_api") or feed.startswith("yahoo") or feed == "mt5",
+        "feed_ok": feed_ok,
         "candles_ok": int(snap.get("candle_count") or 0) >= 50,
         "auto_trade": bool(snap.get("auto_trade")),
         "risk_active": not bool((snap.get("risk") or {}).get("halted")),
         "mt5_live": (snap.get("account") or {}).get("mode") == "mt5",
         "mt5_connected": bool((snap.get("account") or {}).get("connected")),
+        "metaapi_configured": metaapi.configured,
+        "cloud_execution": bridge.execution == "metaapi",
         "auth_configured": auth.user_count() > 0,
     }
     paper_ready = all(checks[k] for k in ("service_up", "price_live", "feed_ok", "candles_ok", "risk_active", "auth_configured"))
@@ -301,15 +398,15 @@ def _readiness(snap: dict) -> dict:
         "summary_ar": (
             "جاهز للتداول الورقي على الذهب"
             if grade == "paper_ready"
-            else "جاهز للتنفيذ عبر MT5/Exness"
+            else "جاهز للتنفيذ السحابي على Exness"
             if grade == "live_ready"
-            else "أكمل التسجيل ثم اضبط الربط/المخاطر"
+            else "أكمل تسجيل Exness من التطبيق"
         ),
         "next_for_exness": [
-            "سجّل دخولاً في AURUM",
-            "Windows VPS + MetaTrader 5",
-            "احفظ بيانات Exness من تبويب الربط",
-            "AURUM_MODE=mt5 على جهاز Windows",
+            "أدخل رقم حساب Exness/MT5 + كلمة المرور + السيرفر من التطبيق",
+            "تأكد أن METAAPI_TOKEN مضبوط على Render",
+            "انتظر حالة «متصل سحابياً» ثم ابدأ التداول",
+            "ابدأ بـ Demo (Exness-MT5Trial) قبل Real",
         ],
     }
 
@@ -353,7 +450,6 @@ async def pulse(authorization: str | None = Header(default=None), aurum_session:
 @app.post("/api/start")
 async def start_desk(authorization: str | None = Header(default=None), aurum_session: str | None = Cookie(default=None, alias=SESSION_COOKIE)):
     user = require_user(authorization, aurum_session)
-    # Bind this session's MT5 remote path if configured
     secrets = auth.mt5_secrets(user["id"])
     if secrets.get("mode") == "mt5" and secrets.get("login"):
         settings.mode = "mt5"
@@ -362,8 +458,8 @@ async def start_desk(authorization: str | None = Header(default=None), aurum_ses
         settings.mt5_server = secrets["server"]
         settings.symbol = secrets.get("symbol") or settings.symbol
         bridge.bind_remote_user(user["id"])
-        if not hub.token_for_user(user["id"]):
-            hub.issue_token(user["id"])
+        if secrets.get("metaapi_account_id"):
+            bridge.bind_metaapi(secrets["metaapi_account_id"], secrets.get("metaapi_region"))
         desk.account = bridge.connect()
     if desk.risk.state.halted:
         return {
@@ -373,7 +469,8 @@ async def start_desk(authorization: str | None = Header(default=None), aurum_ses
             "risk": desk.risk.state.to_dict(),
         }
     out = desk.start_desk()
-    out["bridge"] = hub.status_for_user(user["id"])
+    out["bridge"] = _cloud_status_for_user(user["id"])
+    out["execution"] = bridge.execution
     return out
 
 
@@ -437,15 +534,16 @@ async def schools(authorization: str | None = Header(default=None), aurum_sessio
 @app.get("/api/connect-guide")
 async def connect_guide():
     return {
-        "title": "ربط Exness مباشرة عبر MetaTrader 5",
+        "title": "ربط Exness المباشر من التطبيق (سحابة MetaApi)",
         "steps": [
-            "من شاشة الدخول: أدخل رقم حساب MT5 + كلمة المرور + سيرفر Exness.",
-            "حمّل/شغّل aurum_exness_agent.py على Windows مع MT5 مفتوح ومتصل بنفس الحساب.",
-            "الصق bridge_token الظاهر بعد الدخول في أمر تشغيل الوكيل.",
-            "عندما تظهر حالة «وكيل MT5 متصل» يبدأ التنفيذ الذكي الحقيقي.",
+            "من شاشة الدخول: أدخل رقم حساب MT5/Exness + كلمة المرور + السيرفر.",
+            "AURUM ينشئ طرفية MT5 سحابية عبر MetaApi ويربط حسابك مباشرة.",
+            "عندما تظهر حالة «متصل سحابياً» يبدأ التنفيذ الذكي الحقيقي من التطبيق.",
+            "لا تحتاج Windows ولا تثبيت MetaTrader على جهازك.",
             "ابدأ Demo (Exness-MT5Trial) قبل Real.",
         ],
-        "warning": "كلمة المرور تُحفظ مشفّرة. التنفيذ الحقيقي يحتاج وكيل Windows لأن MT5 لا يعمل على Linux/Render.",
+        "metaapi_configured": metaapi.configured,
+        "warning": "كلمة المرور تُحفظ مشفّرة. يلزم METAAPI_TOKEN على السيرفر لفتح الطرفية السحابية.",
         "servers": EXNESS_SERVERS,
     }
 
@@ -498,17 +596,60 @@ async def bridge_complete(body: BridgeCompleteBody, authorization: str | None = 
 @app.get("/api/bridge/status")
 async def bridge_status(authorization: str | None = Header(default=None), aurum_session: str | None = Cookie(default=None, alias=SESSION_COOKIE)):
     user = require_user(authorization, aurum_session)
-    st = hub.status_for_user(user["id"])
-    token = hub.token_for_user(user["id"])
+    st = _cloud_status_for_user(user["id"])
     return {
         "ok": True,
         "bridge": st,
-        "bridge_token": token,
-        "agent_command": (
-            f"python aurum_exness_agent.py --cloud {os.getenv('AURUM_PUBLIC_URL', 'https://pfai-v8.onrender.com')} --token {token}"
-            if token
-            else None
-        ),
+        "cloud": st,
+        "execution": st.get("execution"),
+        "metaapi_configured": metaapi.configured,
+        "windows_required": bool(st.get("windows_required")),
+    }
+
+
+@app.post("/api/cloud/reconnect")
+async def cloud_reconnect(authorization: str | None = Header(default=None), aurum_session: str | None = Cookie(default=None, alias=SESSION_COOKIE)):
+    """Re-provision / refresh MetaApi cloud connection for the logged-in user."""
+    user = require_user(authorization, aurum_session)
+    secrets = auth.mt5_secrets(user["id"])
+    if not secrets.get("login") or not secrets.get("password"):
+        raise HTTPException(400, "لا توجد بيانات Exness محفوظة — سجّل الدخول من شاشة MT5")
+    if not metaapi.configured:
+        raise HTTPException(503, "METAAPI_TOKEN غير مضبوط على السيرفر")
+    try:
+        cloud = metaapi.ensure_account(
+            str(secrets["login"]),
+            secrets["password"],
+            secrets["server"],
+            symbol=secrets.get("symbol") or "XAUUSD",
+            existing_id=secrets.get("metaapi_account_id") or None,
+            wait=True,
+        )
+    except MetaApiError as e:
+        raise HTTPException(400, e.message)
+    auth.update_settings(
+        user["id"],
+        {
+            "metaapi_account_id": cloud["account_id"],
+            "metaapi_region": cloud.get("region") or settings.metaapi_region,
+            "execution": "metaapi",
+            "mode": "mt5",
+        },
+    )
+    settings.mode = "mt5"
+    settings.mt5_login = secrets["login"]
+    settings.mt5_password = secrets["password"]
+    settings.mt5_server = secrets["server"]
+    bridge.bind_remote_user(user["id"])
+    bridge.bind_metaapi(cloud["account_id"], cloud.get("region"))
+    desk.account = bridge.connect()
+    return {
+        "ok": True,
+        "cloud": cloud,
+        "bridge": _cloud_status_for_user(user["id"]),
+        "account": desk.account.to_dict(),
+        "user": auth.public_user(user["id"]),
+        "message": "تم تحديث الربط السحابي" if desk.account.connected else "الطرفية موجودة — بانتظار اتصال الوسيط",
     }
 
 

@@ -1,3 +1,4 @@
+"""Legacy Windows bridge endpoints still work as optional fallback."""
 from fastapi.testclient import TestClient
 
 from goldbot.api import app
@@ -5,12 +6,24 @@ from goldbot.auth.users import UserAuth
 from goldbot.mt5.remote_hub import RemoteHub
 
 
-def test_mt5_login_and_bridge_flow(tmp_path, monkeypatch):
+def test_windows_bridge_agent_protocol(tmp_path, monkeypatch):
     monkeypatch.setenv("AURUM_COOKIE_SECURE", "0")
+    monkeypatch.setenv("METAAPI_TOKEN", "")
+    monkeypatch.setenv("AURUM_PREFER_METAAPI", "0")
+
+    from goldbot.config import settings
+
+    settings.metaapi_token = ""
+    settings.prefer_metaapi = False
+
     users = UserAuth(tmp_path / "users.sqlite3")
     hub = RemoteHub(tmp_path / "hub.sqlite3")
     monkeypatch.setattr("goldbot.api.auth", users)
     monkeypatch.setattr("goldbot.api.hub", hub)
+    # Force api.metaapi.configured False
+    from goldbot.mt5.metaapi_cloud import MetaApiCloud
+
+    monkeypatch.setattr("goldbot.api.metaapi", MetaApiCloud(token=""))
 
     client = TestClient(app)
     servers = client.get("/api/exness/servers")
@@ -24,18 +37,18 @@ def test_mt5_login_and_bridge_flow(tmp_path, monkeypatch):
             "mt5_password": "TradePass1",
             "mt5_server": "Exness-MT5Trial",
             "symbol": "XAUUSD",
-            "auto_start": True,
+            "auto_start": False,
         },
     )
     assert login.status_code == 200, login.text
     body = login.json()
     assert body["ok"] is True
     assert body["user"]["settings"]["mt5_login"] == "55667788"
-    assert body["user"]["settings"]["mode"] == "mt5"
-    assert body.get("bridge_token")
-    token = body["bridge_token"]
+    uid = body["user"]["id"]
 
-    # agent heartbeat -> online
+    # Issue bridge token manually (legacy path)
+    token = hub.issue_token(uid)
+
     hb = client.post(
         "/api/bridge/heartbeat",
         headers={"Authorization": f"Bearer {token}"},
@@ -59,16 +72,13 @@ def test_mt5_login_and_bridge_flow(tmp_path, monkeypatch):
     assert creds.json()["login"] == 55667788
     assert creds.json()["password"] == "TradePass1"
 
-    st = client.get("/api/bridge/status")
-    assert st.status_code == 200
-    assert st.json()["bridge"]["online"] is True
-
-    # enqueue order via desk bind
     from goldbot.mt5.bridge import bridge
 
-    bridge.bind_remote_user(body["user"]["id"])
+    bridge.bind_remote_user(uid)
     bridge.mode = "mt5"
-    enq = hub.enqueue(body["user"]["id"], "order_market", {"side": "buy", "lot": 0.01, "sl": 1, "tp": 2, "symbol": "XAUUSD"})
+    bridge.execution = "windows_bridge"
+    bridge.metaapi_account_id = ""
+    enq = hub.enqueue(uid, "order_market", {"side": "buy", "lot": 0.01, "sl": 1, "tp": 2, "symbol": "XAUUSD"})
     assert enq["ok"] is True
     polled = client.get("/api/bridge/poll", headers={"Authorization": f"Bearer {token}"})
     assert polled.status_code == 200
