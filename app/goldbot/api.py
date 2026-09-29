@@ -982,6 +982,8 @@ async def cloud_status(authorization: str | None = Header(default=None), aurum_s
     metaapi.refresh_token()
     mt5_linux.refresh()
     st = _cloud_status_for_user(user["id"])
+    last_err = store.get_kv("metaapi_last_error")
+    live = bridge.is_live_execution() and desk.account.connected and desk.account.mode == "mt5"
     return {
         "ok": True,
         "metaapi_configured": metaapi.configured,
@@ -989,6 +991,9 @@ async def cloud_status(authorization: str | None = Header(default=None), aurum_s
         "region": settings.metaapi_region,
         "bridge": st,
         "account": desk.account.to_dict(),
+        "live_execution": live,
+        "real_orders_only": True,
+        "last_error": last_err,
         "signup_url": "https://app.metaapi.cloud/api-access/generate-token",
     }
 
