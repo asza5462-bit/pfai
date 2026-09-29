@@ -8,7 +8,9 @@ services:
   - type: web
     name: pfai-v8
     runtime: docker
-    plan: starter
+    # Standard = 2GB RAM / 1 CPU, no spin-down. Free sleeps after idle.
+    # Upgrade live service in Dashboard → Instance Type if still on free.
+    plan: standard
     region: oregon
     dockerfilePath: ./Dockerfile
     dockerContext: .
