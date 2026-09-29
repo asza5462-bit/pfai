@@ -75,11 +75,16 @@ class Bridge:
             self.mode = "mt5"
 
     def bind_metaapi(self, account_id: str, region: str | None = None) -> None:
-        self.metaapi_account_id = str(account_id or "").strip()
+        from goldbot.mt5.metaapi_cloud import is_metaapi_account_id, normalize_account_id
+
+        raw = str(account_id or "").strip()
+        self.metaapi_account_id = normalize_account_id(raw) if is_metaapi_account_id(raw) else ""
         self.metaapi_region = (region or settings.metaapi_region or "new-york").strip()
         if self.metaapi_account_id:
             self.mode = "mt5"
             self.execution = "metaapi"
+        elif raw:
+            log.warning("refusing to bind invalid metaapi account id %r", raw)
 
     def connect(self) -> AccountSnapshot:
         # 1) MetaApi cloud — primary real path (no Windows)
@@ -101,6 +106,23 @@ class Bridge:
                         server=str(snap.get("server") or settings.mt5_server),
                         login=int(snap.get("login") or settings.mt5_login or 0),
                         detail=str(snap.get("detail") or "MetaApi cloud"),
+                    )
+                # Corrupt / deleted MetaApi id — drop so ensure_account can recreate
+                if snap.get("stale") or snap.get("error") in {"E_BAD_ACCOUNT_ID", "E_NOT_FOUND", "NotFoundError"}:
+                    log.warning("clearing stale metaapi_account_id=%s", self.metaapi_account_id)
+                    self.metaapi_account_id = ""
+                    self.execution = ""
+                    return AccountSnapshot(
+                        balance=0.0,
+                        equity=0.0,
+                        margin=0.0,
+                        free_margin=0.0,
+                        currency="USD",
+                        mode="mt5",
+                        connected=False,
+                        server=settings.mt5_server or "Exness",
+                        login=int(settings.mt5_login or 0),
+                        detail=str(snap.get("detail") or "معرّف MetaApi تالف — أعد الربط الكامل"),
                     )
                 # fall through to Linux executor if MetaApi not yet connected
                 if not settings.prefer_mt5_linux:

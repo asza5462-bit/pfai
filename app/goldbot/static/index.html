@@ -162,7 +162,10 @@
         <button type="button" id="btnSaveLinux" class="primary">حفظ منفّذ Linux</button>
 
         <p id="cloudAccountLine" class="auth-note">معرّف الحساب: —</p>
-        <button type="button" id="btnRefreshBridge" class="ghost">تحديث / إعادة ربط</button>
+        <div class="cta" style="margin-top:0.75rem">
+          <button type="button" id="btnRefreshBridge" class="primary">تحديث / إعادة ربط</button>
+          <button type="button" id="btnResetCloud" class="ghost">إعادة ربط كامل</button>
+        </div>
         <p id="connectMsg" class="auth-msg"></p>
         <textarea id="agentCmd" class="hidden" rows="1" readonly aria-hidden="true"></textarea>
         <button type="button" id="btnCopyAgent" class="hidden" aria-hidden="true">نسخ</button>

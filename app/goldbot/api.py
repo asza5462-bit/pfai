@@ -16,7 +16,13 @@ from goldbot.auth.users import SESSION_COOKIE, AuthError, auth
 from goldbot.config import settings
 from goldbot.execution.desk import desk
 from goldbot.mt5.bridge import bridge
-from goldbot.mt5.metaapi_cloud import MetaApiError, metaapi
+from goldbot.mt5.metaapi_cloud import (
+    MetaApiError,
+    arabic_metaapi_error,
+    is_metaapi_account_id,
+    metaapi,
+    normalize_account_id,
+)
 from goldbot.mt5.mt5_linux import Mt5LinuxError, mt5_linux
 from goldbot.mt5.remote_hub import EXNESS_SERVERS, hub
 from goldbot.storage.state import store
@@ -305,14 +311,12 @@ async def mt5_login(body: Mt5LoginBody, response: Response):
                     "حدّث الحالة خلال دقيقة ثم ابدأ التداول."
                 )
         except MetaApiError as e:
+            # Clear corrupt MetaApi ids (e.g. numeric 1215) so next attempt recreates
+            if "not found" in (e.message or "").lower() or e.code in {"E_BAD_ACCOUNT_ID", "NotFoundError"}:
+                auth.update_settings(user["id"], {"metaapi_account_id": "", "execution": ""})
+                bridge.metaapi_account_id = ""
             cloud = {"ok": False, "configured": True, "error": e.message, "code": e.code, "details": e.details}
-            # Map broker auth errors clearly
-            if e.code in {"E_AUTH", "ValidationError"} or "authenticate" in (e.message or "").lower():
-                message = "رفض الوسيط بيانات Exness — تحقق من الرقم وكلمة المرور والسيرفر."
-            elif e.code == "NO_TOKEN":
-                message = e.message
-            else:
-                message = f"تعذّر الربط السحابي: {e.message}"
+            message = arabic_metaapi_error(e)
             store.log_event("metaapi_login_error", {"user": user["username"], "error": e.message, "code": e.code})
     else:
         message = (
@@ -359,7 +363,12 @@ async def mt5_login(body: Mt5LoginBody, response: Response):
 
 def _cloud_status_for_user(user_id: int) -> dict:
     secrets = auth.mt5_secrets(user_id)
-    account_id = secrets.get("metaapi_account_id") or bridge.metaapi_account_id
+    raw_id = secrets.get("metaapi_account_id") or bridge.metaapi_account_id
+    account_id = normalize_account_id(raw_id) if is_metaapi_account_id(raw_id) else ""
+    if raw_id and not account_id:
+        # Heal corrupt ids like "1215" immediately
+        auth.update_settings(user_id, {"metaapi_account_id": ""})
+        bridge.metaapi_account_id = ""
     region = secrets.get("metaapi_region") or bridge.metaapi_region or settings.metaapi_region
     metaapi.refresh_token()
     mt5_linux.refresh()
@@ -367,6 +376,18 @@ def _cloud_status_for_user(user_id: int) -> dict:
         if bridge.metaapi_account_id != account_id:
             bridge.bind_metaapi(account_id, region)
         snap = metaapi.snapshot(account_id, region=region or None)
+        if snap.get("stale"):
+            auth.update_settings(user_id, {"metaapi_account_id": ""})
+            bridge.metaapi_account_id = ""
+            return {
+                "online": False,
+                "execution": "pending",
+                "provider": "metaapi",
+                "account_id": "",
+                "stale": True,
+                "detail": snap.get("detail") or "معرّف الحساب تالف — أعد الربط الكامل",
+                "windows_required": False,
+            }
         online = bool(snap.get("connected"))
         if online or not mt5_linux.configured:
             return {
@@ -548,9 +569,42 @@ async def start_desk(authorization: str | None = Header(default=None), aurum_ses
         settings.mt5_server = secrets["server"]
         settings.symbol = secrets.get("symbol") or settings.symbol
         bridge.bind_remote_user(user["id"])
-        if secrets.get("metaapi_account_id"):
-            bridge.bind_metaapi(secrets["metaapi_account_id"], secrets.get("metaapi_region"))
+        raw_cloud_id = secrets.get("metaapi_account_id") or ""
+        if raw_cloud_id and not is_metaapi_account_id(raw_cloud_id):
+            auth.update_settings(user["id"], {"metaapi_account_id": ""})
+            bridge.metaapi_account_id = ""
+            raw_cloud_id = ""
+        if raw_cloud_id:
+            bridge.bind_metaapi(raw_cloud_id, secrets.get("metaapi_region"))
         desk.account = bridge.connect()
+        # Auto-heal: stale MetaApi id cleared by connect → re-provision once
+        if not desk.account.connected and metaapi.configured and secrets.get("password"):
+            try:
+                cloud = metaapi.ensure_account(
+                    str(secrets["login"]),
+                    secrets["password"],
+                    secrets["server"],
+                    symbol=secrets.get("symbol") or settings.symbol,
+                    existing_id=bridge.metaapi_account_id or None,
+                    wait=True,
+                )
+                auth.update_settings(
+                    user["id"],
+                    {
+                        "metaapi_account_id": cloud["account_id"],
+                        "metaapi_region": cloud.get("region") or settings.metaapi_region,
+                        "execution": "metaapi",
+                    },
+                )
+                bridge.bind_metaapi(cloud["account_id"], cloud.get("region"))
+                desk.account = bridge.connect()
+            except MetaApiError as e:
+                return {
+                    "ok": False,
+                    "error": e.code or "metaapi",
+                    "message": arabic_metaapi_error(e),
+                    "bridge": _cloud_status_for_user(user["id"]),
+                }
     if desk.risk.state.halted:
         return {
             "ok": False,
@@ -842,8 +896,26 @@ async def cloud_save_token(
     }
 
 
+class CloudReconnectBody(BaseModel):
+    force_new: bool = False  # drop saved MetaApi account id and recreate
+
+
+@app.post("/api/cloud/reset")
+async def cloud_reset(authorization: str | None = Header(default=None), aurum_session: str | None = Cookie(default=None, alias=SESSION_COOKIE)):
+    """Clear corrupt MetaApi account id and force a fresh cloud terminal."""
+    user = require_user(authorization, aurum_session)
+    auth.update_settings(user["id"], {"metaapi_account_id": "", "execution": ""})
+    bridge.metaapi_account_id = ""
+    bridge.execution = ""
+    return await cloud_reconnect(CloudReconnectBody(force_new=True), authorization, aurum_session)
+
+
 @app.post("/api/cloud/reconnect")
-async def cloud_reconnect(authorization: str | None = Header(default=None), aurum_session: str | None = Cookie(default=None, alias=SESSION_COOKIE)):
+async def cloud_reconnect(
+    body: CloudReconnectBody = CloudReconnectBody(),
+    authorization: str | None = Header(default=None),
+    aurum_session: str | None = Cookie(default=None, alias=SESSION_COOKIE),
+):
     """Re-provision MetaApi and/or probe Linux MT5 executor."""
     user = require_user(authorization, aurum_session)
     metaapi.refresh_token()
@@ -854,7 +926,13 @@ async def cloud_reconnect(authorization: str | None = Header(default=None), auru
         settings.mt5_login = secrets["login"]
         settings.mt5_password = secrets["password"]
         settings.mt5_server = secrets["server"]
+        settings.symbol = secrets.get("symbol") or settings.symbol
         bridge.bind_remote_user(user["id"])
+
+    existing_id = None if body.force_new else (secrets.get("metaapi_account_id") or None)
+    if existing_id and not is_metaapi_account_id(existing_id):
+        existing_id = None
+        auth.update_settings(user["id"], {"metaapi_account_id": ""})
 
     cloud = None
     if metaapi.configured and secrets.get("login") and secrets.get("password"):
@@ -863,8 +941,8 @@ async def cloud_reconnect(authorization: str | None = Header(default=None), auru
                 str(secrets["login"]),
                 secrets["password"],
                 secrets["server"],
-                symbol=secrets.get("symbol") or "XAUUSD",
-                existing_id=secrets.get("metaapi_account_id") or None,
+                symbol=secrets.get("symbol") or "XAUUSDm",
+                existing_id=existing_id,
                 wait=True,
             )
             auth.update_settings(
@@ -878,24 +956,55 @@ async def cloud_reconnect(authorization: str | None = Header(default=None), auru
             )
             bridge.bind_metaapi(cloud["account_id"], cloud.get("region"))
         except MetaApiError as e:
-            # try Linux path before failing hard
-            if not mt5_linux.configured:
-                raise HTTPException(400, e.message)
-            store.log_event("metaapi_reconnect_error", {"error": e.message})
+            if "not found" in (e.message or "").lower() or e.code in {"E_BAD_ACCOUNT_ID", "NotFoundError"}:
+                auth.update_settings(user["id"], {"metaapi_account_id": ""})
+                bridge.metaapi_account_id = ""
+                # one automatic retry without stale id
+                try:
+                    cloud = metaapi.ensure_account(
+                        str(secrets["login"]),
+                        secrets["password"],
+                        secrets["server"],
+                        symbol=secrets.get("symbol") or "XAUUSDm",
+                        existing_id=None,
+                        wait=True,
+                    )
+                    auth.update_settings(
+                        user["id"],
+                        {
+                            "metaapi_account_id": cloud["account_id"],
+                            "metaapi_region": cloud.get("region") or settings.metaapi_region,
+                            "execution": "metaapi",
+                            "mode": "mt5",
+                        },
+                    )
+                    bridge.bind_metaapi(cloud["account_id"], cloud.get("region"))
+                except MetaApiError as e2:
+                    if not mt5_linux.configured:
+                        raise HTTPException(400, arabic_metaapi_error(e2))
+            elif not mt5_linux.configured:
+                raise HTTPException(400, arabic_metaapi_error(e))
+            store.log_event("metaapi_reconnect_error", {"error": e.message, "code": e.code})
 
     desk.account = bridge.connect()
     if not desk.account.connected and not metaapi.configured and not mt5_linux.configured:
         raise HTTPException(503, "فعّل MetaApi أو منفّذ Linux Docker من تبويب الربط")
+    started = None
+    if desk.account.connected:
+        if desk.risk.state.halted:
+            desk.risk.reset_day(desk.account.equity or settings.paper_balance, note="reconnect_reset")
+        started = desk.start_desk()
     return {
         "ok": True,
         "cloud": cloud,
         "bridge": _cloud_status_for_user(user["id"]),
         "account": desk.account.to_dict(),
         "user": auth.public_user(user["id"]),
+        "started": started,
         "message": (
-            "متصل للتنفيذ الحقيقي"
+            "متصل للتنفيذ الحقيقي على Exness"
             if desk.account.connected
-            else "الربط محفوظ — أكمل تسجيل Exness على المنفّذ (VNC) أو انتظر MetaApi"
+            else "الربط جارٍ — إن استمر الفشل اضغط «إعادة ربط كامل»"
         ),
     }
 

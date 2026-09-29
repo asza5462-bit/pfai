@@ -1,17 +1,22 @@
 # منفّذ Exness على Linux (بدون Windows)
 
-Exness لا توفّر REST API عام. هذا المجلد يشغّل MetaTrader 5 داخل Docker/Wine على Linux ويعرّض REST لـ AURUM.
+Exness لا توفّر REST API عام. هذا المجلد يبني MetaTrader 5 داخل Docker/Wine على Linux ويعرّض REST لـ AURUM.
 
-## الخطوات
+## إعداد سريع
 
-1. على أي سيرفر Linux x86_64 مع Docker:
-   ```bash
-   cp .env.example .env
-   # عدّل VNC_PASSWORD
-   docker compose up -d
-   ```
-2. افتح `http://IP:3000` وسجّل دخول حساب Exness/MT5 مرة واحدة.
-3. في AURUM → تبويب الربط → الصق `http://IP:5001` واحفظ منفّذ Linux.
-4. ابدأ التداول من التطبيق.
+```bash
+cd deploy/mt5-linux
+chmod +x setup.sh
+./setup.sh
+```
 
-البديل الأسهل بدون VPS: توكن MetaApi (حساب واحد مجاني تقريباً) من https://app.metaapi.cloud
+1. افتح `http://IP:3000` وسجّل دخول حساب Exness/MT5 مرة واحدة.
+2. في AURUM → تبويب الربط → الصق `http://IP:5001`.
+3. ابدأ التداول من التطبيق.
+
+أول إقلاع قد يستغرق 10–15 دقيقة (تحميل MT5 + Wine).
+
+## البديل الأسهل (بدون VPS)
+
+1. افتح https://app.metaapi.cloud/api-access/generate-token
+2. الصق التوكن في AURUM — يتم الربط التلقائي بحساب Exness المحفوظ.

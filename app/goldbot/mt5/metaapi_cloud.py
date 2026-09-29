@@ -8,11 +8,13 @@ from __future__ import annotations
 
 import json
 import logging
+import re
 import secrets
 import time
 import urllib.error
 import urllib.request
 from typing import Any, Callable
+from uuid import UUID
 
 from goldbot.config import settings
 
@@ -20,6 +22,59 @@ log = logging.getLogger("aurum.metaapi")
 
 PROVISIONING_BASE = "https://mt-provisioning-api-v1.agiliumtrade.agiliumtrade.ai"
 CLIENT_HOST = "https://mt-client-api-v1.{region}.agiliumtrade.ai"
+_HEX32 = re.compile(r"^[0-9a-fA-F]{32}$")
+
+
+def is_metaapi_account_id(value: str | None) -> bool:
+    """MetaApi account ids are UUIDs (with/without dashes). Reject bare numbers like 1215."""
+    s = str(value or "").strip()
+    if not s or s.isdigit():
+        return False
+    try:
+        UUID(s)
+        return True
+    except Exception:
+        pass
+    if _HEX32.match(s):
+        return True
+    return False
+
+
+def normalize_account_id(value: str | None) -> str:
+    s = str(value or "").strip()
+    if not s:
+        return ""
+    if _HEX32.match(s):
+        return f"{s[0:8]}-{s[8:12]}-{s[12:16]}-{s[16:20]}-{s[20:32]}".lower()
+    try:
+        return str(UUID(s))
+    except Exception:
+        return s if is_metaapi_account_id(s) else ""
+
+
+def arabic_metaapi_error(exc: MetaApiError | Exception) -> str:
+    msg = str(getattr(exc, "message", None) or exc)
+    code = str(getattr(exc, "code", "") or "")
+    low = msg.lower()
+    # "Trading account with id: 1215 not found (...)" and similar MetaApi payloads
+    if (
+        "not found" in low
+        or "trading account with id" in low
+        or code in {"NotFoundError", "E_NOT_FOUND", "E_BAD_ACCOUNT_ID"}
+    ):
+        return (
+            "حساب MetaApi السحابي غير موجود أو تالف. "
+            "اضغط «إعادة ربط كامل» من تبويب الربط ليُنشأ من جديد."
+        )
+    if code in {"E_AUTH"} or "authenticate" in low or "invalid account" in low:
+        return "رفض Exness بيانات الدخول — تحقق من الرقم وكلمة مرور التداول والسيرفر (مثل Exness-MT5Trial15)."
+    if code == "NO_TOKEN" or "metaapi_token" in low or "لا يوجد" in msg and "token" in low:
+        return "توكن MetaApi غير مضبوط — الصقه من شاشة الدخول أو تبويب الربط."
+    if "timeout" in low or code == "NETWORK":
+        return "انتهت مهلة الاتصال بـ MetaApi — أعد المحاولة بعد ثوانٍ."
+    if "password" in low and "change" in low:
+        return "Exness يطلب تغيير كلمة المرور — غيّرها من التطبيق الرسمي ثم أعد الربط."
+    return f"تعذّر الربط السحابي: {msg}"
 
 SUCCESS_CODES = {
     0,
@@ -190,19 +245,53 @@ class MetaApiCloud:
         return []
 
     def get_account(self, account_id: str) -> dict:
-        data = self._http("GET", self._prov_url(f"/users/current/accounts/{account_id}"))
+        aid = normalize_account_id(account_id)
+        if not aid:
+            raise MetaApiError(
+                f"معرّف حساب MetaApi غير صالح: {account_id!r}",
+                code="E_BAD_ACCOUNT_ID",
+                status=400,
+            )
+        data = self._http("GET", self._prov_url(f"/users/current/accounts/{aid}"))
         if not isinstance(data, dict):
             raise MetaApiError("invalid account response", code="BAD_RESPONSE")
+        # Never accept numeric error-shaped payloads as accounts
+        if data.get("error") and not is_metaapi_account_id(str(data.get("id") or "")):
+            raise MetaApiError(
+                data.get("message") or "MetaApi account error",
+                code=str(data.get("error")),
+                status=404,
+                details=data,
+            )
         return data
 
     def find_account_by_login(self, login: str, server: str | None = None) -> dict | None:
         login_s = str(login).strip()
         server_s = (server or "").strip().lower()
         for acc in self.list_accounts():
+            if not isinstance(acc, dict):
+                continue
+            acc_id = normalize_account_id(str(acc.get("id") or acc.get("accountId") or ""))
+            if not acc_id:
+                continue
             if str(acc.get("login") or "").strip() != login_s:
                 continue
             if server_s and str(acc.get("server") or "").strip().lower() != server_s:
                 continue
+            acc = dict(acc)
+            acc["id"] = acc_id
+            return acc
+        # Fallback: match login only (server name variants)
+        for acc in self.list_accounts():
+            if not isinstance(acc, dict):
+                continue
+            if str(acc.get("login") or "").strip() != login_s:
+                continue
+            acc_id = normalize_account_id(str(acc.get("id") or acc.get("accountId") or ""))
+            if not acc_id:
+                continue
+            acc = dict(acc)
+            acc["id"] = acc_id
             return acc
         return None
 
@@ -246,9 +335,19 @@ class MetaApiCloud:
                     transaction_id=tx,
                     timeout=90,
                 )
-                if isinstance(data, dict) and data.get("id"):
+                if isinstance(data, dict) and is_metaapi_account_id(str(data.get("id") or "")):
+                    data = dict(data)
+                    data["id"] = normalize_account_id(str(data["id"]))
                     return data
-                raise MetaApiError("create returned no account id", details=data)
+                # Reject numeric error ids (e.g. ValidationError id: 3 / 1215)
+                if isinstance(data, dict) and data.get("error"):
+                    raise MetaApiError(
+                        data.get("message") or "create failed",
+                        code=str(data.get("error")),
+                        status=400,
+                        details=data,
+                    )
+                raise MetaApiError("create returned no valid account id", details=data)
             except MetaApiError as e:
                 last_err = e
                 if e.code == "E_RESOURCE_SLOTS" and isinstance(e.details, dict):
@@ -330,26 +429,40 @@ class MetaApiCloud:
         """Find or create cloud account; optionally wait until CONNECTED."""
         if not self.configured:
             raise MetaApiError(
-                "METAAPI_TOKEN غير مضبوط — أضفه في Render لربط Exness من السحابة بدون Windows",
+                "METAAPI_TOKEN غير مضبوط — أضفه في التطبيق لربط Exness من السحابة بدون Windows",
                 code="NO_TOKEN",
                 status=503,
             )
 
         acc = None
-        if existing_id:
+        existing = normalize_account_id(existing_id) if is_metaapi_account_id(existing_id) else ""
+        if existing_id and not existing:
+            log.warning("ignoring invalid metaapi_account_id=%r", existing_id)
+        if existing:
             try:
-                acc = self.get_account(existing_id)
-            except MetaApiError:
+                acc = self.get_account(existing)
+            except MetaApiError as e:
+                log.warning("stale metaapi account %s: %s — will recreate", existing, e.message)
                 acc = None
         if not acc:
             acc = self.find_account_by_login(login, server)
         if not acc:
             created = self.create_account(login, password, server, symbol=symbol)
-            account_id = str(created["id"])
-            acc = self.get_account(account_id)
+            account_id = normalize_account_id(str(created["id"]))
+            if not account_id:
+                raise MetaApiError("MetaApi أعاد معرّفاً غير صالح بعد الإنشاء", code="E_BAD_ACCOUNT_ID")
+            try:
+                acc = self.get_account(account_id)
+            except MetaApiError as e:
+                # Race: account created but not yet readable — use create payload
+                if "not found" in (e.message or "").lower():
+                    acc = {"id": account_id, "state": created.get("state") or "DEPLOYED", "login": login, "server": server}
+                else:
+                    raise
         else:
-            account_id = str(acc["id"])
-            # Update password if account already exists (best-effort)
+            account_id = normalize_account_id(str(acc.get("id") or ""))
+            if not account_id:
+                raise MetaApiError("الحساب الموجود بلا معرّف UUID صالح", code="E_BAD_ACCOUNT_ID")
             try:
                 self._http(
                     "PUT",
@@ -360,7 +473,17 @@ class MetaApiCloud:
             except MetaApiError as e:
                 log.info("password update skipped: %s", e.message)
 
-        acc = self.ensure_deployed(account_id)
+        try:
+            acc = self.ensure_deployed(account_id)
+        except MetaApiError as e:
+            if "not found" in (e.message or "").lower():
+                # Force fresh create once
+                created = self.create_account(login, password, server, symbol=symbol)
+                account_id = normalize_account_id(str(created["id"]))
+                acc = self.ensure_deployed(account_id)
+            else:
+                raise
+
         connected = False
         if wait:
             acc = self.wait_connected(account_id, timeout=float(settings.metaapi_connect_timeout))
@@ -374,6 +497,8 @@ class MetaApiCloud:
             connected = status == "CONNECTED"
 
         region = str(acc.get("region") or self.region)
+        if region:
+            self.region = region
         return {
             "ok": True,
             "account_id": account_id,
@@ -384,6 +509,7 @@ class MetaApiCloud:
             "login": acc.get("login") or login,
             "server": acc.get("server") or server,
             "raw": acc,
+            "healed": bool(existing_id and existing_id != account_id),
         }
 
     def account_information(self, account_id: str, region: str | None = None) -> dict:
@@ -534,9 +660,8 @@ class MetaApiCloud:
 
     def snapshot(self, account_id: str, region: str | None = None) -> dict:
         """Normalized account snapshot for the desk."""
-        try:
-            info = self.account_information(account_id, region=region)
-        except MetaApiError as e:
+        aid = normalize_account_id(account_id)
+        if not aid:
             return {
                 "connected": False,
                 "balance": 0.0,
@@ -546,8 +671,26 @@ class MetaApiCloud:
                 "currency": "USD",
                 "server": "",
                 "login": 0,
-                "detail": e.message,
-                "error": e.code,
+                "detail": "معرّف حساب MetaApi تالف — أعد الربط الكامل",
+                "error": "E_BAD_ACCOUNT_ID",
+                "stale": True,
+            }
+        try:
+            info = self.account_information(aid, region=region)
+        except MetaApiError as e:
+            stale = "not found" in (e.message or "").lower() or e.status == 404
+            return {
+                "connected": False,
+                "balance": 0.0,
+                "equity": 0.0,
+                "margin": 0.0,
+                "free_margin": 0.0,
+                "currency": "USD",
+                "server": "",
+                "login": 0,
+                "detail": arabic_metaapi_error(e),
+                "error": e.code or ("E_NOT_FOUND" if stale else "ERROR"),
+                "stale": stale,
             }
         return {
             "connected": True,

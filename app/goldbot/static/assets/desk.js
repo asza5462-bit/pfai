@@ -231,14 +231,19 @@
     }
   }
 
-  async function refreshBridge() {
+  async function refreshBridge(forceNew = false) {
     try {
-      const j = await api("/api/cloud/reconnect", { method: "POST" });
+      const path = forceNew ? "/api/cloud/reset" : "/api/cloud/reconnect";
+      const j = await api(path, {
+        method: "POST",
+        body: JSON.stringify(forceNew ? {} : { force_new: false }),
+      });
       setBridgeUI(j.bridge || j.cloud, null, null, true);
       if (j.account) {
         $("equity").textContent = Number(j.account.equity || 0).toFixed(2);
         $("modePill").textContent = j.account.mode || "mt5";
       }
+      if (j.started && j.started.scan) render(j.started.scan);
       if ($("connectMsg")) {
         $("connectMsg").textContent = j.message || "";
         $("connectMsg").classList.toggle("ok", !!(j.account && j.account.connected));
@@ -252,6 +257,14 @@
         $("connectMsg").classList.remove("ok");
       }
     }
+  }
+
+  if ($("btnResetCloud")) {
+    $("btnResetCloud").onclick = async () => {
+      if (!confirm("إعادة إنشاء الطرفية السحابية بالكامل؟")) return;
+      $("connectMsg").textContent = "جاري إعادة الربط الكامل…";
+      await refreshBridge(true);
+    };
   }
 
   if ($("btnSaveMetaToken")) {
@@ -334,7 +347,7 @@
       try {
         render(await api("/api/scan", { method: "POST" }));
         await loadTrades();
-        await refreshBridge();
+        await refreshCloudStatusOnly();
       } catch (e) {
         if (e.status === 401) enterLoggedOut();
       }
@@ -353,15 +366,21 @@
     setGate(true);
     $("userPill").textContent = u.username;
     if (extra.bridge_token || extra.agent_command || extra.bridge) {
-      setBridgeUI(extra.bridge, extra.bridge_token, extra.agent_command);
+      setBridgeUI(extra.bridge, extra.bridge_token, extra.agent_command, null, null);
     } else {
-      await refreshBridge();
+      await refreshCloudStatusOnly();
     }
     try { render(await api("/api/scan", { method: "POST" })); }
     catch { render(await fetch("/api/status").then((r) => r.json())); }
     await loadTrades();
     startTimers();
-    if (extra.message) alert(extra.message);
+    if (extra.message) {
+      showAuth(extra.message, !!(extra.account && extra.account.connected));
+      if ($("connectMsg")) {
+        $("connectMsg").textContent = extra.message;
+        $("connectMsg").classList.toggle("ok", !!(extra.account && extra.account.connected));
+      }
+    }
   }
 
   $("tabMt5").onclick = () => showTab("mt5");
@@ -461,11 +480,22 @@
   $("btnStart").onclick = async () => {
     try {
       const j = await api("/api/start", { method: "POST" });
-      if (!j.ok) return alert(j.message || j.error);
+      if (!j.ok) {
+        if ($("connectMsg")) { $("connectMsg").textContent = j.message || j.error; $("connectMsg").classList.remove("ok"); }
+        showAuth(j.message || j.error || "تعذّر البدء");
+        return;
+      }
       if (j.scan) render(j.scan);
       if (j.bridge) setBridgeUI(j.bridge);
-      alert(j.message || "بدأ");
-    } catch (e) { alert(e.message); }
+      showAuth(j.message || "بدأ التداول", true);
+    } catch (e) {
+      showAuth(e.message || "تعذّر البدء");
+      // Auto-heal common MetaApi stale account errors
+      if ((e.message || "").includes("not found") || (e.message || "").includes("تالف")) {
+        document.querySelector('.tabs button[data-tab="connect"]')?.click();
+        await refreshBridge(true);
+      }
+    }
   };
   $("btnStop").onclick = async () => {
     await api("/api/stop", { method: "POST" });

@@ -9,6 +9,9 @@ from goldbot.mt5.bridge import bridge
 from goldbot.mt5.metaapi_cloud import MetaApiCloud, MetaApiError
 
 
+FAKE_ACCOUNT_ID = "b3cd8053-0252-4dd8-a5aa-e4e4491e211f"
+
+
 class FakeMetaHttp:
     def __init__(self):
         self.accounts = {}
@@ -41,7 +44,7 @@ class FakeMetaHttp:
             if acc_id in self.accounts:
                 return self.accounts[acc_id]
         if method == "POST" and url.endswith("/users/current/accounts"):
-            acc_id = "acc-cloud-1"
+            acc_id = FAKE_ACCOUNT_ID
             self.accounts[acc_id] = {
                 "id": acc_id,
                 "login": body["login"],
@@ -67,21 +70,48 @@ class FakeMetaHttp:
         raise MetaApiError(f"unexpected {method} {url}", code="TEST")
 
 
+def test_account_id_validation():
+    from goldbot.mt5.metaapi_cloud import is_metaapi_account_id, normalize_account_id
+
+    assert is_metaapi_account_id("1215") is False
+    assert is_metaapi_account_id("55667788") is False
+    assert is_metaapi_account_id("b3cd805302524dd8a5aae4e4491e211f") is True
+    assert is_metaapi_account_id("b3cd8053-0252-4dd8-a5aa-e4e4491e211f") is True
+    assert normalize_account_id("b3cd805302524dd8a5aae4e4491e211f") == "b3cd8053-0252-4dd8-a5aa-e4e4491e211f"
+    assert normalize_account_id("1215") == ""
+
+
+def test_ensure_account_ignores_stale_numeric_id(monkeypatch):
+    monkeypatch.setattr("time.sleep", lambda *_: None)
+    fake = FakeMetaHttp()
+    client = MetaApiCloud(token="test-token", region="new-york", http=fake)
+    out = client.ensure_account(
+        "55667788",
+        "TradePass1",
+        "Exness-MT5Trial15",
+        existing_id="1215",  # corrupt id from production bug
+        wait=True,
+    )
+    assert out["ok"] is True
+    assert out["account_id"] == FAKE_ACCOUNT_ID
+    assert out["connected"] is True
+
+
 def test_metaapi_ensure_and_order(monkeypatch):
     monkeypatch.setattr("time.sleep", lambda *_: None)
     fake = FakeMetaHttp()
     client = MetaApiCloud(token="test-token", region="new-york", http=fake)
     out = client.ensure_account("55667788", "TradePass1", "Exness-MT5Trial", wait=True)
     assert out["ok"] is True
-    assert out["account_id"] == "acc-cloud-1"
+    assert out["account_id"] == FAKE_ACCOUNT_ID
     assert out["connected"] is True
     assert fake.created is True
 
-    snap = client.snapshot("acc-cloud-1")
+    snap = client.snapshot(FAKE_ACCOUNT_ID)
     assert snap["connected"] is True
     assert snap["equity"] == 5012.5
 
-    order = client.order_market("acc-cloud-1", "buy", 0.01, 2600.0, 2700.0, symbol="XAUUSD")
+    order = client.order_market(FAKE_ACCOUNT_ID, "buy", 0.01, 2600.0, 2700.0, symbol="XAUUSD")
     assert order["ok"] is True
     assert order["ticket"] == 77881
     assert order["mode"] == "metaapi"
@@ -163,13 +193,13 @@ def test_mt5_login_uses_metaapi_cloud(tmp_path, monkeypatch):
     body = login.json()
     assert body["ok"] is True
     assert body["execution"] == "metaapi"
-    assert body["cloud"]["account_id"] == "acc-cloud-1"
+    assert body["cloud"]["account_id"] == FAKE_ACCOUNT_ID
     assert body["account"]["connected"] is True
-    assert body["user"]["settings"]["metaapi_account_id"] == "acc-cloud-1"
+    assert body["user"]["settings"]["metaapi_account_id"] == FAKE_ACCOUNT_ID
     assert "بدون Windows" in (body.get("message") or "") or body["account"]["connected"]
 
     # Order goes through MetaApi
-    bridge.bind_metaapi("acc-cloud-1", "new-york")
+    bridge.bind_metaapi(FAKE_ACCOUNT_ID, "new-york")
     result = bridge.order_market("buy", 0.02, 2600, 2720, comment="TEST")
     assert result["ok"] is True
     assert result["execution"] == "metaapi"
