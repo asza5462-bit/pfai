@@ -68,14 +68,20 @@ def arabic_metaapi_error(exc: MetaApiError | Exception) -> str:
         )
     if code == "E_PROVISION_PENDING" or "قيد التجهيز" in msg or "جاري تجهيز" in msg:
         return "الطرفية السحابية قيد التجهيز — انتظر نصف دقيقة ثم اضغط «تحديث / إعادة ربط»."
-    if code in {"E_AUTH"} or "authenticate" in low or "invalid account" in low:
-        return "رفض Exness بيانات الدخول — تحقق من الرقم وكلمة مرور التداول والسيرفر (مثل Exness-MT5Trial15)."
-    if code == "NO_TOKEN" or "metaapi_token" in low or "لا يوجد" in msg and "token" in low:
-        return "توكن MetaApi غير مضبوط — الصقه من شاشة الدخول أو تبويب الربط."
+    if code in {"E_AUTH"} or "authenticate" in low or "invalid account" in low or "wrong password" in low:
+        return "رفض Exness بيانات الدخول — تحقق من الرقم وكلمة مرور التداول (وليس Investor) والسيرفر (مثل Exness-MT5Trial15)."
+    if "investor" in low:
+        return "كلمة مرور Investor لا تكفي — استخدم كلمة مرور التداول من Exness."
+    if "server" in low and ("not found" in low or "unknown" in low or "invalid" in low):
+        return "اسم السيرفر غير مطابق — انسخه حرفياً من Exness (مثال Exness-MT5Trial15)."
+    if code == "NO_TOKEN" or "metaapi_token" in low or ("لا يوجد" in msg and "token" in low) or "unauthorized" in low:
+        return "توكن MetaApi غير صالح أو غير محفوظ — الصقه مجدداً من تبويب الربط أو شاشة الدخول."
     if "timeout" in low or code == "NETWORK":
         return "انتهت مهلة الاتصال بـ MetaApi — أعد المحاولة بعد ثوانٍ."
     if "password" in low and "change" in low:
         return "Exness يطلب تغيير كلمة المرور — غيّرها من التطبيق الرسمي ثم أعد الربط."
+    if "resource" in low or code == "E_RESOURCE_SLOTS":
+        return "حساب MetaApi يحتاج موارد إضافية — أعد المحاولة أو رقِّ خطة MetaApi."
     return f"تعذّر الربط السحابي: {msg}"
 
 SUCCESS_CODES = {
@@ -362,6 +368,12 @@ class MetaApiCloud:
                     body["resourceSlots"] = slots
                     tx = secrets.token_hex(16)
                     continue
+                # Hard fail fast on credential / server problems — do not spin for minutes
+                msg = (e.message or "").lower()
+                if e.code in {"E_AUTH", "UnauthorizedError"} or any(
+                    x in msg for x in ("wrong password", "invalid password", "authenticate", "investor password")
+                ):
+                    raise
                 if e.code == "ACCEPTED" or e.status == 202:
                     wait = (3 + attempt * 2) if fast else (12 + attempt * 6)
                     log.info("metaapi create accepted, retry in %ss", wait)
@@ -371,7 +383,6 @@ class MetaApiCloud:
                     if found and is_metaapi_account_id(str(found.get("id") or "")):
                         return found
                     continue
-                msg = (e.message or "").lower()
                 if "retry" in msg or "in progress" in msg or "detection" in msg:
                     time.sleep((4 + attempt * 2) if fast else (15 + attempt * 5))
                     found = self.find_account_by_login(login, server)

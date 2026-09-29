@@ -235,10 +235,36 @@
     renderTrades(j.trades || [], $("tradesFull"));
   }
 
+  function applyProvisionUI(j) {
+    const prov = (j && j.provision) || {};
+    const live = !!(j && j.live_execution);
+    const online = !!(j && j.bridge && j.bridge.online);
+    if (!$("connectMsg")) return;
+    if (live || online) {
+      $("connectMsg").textContent = (prov.message) || "متصل بسحابة Exness — التنفيذ الحقيقي جاهز";
+      $("connectMsg").classList.add("ok");
+      return;
+    }
+    if (prov.status === "error" || (j && j.last_error && j.last_error.error && prov.status !== "pending")) {
+      const err = prov.message || (j.last_error && j.last_error.error) || "فشل الربط السحابي";
+      $("connectMsg").textContent = err;
+      $("connectMsg").classList.remove("ok");
+      return;
+    }
+    if (prov.status === "pending" && prov.message) {
+      $("connectMsg").textContent = prov.message;
+      $("connectMsg").classList.remove("ok");
+    }
+  }
+
   async function refreshCloudStatusOnly() {
     try {
       const j = await api("/api/cloud/status");
       setBridgeUI(j.bridge || j.cloud, null, null, j.metaapi_configured, j.mt5_linux_configured);
+      if (j.account) {
+        $("equity").textContent = Number(j.account.equity || 0).toFixed(2);
+      }
+      applyProvisionUI(j);
       return j;
     } catch (_) {
       const j = await api("/api/bridge/status");
@@ -381,10 +407,16 @@
     user = u;
     setGate(true);
     $("userPill").textContent = u.username;
-    if (extra.bridge_token || extra.agent_command || extra.bridge) {
-      setBridgeUI(extra.bridge, extra.bridge_token, extra.agent_command, null, null);
-    } else {
-      await refreshCloudStatusOnly();
+    await loadWays();
+    try {
+      const st = await refreshCloudStatusOnly();
+      if (extra.bridge) {
+        setBridgeUI(extra.bridge, extra.bridge_token, extra.agent_command, st && st.metaapi_configured, st && st.mt5_linux_configured);
+      }
+    } catch (_) {
+      if (extra.bridge_token || extra.agent_command || extra.bridge) {
+        setBridgeUI(extra.bridge, extra.bridge_token, extra.agent_command, true, null);
+      }
     }
     try { render(await api("/api/scan", { method: "POST" })); }
     catch { render(await fetch("/api/status").then((r) => r.json())); }

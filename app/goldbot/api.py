@@ -6,6 +6,7 @@ import os
 import threading
 from contextlib import asynccontextmanager
 from pathlib import Path
+from typing import Any
 
 from fastapi import Cookie, FastAPI, Header, HTTPException, Query, Response
 from fastapi.responses import FileResponse, JSONResponse
@@ -32,6 +33,40 @@ log = logging.getLogger("aurum.api")
 STATIC = Path(__file__).resolve().parent / "static"
 _bg_lock = threading.Lock()
 _bg_jobs: set[str] = set()
+
+
+def _set_provision_state(status: str, message: str, **extra: Any) -> None:
+    import time as _time
+
+    payload = {
+        "status": status,  # pending | ok | error
+        "message": message,
+        "ts": _time.time(),
+        **extra,
+    }
+    store.set_kv("metaapi_provision_state", payload)
+    if status == "error":
+        store.set_kv("metaapi_last_error", {"error": message, "code": extra.get("code"), "ts": payload["ts"]})
+
+
+def _get_provision_state() -> dict:
+    import time as _time
+
+    st = store.get_kv("metaapi_provision_state") or {}
+    if not isinstance(st, dict):
+        return {}
+    # Stale pending older than 3 minutes → surface as error so UI is not stuck forever
+    if st.get("status") == "pending" and (_time.time() - float(st.get("ts") or 0)) > 180:
+        return {
+            **st,
+            "status": "error",
+            "message": (
+                st.get("message")
+                or "انتهت مهلة تجهيز الطرفية السحابية. تحقق من كلمة مرور التداول والسيرفر ثم اضغط «إعادة ربط كامل»."
+            ),
+            "stale": True,
+        }
+    return st
 
 
 def _apply_cloud_binding(user_id: int, cloud: dict) -> None:
@@ -64,6 +99,7 @@ def _finish_cloud_in_background(
 
     def _run() -> None:
         try:
+            _set_provision_state("pending", "جاري إكمال اتصال MetaApi بـ Exness…", login=login, server=server)
             cloud = metaapi.ensure_account(
                 str(login),
                 password,
@@ -76,6 +112,20 @@ def _finish_cloud_in_background(
             )
             _apply_cloud_binding(user_id, cloud)
             desk.account = bridge.connect()
+            if desk.account.connected:
+                _set_provision_state(
+                    "ok",
+                    "متصل بسحابة Exness — التنفيذ الحقيقي جاهز",
+                    account_id=cloud["account_id"],
+                    connected=True,
+                )
+            else:
+                _set_provision_state(
+                    "pending",
+                    "الطرفية أُنشئت وبانتظار اتصال الوسيط — حدّث خلال 30 ثانية",
+                    account_id=cloud["account_id"],
+                    connected=False,
+                )
             if desk.account.connected and not desk.auto_trade:
                 if desk.risk.state.halted:
                     desk.risk.reset_day(desk.account.equity or settings.paper_balance, note="bg_cloud_ready")
@@ -88,7 +138,9 @@ def _finish_cloud_in_background(
                 {"user_id": user_id, "account_id": cloud["account_id"], "connected": cloud.get("connected")},
             )
         except Exception as e:
+            msg = arabic_metaapi_error(e) if isinstance(e, MetaApiError) else str(e)
             log.warning("background metaapi finish failed: %s", e)
+            _set_provision_state("error", msg, code=getattr(e, "code", None), login=login, server=server)
             store.log_event("metaapi_bg_error", {"user_id": user_id, "error": str(e)})
         finally:
             with _bg_lock:
@@ -109,6 +161,7 @@ def _provision_cloud_fast(
 ) -> dict:
     """Run MetaApi provisioning with a hard timeout so Render/Safari do not drop the request."""
     box: dict = {}
+    _set_provision_state("pending", "جاري إنشاء الطرفية السحابية على MetaApi…", login=login, server=server)
 
     def _call() -> None:
         try:
@@ -124,6 +177,16 @@ def _provision_cloud_fast(
             )
             _apply_cloud_binding(user_id, cloud)
             box["cloud"] = cloud
+            _set_provision_state(
+                "pending" if not cloud.get("connected") else "ok",
+                (
+                    "تم إنشاء الطرفية — جاري الاتصال بـ Exness…"
+                    if not cloud.get("connected")
+                    else "متصل بسحابة Exness — التنفيذ الحقيقي جاهز"
+                ),
+                account_id=cloud.get("account_id"),
+                connected=bool(cloud.get("connected")),
+            )
             if not cloud.get("connected"):
                 # Same thread finishes CONNECTED so a timed-out HTTP request still completes binding
                 try:
@@ -140,10 +203,25 @@ def _provision_cloud_fast(
                     _apply_cloud_binding(user_id, done)
                     desk.account = bridge.connect()
                     box["cloud"] = done
+                    _set_provision_state(
+                        "ok" if done.get("connected") or desk.account.connected else "pending",
+                        (
+                            "متصل بسحابة Exness — التنفيذ الحقيقي جاهز"
+                            if done.get("connected") or desk.account.connected
+                            else "الطرفية جاهزة وبانتظار اتصال الوسيط"
+                        ),
+                        account_id=done.get("account_id"),
+                        connected=bool(done.get("connected") or desk.account.connected),
+                    )
                 except Exception as e:
+                    msg = arabic_metaapi_error(e) if isinstance(e, MetaApiError) else str(e)
                     log.warning("post-provision connect: %s", e)
+                    _set_provision_state("error", msg, code=getattr(e, "code", None))
+                    box["error"] = e
         except Exception as e:
             box["error"] = e
+            msg = arabic_metaapi_error(e) if isinstance(e, MetaApiError) else str(e)
+            _set_provision_state("error", msg, code=getattr(e, "code", None), login=login, server=server)
 
     t = threading.Thread(target=_call, name=f"aurum-provision-{user_id}", daemon=True)
     t.start()
@@ -152,13 +230,12 @@ def _provision_cloud_fast(
     if "cloud" in box:
         cloud = box["cloud"]
         if not cloud.get("connected") and t.is_alive():
-            # Thread still finishing CONNECTED — HTTP can return pending
             cloud = dict(cloud)
             cloud["pending"] = True
         return cloud
 
     if t.is_alive():
-        # Creation still running; do not start a second job — this thread will persist when done
+        # Creation still running in THIS thread only — do not start a second job
         raise MetaApiError(
             "جاري تجهيز الطرفية السحابية — أكملنا الحفظ وستكتمل خلال دقيقة. حدّث من تبويب الربط.",
             code="E_PROVISION_PENDING",
@@ -454,15 +531,7 @@ async def mt5_login(body: Mt5LoginBody, response: Response):
             if e.code == "E_PROVISION_PENDING":
                 cloud = {"ok": True, "configured": True, "pending": True, "code": e.code}
                 message = e.message
-                # Keep finishing in background with saved credentials
-                _finish_cloud_in_background(
-                    user["id"],
-                    str(secrets["login"]),
-                    secrets["password"],
-                    secrets["server"],
-                    settings.symbol,
-                    secrets.get("metaapi_account_id") or "",
-                )
+                # The same provision thread is still running — do not start a duplicate job
             else:
                 cloud = {"ok": False, "configured": True, "error": e.message, "code": e.code, "details": e.details}
                 message = arabic_metaapi_error(e)
@@ -983,7 +1052,11 @@ async def cloud_status(authorization: str | None = Header(default=None), aurum_s
     mt5_linux.refresh()
     st = _cloud_status_for_user(user["id"])
     last_err = store.get_kv("metaapi_last_error")
+    provision = _get_provision_state()
     live = bridge.is_live_execution() and desk.account.connected and desk.account.mode == "mt5"
+    if live and provision.get("status") != "ok":
+        _set_provision_state("ok", "متصل بسحابة Exness — التنفيذ الحقيقي جاهز", connected=True)
+        provision = _get_provision_state()
     return {
         "ok": True,
         "metaapi_configured": metaapi.configured,
@@ -993,6 +1066,7 @@ async def cloud_status(authorization: str | None = Header(default=None), aurum_s
         "account": desk.account.to_dict(),
         "live_execution": live,
         "real_orders_only": True,
+        "provision": provision,
         "last_error": last_err,
         "signup_url": "https://app.metaapi.cloud/api-access/generate-token",
     }
