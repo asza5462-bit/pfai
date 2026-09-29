@@ -314,6 +314,50 @@ button.primary {
 }
 .auth-msg.ok { color: var(--bull); }
 
+.setup-steps {
+  margin: 0 0 0.85rem;
+  padding: 0.75rem 1rem 0.75rem 1.1rem;
+  list-style: none;
+  border: 1px solid var(--line);
+  background: rgba(255,255,255,0.35);
+  font-size: 0.86rem;
+  line-height: 1.55;
+  color: var(--mute);
+}
+.setup-steps li { margin: 0.35rem 0; }
+.setup-steps strong {
+  display: inline-flex;
+  width: 1.35rem;
+  height: 1.35rem;
+  align-items: center;
+  justify-content: center;
+  margin-left: 0.35rem;
+  background: rgba(200,162,74,0.22);
+  color: var(--ink);
+  font-size: 0.75rem;
+}
+.setup-steps a { color: var(--gold-deep); font-weight: 600; }
+.setup-steps code {
+  font-size: 0.8rem;
+  background: rgba(20,17,15,0.06);
+  padding: 0.05rem 0.3rem;
+}
+.setup-next {
+  margin: 0 0 1rem;
+  padding: 0.55rem 0.75rem;
+  background: rgba(200,162,74,0.18);
+  border-right: 3px solid var(--gold);
+  font-size: 0.9rem;
+  font-weight: 600;
+  color: var(--ink);
+}
+.auth-form .req {
+  color: var(--bear);
+  font-size: 0.75rem;
+  font-weight: 600;
+}
+.auth-note.tight { margin-top: -0.35rem; margin-bottom: 0.75rem; }
+
 .auth-note, .steps {
   color: var(--mute);
   font-size: 0.82rem;

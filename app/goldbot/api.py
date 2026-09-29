@@ -151,6 +151,7 @@ async def download_agent():
 @app.api_route("/health", methods=["GET", "HEAD"])
 async def health():
     metaapi.refresh_token()
+    mt5_linux.refresh()
     return {
         "ok": True,
         "product": PRODUCT_NAME,
@@ -161,8 +162,39 @@ async def health():
         "state": desk.state,
         "tick_seconds": settings.tick_seconds,
         "metaapi_configured": metaapi.configured,
+        "mt5_linux_configured": mt5_linux.configured,
         "execution": bridge.execution or desk.account.mode,
         "auth": {"needs_setup": auth.needs_setup(), "users": auth.user_count()},
+    }
+
+
+@app.get("/api/setup-next")
+async def setup_next():
+    """Public next-step guide for first-time Exness cloud connect."""
+    metaapi.refresh_token()
+    mt5_linux.refresh()
+    if desk.account.connected and desk.account.mode == "mt5":
+        step = "ready"
+        next_ar = "الحساب متصل — اضغط «ابدأ التداول» من المكتب."
+    elif metaapi.configured:
+        step = "exness_login"
+        next_ar = "التوكن محفوظ. أدخل رقم Exness + كلمة المرور + السيرفر (مثل Exness-MT5Trial15) ثم ارتباط."
+    elif mt5_linux.configured:
+        step = "exness_vnc_or_login"
+        next_ar = "منفّذ Linux مضبوط. سجّل Exness عبر VNC إن لزم، ثم ادخل من شاشة MT5."
+    else:
+        step = "metaapi_token"
+        next_ar = "الخطوة التالية: افتح رابط توليد التوكن، انسخه، والصقه في الحقل الأول ثم أدخل بيانات Exness."
+    return {
+        "ok": True,
+        "step": step,
+        "next_ar": next_ar,
+        "metaapi_configured": metaapi.configured,
+        "mt5_linux_configured": mt5_linux.configured,
+        "token_url": "https://app.metaapi.cloud/api-access/generate-token",
+        "default_server": "Exness-MT5Trial15",
+        "default_symbol": "XAUUSDm",
+        "version": __version__,
     }
 
 

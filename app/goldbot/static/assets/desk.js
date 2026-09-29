@@ -368,18 +368,44 @@
   $("tabLogin").onclick = () => showTab("login");
   $("tabRegister").onclick = () => showTab("register");
 
+  async function loadSetupNext() {
+    try {
+      const j = await fetch("/api/setup-next").then((r) => r.json());
+      if ($("setupNext")) $("setupNext").textContent = j.next_ar || "";
+      if (j.default_server && $("mt5Server") && !$("mt5Server").dataset.touched) {
+        $("mt5Server").value = j.default_server;
+      }
+      return j;
+    } catch (_) { return null; }
+  }
+
+  if ($("mt5Server")) {
+    $("mt5Server").addEventListener("input", () => { $("mt5Server").dataset.touched = "1"; });
+  }
+
   $("mt5FormLogin").onsubmit = async (e) => {
     e.preventDefault();
-    showAuth("جاري الارتباط بحساب Exness/MT5…");
+    const metaTok = ($("mt5MetaToken") && $("mt5MetaToken").value || "").trim();
+    const setup = await loadSetupNext();
+    if (!metaTok && !(setup && setup.metaapi_configured)) {
+      showAuth("الصق توكن MetaApi أولاً — افتح رابط «توليد التوكن» أعلاه");
+      if ($("mt5MetaToken")) $("mt5MetaToken").focus();
+      return;
+    }
+    const server = ($("mt5Server").value || "").trim();
+    if (!server.toLowerCase().includes("exness")) {
+      showAuth("تأكد من اسم السيرفر كما في Exness (مثال: Exness-MT5Trial15)");
+      return;
+    }
+    showAuth("جاري الارتباط السحابي بـ Exness… قد يستغرق حتى دقيقة");
     try {
-      const metaTok = ($("mt5MetaToken") && $("mt5MetaToken").value || "").trim();
       const j = await api("/api/auth/mt5-login", {
         method: "POST",
         body: JSON.stringify({
           mt5_login: $("mt5Login").value.trim(),
           mt5_password: $("mt5Pass").value,
-          mt5_server: $("mt5Server").value,
-          symbol: $("mt5Symbol").value.trim() || "XAUUSD",
+          mt5_server: server,
+          symbol: $("mt5Symbol").value.trim() || "XAUUSDm",
           auto_start: true,
           metaapi_token: metaTok || null,
         }),
@@ -462,6 +488,7 @@
   (async () => {
     await loadServers();
     await loadWays();
+    await loadSetupNext();
     showTab("mt5");
     try {
       const st = await api("/api/auth/status");

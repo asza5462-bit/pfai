@@ -16,7 +16,13 @@
   <section id="authGate" class="auth-gate">
     <div class="auth-card wide">
       <div class="brand-lock">AURUM</div>
-      <p class="auth-tag">Exness مباشر من التطبيق · سحابة MetaApi · بدون Windows</p>
+      <p class="auth-tag">Exness مباشر من التطبيق · بدون Windows</p>
+      <ol id="setupSteps" class="setup-steps">
+        <li><strong>١</strong> افتح <a href="https://app.metaapi.cloud/api-access/generate-token" target="_blank" rel="noopener">توليد توكن MetaApi</a> وانسخه</li>
+        <li><strong>٢</strong> الصق التوكن بالأسفل + بيانات Exness (السيرفر مثل <code>Exness-MT5Trial15</code>)</li>
+        <li><strong>٣</strong> اضغط «ارتباط سحابي» وانتظر «متصل»</li>
+      </ol>
+      <p id="setupNext" class="setup-next">الخطوة التالية: احصل على توكن MetaApi</p>
 
       <div class="auth-tabs">
         <button type="button" id="tabMt5" class="on">دخول Exness/MT5</button>
@@ -25,34 +31,32 @@
       </div>
 
       <form id="mt5FormLogin" class="auth-form">
+        <label>توكن MetaApi <span class="req">مطلوب لأول ربط</span>
+          <input id="mt5MetaToken" type="password" placeholder="الصق API token هنا" autocomplete="off" />
+        </label>
+        <p class="auth-note tight">
+          <a href="https://app.metaapi.cloud/api-access/generate-token" target="_blank" rel="noopener">اضغط هنا لفتح صفحة التوكن</a>
+          — سجّل ثم Generate / Copy
+        </p>
         <label>رقم حساب MetaTrader 5 / Exness
-          <input id="mt5Login" inputmode="numeric" required placeholder="مثال: 12345678" />
+          <input id="mt5Login" inputmode="numeric" required placeholder="من منطقة العميل في Exness" />
         </label>
-        <label>كلمة مرور MT5 (تداول)
-          <input id="mt5Pass" type="password" required minlength="4" placeholder="كلمة مرور الحساب" />
+        <label>كلمة مرور MT5 (تداول Investor غير كافية — استخدم كلمة التداول)
+          <input id="mt5Pass" type="password" required minlength="4" placeholder="كلمة مرور التداول" />
         </label>
-        <label>سيرفر Exness (كما يظهر في حسابك)
-          <input id="mt5Server" list="mt5ServerList" required placeholder="مثال: Exness-MT5Trial15" value="Exness-MT5Trial15" autocomplete="off" />
+        <label>سيرفر Exness (انسخه حرفياً من حسابك)
+          <input id="mt5Server" list="mt5ServerList" required placeholder="Exness-MT5Trial15" value="Exness-MT5Trial15" autocomplete="off" />
           <datalist id="mt5ServerList"></datalist>
         </label>
-        <label>رمز الذهب على Exness
+        <label>رمز الذهب
           <select id="mt5Symbol">
-            <option value="XAUUSDm" selected>XAUUSDm (الأكثر شيوعاً)</option>
+            <option value="XAUUSDm" selected>XAUUSDm</option>
             <option value="XAUUSD">XAUUSD</option>
             <option value="XAUUSDc">XAUUSDc</option>
             <option value="XAUUSDr">XAUUSDr</option>
           </select>
         </label>
-        <label>توكن MetaApi (مرة واحدة — من app.metaapi.cloud)
-          <input id="mt5MetaToken" type="password" placeholder="الصق API token هنا إن لم يُحفظ بعد" autocomplete="off" />
-        </label>
         <button type="submit" class="primary">ارتباط سحابي وابدأ التداول</button>
-        <p class="auth-note">
-          1) أنشئ حساباً على app.metaapi.cloud وانسخ التوكن ·
-          2) أدخل حساب Exness ·
-          3) التطبيق يربط وينفّذ مباشرة بدون Windows.
-          ابدأ بـ Trial قبل Real.
-        </p>
       </form>
 
       <form id="loginForm" class="auth-form hidden">
