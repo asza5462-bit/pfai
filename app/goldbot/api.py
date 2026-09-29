@@ -17,6 +17,7 @@ from goldbot.config import settings
 from goldbot.execution.desk import desk
 from goldbot.mt5.bridge import bridge
 from goldbot.mt5.metaapi_cloud import MetaApiError, metaapi
+from goldbot.mt5.mt5_linux import Mt5LinuxError, mt5_linux
 from goldbot.mt5.remote_hub import EXNESS_SERVERS, hub
 from goldbot.storage.state import store
 
@@ -26,14 +27,16 @@ STATIC = Path(__file__).resolve().parent / "static"
 
 @asynccontextmanager
 async def lifespan(_: FastAPI):
-    # Load MetaApi token from env or app-saved encrypted store (no Windows path)
+    # Load MetaApi token / Linux executor from env or app-saved store
     metaapi.refresh_token()
+    mt5_linux.refresh()
     desk.start_background()
     log.info(
-        "AURUM desk online mode=%s symbol=%s metaapi=%s",
+        "AURUM desk online mode=%s symbol=%s metaapi=%s mt5_linux=%s",
         settings.mode,
         settings.symbol,
         metaapi.configured,
+        mt5_linux.configured,
     )
     yield
     desk.stop_background()
@@ -68,6 +71,12 @@ class MetaApiTokenBody(BaseModel):
     token: str = Field(..., min_length=10, description="MetaApi auth token from app.metaapi.cloud")
     region: str | None = None
     check_token: bool = True
+
+
+class Mt5LinuxBody(BaseModel):
+    base_url: str = Field(..., min_length=8, description="https://your-linux-host:5001")
+    token: str = ""
+    probe: bool = True
 
 
 class AutoTradeBody(BaseModel):
@@ -311,37 +320,48 @@ def _cloud_status_for_user(user_id: int) -> dict:
     secrets = auth.mt5_secrets(user_id)
     account_id = secrets.get("metaapi_account_id") or bridge.metaapi_account_id
     region = secrets.get("metaapi_region") or bridge.metaapi_region or settings.metaapi_region
+    metaapi.refresh_token()
+    mt5_linux.refresh()
     if account_id and metaapi.configured:
-        # Rebind process bridge if needed
         if bridge.metaapi_account_id != account_id:
             bridge.bind_metaapi(account_id, region)
         snap = metaapi.snapshot(account_id, region=region or None)
         online = bool(snap.get("connected"))
+        if online or not mt5_linux.configured:
+            return {
+                "online": online,
+                "execution": "metaapi",
+                "provider": "metaapi",
+                "account_id": account_id,
+                "region": region,
+                "account": snap,
+                "detail": snap.get("detail") or ("متصل سحابياً" if online else "غير متصل"),
+                "windows_required": False,
+            }
+    if mt5_linux.configured:
+        snap = mt5_linux.snapshot()
+        online = bool(snap.get("connected"))
+        if online:
+            bridge.execution = "mt5_linux"
+            bridge.mode = "mt5"
         return {
             "online": online,
-            "execution": "metaapi",
-            "provider": "metaapi",
-            "account_id": account_id,
-            "region": region,
+            "execution": "mt5_linux",
+            "provider": "mt5_linux",
+            "base_url": mt5_linux.base_url,
             "account": snap,
-            "detail": snap.get("detail") or ("متصل سحابياً" if online else "غير متصل"),
+            "detail": snap.get("detail") or ("متصل عبر Linux Docker" if online else "منفّذ Linux غير متصل"),
             "windows_required": False,
         }
-    # Legacy windows status for fallback visibility
     st = hub.status_for_user(user_id)
     st = dict(st)
     st.setdefault("execution", "windows_bridge" if st.get("online") else "pending")
     st.setdefault("provider", "windows_bridge")
-    st.setdefault("windows_required", not metaapi.configured)
-    metaapi.refresh_token()
+    st.setdefault("windows_required", False)
     st.setdefault(
         "detail",
         st.get("detail")
-        or (
-            "الصق توكن MetaApi من تبويب الربط السحابي"
-            if not metaapi.configured
-            else "بانتظار إنشاء الطرفية السحابية"
-        ),
+        or "اختر: توكن MetaApi (سحابة) أو عنوان منفّذ Linux Docker — كلاهما بدون Windows",
     )
     return st
 
@@ -560,22 +580,67 @@ async def schools(authorization: str | None = Header(default=None), aurum_sessio
     }
 
 
-@app.get("/api/connect-guide")
-async def connect_guide():
+@app.get("/api/ways")
+async def execution_ways():
+    """Research-backed real paths to trade Exness without Windows."""
     metaapi.refresh_token()
+    mt5_linux.refresh()
     return {
-        "title": "ربط Exness المباشر من التطبيق (سحابة MetaApi)",
-        "steps": [
-            "أنشئ حساباً مجانياً على app.metaapi.cloud وانسخ API token.",
-            "الصق التوكن في شاشة الدخول أو تبويب الربط السحابي داخل AURUM.",
-            "أدخل رقم حساب Exness/MT5 + كلمة المرور + السيرفر.",
-            "عندما تظهر «متصل سحابياً» يبدأ التنفيذ الحقيقي من التطبيق بدون Windows.",
-            "ابدأ Demo (Exness-MT5Trial) قبل Real.",
+        "ok": True,
+        "finding_ar": (
+            "Exness لا توفّر REST API عام للأفراد. التنفيذ الحقيقي يتم فقط عبر طرفية MetaTrader 5. "
+            "بدون Windows يتوفر مساران مؤكدان."
+        ),
+        "ways": [
+            {
+                "id": "metaapi",
+                "title_ar": "MetaApi سحابي (الأسهل)",
+                "windows_required": False,
+                "cost": "حساب MT واحد مجاني تقريباً + تجربة",
+                "ready": metaapi.configured,
+                "steps_ar": [
+                    "سجّل في app.metaapi.cloud وانسخ API token",
+                    "الصقه في AURUM",
+                    "أدخل رقم Exness — التطبيق يفتح طرفية سحابية وينفّذ",
+                ],
+                "signup": "https://app.metaapi.cloud/api-access/generate-token",
+            },
+            {
+                "id": "mt5_linux",
+                "title_ar": "MT5 على Linux Docker/Wine (بدون نظام Windows)",
+                "windows_required": False,
+                "cost": "VPS لينكس رخيص أو مجاني (Oracle/…) + Docker",
+                "ready": mt5_linux.configured,
+                "steps_ar": [
+                    "شغّل docker compose من مجلد deploy/mt5-linux على سيرفر Linux",
+                    "افتح VNC مرة واحدة وسجّل دخول Exness",
+                    "الصق رابط الـ API (منفذ 5001) في AURUM",
+                ],
+                "repo": "https://github.com/thanderoy/headless-mt5",
+            },
+        ],
+        "rejected_ar": [
+            "لا يوجد توكن Exness رسمي للتداول بالـ REST للأفراد",
+            "أتمتة واجهة المتصفح غير موثوقة ومخالفة لشروط الاستخدام",
         ],
         "metaapi_configured": metaapi.configured,
-        "warning": "التوكن وكلمة مرور Exness يُحفظان مشفّرين داخل التطبيق.",
+        "mt5_linux_configured": mt5_linux.configured,
         "servers": EXNESS_SERVERS,
-        "metaapi_signup": "https://app.metaapi.cloud",
+    }
+
+
+@app.get("/api/connect-guide")
+async def connect_guide():
+    ways = await execution_ways()
+    return {
+        "title": "طرق التنفيذ الحقيقي بدون Windows",
+        "steps": ways["ways"][0]["steps_ar"] + ["أو استخدم مسار Linux Docker من /api/ways"],
+        "metaapi_configured": ways["metaapi_configured"],
+        "mt5_linux_configured": ways["mt5_linux_configured"],
+        "warning": ways["finding_ar"],
+        "servers": EXNESS_SERVERS,
+        "metaapi_signup": "https://app.metaapi.cloud/api-access/generate-token",
+        "ways": ways["ways"],
     }
 
 
@@ -643,14 +708,16 @@ async def bridge_status(authorization: str | None = Header(default=None), aurum_
 async def cloud_status(authorization: str | None = Header(default=None), aurum_session: str | None = Cookie(default=None, alias=SESSION_COOKIE)):
     user = require_user(authorization, aurum_session)
     metaapi.refresh_token()
+    mt5_linux.refresh()
     st = _cloud_status_for_user(user["id"])
     return {
         "ok": True,
         "metaapi_configured": metaapi.configured,
+        "mt5_linux_configured": mt5_linux.configured,
         "region": settings.metaapi_region,
         "bridge": st,
         "account": desk.account.to_dict(),
-        "signup_url": "https://app.metaapi.cloud",
+        "signup_url": "https://app.metaapi.cloud/api-access/generate-token",
     }
 
 
@@ -688,48 +755,94 @@ async def cloud_save_token(
 
 @app.post("/api/cloud/reconnect")
 async def cloud_reconnect(authorization: str | None = Header(default=None), aurum_session: str | None = Cookie(default=None, alias=SESSION_COOKIE)):
-    """Re-provision / refresh MetaApi cloud connection for the logged-in user."""
+    """Re-provision MetaApi and/or probe Linux MT5 executor."""
     user = require_user(authorization, aurum_session)
     metaapi.refresh_token()
+    mt5_linux.refresh()
     secrets = auth.mt5_secrets(user["id"])
-    if not secrets.get("login") or not secrets.get("password"):
-        raise HTTPException(400, "لا توجد بيانات Exness محفوظة — سجّل الدخول من شاشة MT5")
-    if not metaapi.configured:
-        raise HTTPException(503, "الصق توكن MetaApi أولاً من تبويب الربط السحابي")
-    try:
-        cloud = metaapi.ensure_account(
-            str(secrets["login"]),
-            secrets["password"],
-            secrets["server"],
-            symbol=secrets.get("symbol") or "XAUUSD",
-            existing_id=secrets.get("metaapi_account_id") or None,
-            wait=True,
-        )
-    except MetaApiError as e:
-        raise HTTPException(400, e.message)
-    auth.update_settings(
-        user["id"],
-        {
-            "metaapi_account_id": cloud["account_id"],
-            "metaapi_region": cloud.get("region") or settings.metaapi_region,
-            "execution": "metaapi",
-            "mode": "mt5",
-        },
-    )
     settings.mode = "mt5"
-    settings.mt5_login = secrets["login"]
-    settings.mt5_password = secrets["password"]
-    settings.mt5_server = secrets["server"]
-    bridge.bind_remote_user(user["id"])
-    bridge.bind_metaapi(cloud["account_id"], cloud.get("region"))
+    if secrets.get("login"):
+        settings.mt5_login = secrets["login"]
+        settings.mt5_password = secrets["password"]
+        settings.mt5_server = secrets["server"]
+        bridge.bind_remote_user(user["id"])
+
+    cloud = None
+    if metaapi.configured and secrets.get("login") and secrets.get("password"):
+        try:
+            cloud = metaapi.ensure_account(
+                str(secrets["login"]),
+                secrets["password"],
+                secrets["server"],
+                symbol=secrets.get("symbol") or "XAUUSD",
+                existing_id=secrets.get("metaapi_account_id") or None,
+                wait=True,
+            )
+            auth.update_settings(
+                user["id"],
+                {
+                    "metaapi_account_id": cloud["account_id"],
+                    "metaapi_region": cloud.get("region") or settings.metaapi_region,
+                    "execution": "metaapi",
+                    "mode": "mt5",
+                },
+            )
+            bridge.bind_metaapi(cloud["account_id"], cloud.get("region"))
+        except MetaApiError as e:
+            # try Linux path before failing hard
+            if not mt5_linux.configured:
+                raise HTTPException(400, e.message)
+            store.log_event("metaapi_reconnect_error", {"error": e.message})
+
     desk.account = bridge.connect()
+    if not desk.account.connected and not metaapi.configured and not mt5_linux.configured:
+        raise HTTPException(503, "فعّل MetaApi أو منفّذ Linux Docker من تبويب الربط")
     return {
         "ok": True,
         "cloud": cloud,
         "bridge": _cloud_status_for_user(user["id"]),
         "account": desk.account.to_dict(),
         "user": auth.public_user(user["id"]),
-        "message": "تم تحديث الربط السحابي" if desk.account.connected else "الطرفية موجودة — بانتظار اتصال الوسيط",
+        "message": (
+            "متصل للتنفيذ الحقيقي"
+            if desk.account.connected
+            else "الربط محفوظ — أكمل تسجيل Exness على المنفّذ (VNC) أو انتظر MetaApi"
+        ),
+    }
+
+
+@app.post("/api/executor/linux")
+async def save_linux_executor(
+    body: Mt5LinuxBody,
+    authorization: str | None = Header(default=None),
+    aurum_session: str | None = Cookie(default=None, alias=SESSION_COOKIE),
+):
+    """Point AURUM at a Linux Docker/Wine MT5 REST executor (no Windows)."""
+    user = require_user(authorization, aurum_session)
+    url = body.base_url.strip().rstrip("/")
+    if not (url.startswith("http://") or url.startswith("https://")):
+        raise HTTPException(400, "الرابط يجب أن يبدأ بـ http:// أو https://")
+    mt5_linux.set_config(url, body.token.strip())
+    bridge.mode = "mt5"
+    bridge.execution = "mt5_linux"
+    probe = None
+    if body.probe:
+        try:
+            probe = mt5_linux.health()
+            if probe.get("ok"):
+                probe["account"] = mt5_linux.snapshot()
+        except Mt5LinuxError as e:
+            probe = {"ok": False, "error": e.message}
+    desk.account = bridge.connect()
+    store.log_event("mt5_linux_configured", {"url": url, "probe_ok": bool((probe or {}).get("ok"))})
+    return {
+        "ok": True,
+        "mt5_linux_configured": True,
+        "base_url": url,
+        "probe": probe,
+        "bridge": _cloud_status_for_user(user["id"]),
+        "account": desk.account.to_dict(),
+        "message": "تم حفظ منفّذ Linux — سجّل Exness عبر VNC مرة واحدة إن لم يكن متصلاً بعد",
     }
 
 

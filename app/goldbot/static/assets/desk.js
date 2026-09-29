@@ -101,30 +101,51 @@
     }
   }
 
-  function setBridgeUI(bridge, token, agentCommand, metaConfigured) {
+  function setBridgeUI(bridge, token, agentCommand, metaConfigured, linuxConfigured) {
     const online = !!(bridge && bridge.online);
     const provider = (bridge && bridge.provider) || (bridge && bridge.execution) || "";
-    const cloud = provider === "metaapi" || !!(bridge && bridge.account_id);
-    $("bridgePill").textContent = online
-      ? (cloud ? "السحابة: متصل Exness" : "متصل Exness")
-      : (cloud ? "السحابة: جاري الربط" : "السحابة: غير متصل");
+    const label =
+      provider === "mt5_linux" ? "Linux MT5" :
+      provider === "metaapi" ? "MetaApi" : "التنفيذ";
+    $("bridgePill").textContent = online ? `${label}: متصل Exness` : `${label}: غير متصل`;
     $("bridgePill").classList.toggle("on", online);
     if ($("bridgeStatusText")) {
       $("bridgeStatusText").textContent =
-        (bridge && bridge.detail) || (online ? "متصل سحابياً بـ Exness" : "بانتظار الربط السحابي");
+        (bridge && bridge.detail) || (online ? "متصل للتنفيذ الحقيقي" : "بانتظار تفعيل مسار بدون Windows");
     }
     if ($("cloudAccountLine")) {
-      const id = (bridge && (bridge.account_id || (bridge.account && bridge.account.login))) || "—";
-      $("cloudAccountLine").textContent = `معرّف الحساب السحابي: ${bridge && bridge.account_id ? bridge.account_id : id}`;
+      const id = (bridge && (bridge.account_id || bridge.base_url || (bridge.account && bridge.account.login))) || "—";
+      $("cloudAccountLine").textContent = `المعرّف / الرابط: ${id}`;
     }
     if ($("metaConfiguredLine") && metaConfigured != null) {
       $("metaConfiguredLine").textContent = metaConfigured
         ? "توكن MetaApi: محفوظ ومفعّل"
-        : "توكن MetaApi: غير محفوظ — الصقه بالأسفل";
+        : "توكن MetaApi: غير محفوظ";
       $("metaConfiguredLine").classList.toggle("ok", !!metaConfigured);
+    }
+    if ($("linuxConfiguredLine") && linuxConfigured != null) {
+      $("linuxConfiguredLine").textContent = linuxConfigured
+        ? "منفّذ Linux: محفوظ"
+        : "منفّذ Linux: غير مضبوط";
+      $("linuxConfiguredLine").classList.toggle("ok", !!linuxConfigured);
     }
     if (token) bridgeToken = token;
     if (agentCommand && $("agentCmd")) $("agentCmd").value = agentCommand;
+  }
+
+  async function loadWays() {
+    try {
+      const j = await fetch("/api/ways").then((r) => r.json());
+      if ($("waysFinding")) $("waysFinding").textContent = j.finding_ar || "";
+      if ($("metaConfiguredLine")) {
+        $("metaConfiguredLine").textContent = j.metaapi_configured ? "توكن MetaApi: محفوظ ومفعّل" : "توكن MetaApi: غير محفوظ";
+        $("metaConfiguredLine").classList.toggle("ok", !!j.metaapi_configured);
+      }
+      if ($("linuxConfiguredLine")) {
+        $("linuxConfiguredLine").textContent = j.mt5_linux_configured ? "منفّذ Linux: محفوظ" : "منفّذ Linux: غير مضبوط";
+        $("linuxConfiguredLine").classList.toggle("ok", !!j.mt5_linux_configured);
+      }
+    } catch (_) {}
   }
 
   function renderTrades(list, el) {
@@ -189,11 +210,11 @@
   async function refreshCloudStatusOnly() {
     try {
       const j = await api("/api/cloud/status");
-      setBridgeUI(j.bridge || j.cloud, null, null, j.metaapi_configured);
+      setBridgeUI(j.bridge || j.cloud, null, null, j.metaapi_configured, j.mt5_linux_configured);
       return j;
     } catch (_) {
       const j = await api("/api/bridge/status");
-      setBridgeUI(j.bridge || j.cloud, null, null, j.metaapi_configured);
+      setBridgeUI(j.bridge || j.cloud, null, null, j.metaapi_configured, j.mt5_linux_configured);
       return j;
     }
   }
@@ -238,10 +259,37 @@
         $("connectMsg").classList.add("ok");
         $("cloudMetaToken").value = "";
         await refreshCloudStatusOnly();
-        // If Exness creds already saved, reconnect immediately
         try { await refreshBridge(); } catch (_) {}
       } catch (e) {
         $("connectMsg").textContent = e.message || "فشل حفظ التوكن";
+        $("connectMsg").classList.remove("ok");
+      }
+    };
+  }
+
+  if ($("btnSaveLinux")) {
+    $("btnSaveLinux").onclick = async () => {
+      const base_url = ($("linuxExecutorUrl").value || "").trim();
+      if (!base_url) {
+        $("connectMsg").textContent = "أدخل رابط منفّذ Linux مثل http://IP:5001";
+        $("connectMsg").classList.remove("ok");
+        return;
+      }
+      try {
+        const j = await api("/api/executor/linux", {
+          method: "POST",
+          body: JSON.stringify({
+            base_url,
+            token: ($("linuxExecutorToken").value || "").trim(),
+            probe: true,
+          }),
+        });
+        $("connectMsg").textContent = j.message || "تم الحفظ";
+        $("connectMsg").classList.toggle("ok", !!(j.account && j.account.connected) || !!(j.probe && j.probe.ok));
+        setBridgeUI(j.bridge, null, null, null, true);
+        await loadWays();
+      } catch (e) {
+        $("connectMsg").textContent = e.message || "فشل حفظ المنفّذ";
         $("connectMsg").classList.remove("ok");
       }
     };
@@ -396,6 +444,7 @@
 
   (async () => {
     await loadServers();
+    await loadWays();
     showTab("mt5");
     try {
       const st = await api("/api/auth/status");

@@ -120,21 +120,39 @@
 
     <main id="tab-connect" class="panel hidden">
       <section class="connect-box">
-        <h1>ربط Exness السحابي المباشر</h1>
-        <p id="bridgeStatusText">حالة السحابة: —</p>
+        <h1>طرق التنفيذ الحقيقي بدون Windows</h1>
+        <p id="bridgeStatusText">حالة التنفيذ: —</p>
+        <p id="waysFinding" class="auth-note">جاري تحميل الطرق المتاحة…</p>
         <p id="metaConfiguredLine" class="auth-note">توكن MetaApi: —</p>
+        <p id="linuxConfiguredLine" class="auth-note">منفّذ Linux: —</p>
+
+        <h2>المسار 1 — MetaApi سحابي</h2>
         <ol class="steps">
-          <li>احصل على API token من <a href="https://app.metaapi.cloud" target="_blank" rel="noopener">app.metaapi.cloud</a>.</li>
-          <li>الصق التوكن بالأسفل واحفظه (مرة واحدة).</li>
-          <li>أدخل حساب Exness من شاشة الدخول — AURUM يفتح طرفية سحابية تلقائياً.</li>
-          <li>عندما تصبح الحالة «متصل سحابياً» يعمل التنفيذ الذكي الكامل بدون Windows.</li>
+          <li>احصل على توكن مجاني من <a href="https://app.metaapi.cloud/api-access/generate-token" target="_blank" rel="noopener">توليد التوكن</a>.</li>
+          <li>الصقه بالأسفل واحفظه.</li>
+          <li>أدخل حساب Exness من شاشة الدخول.</li>
         </ol>
         <label>توكن MetaApi
           <input id="cloudMetaToken" type="password" placeholder="الصق التوكن هنا" autocomplete="off" />
         </label>
-        <button type="button" id="btnSaveMetaToken" class="primary">حفظ التوكن وتفعيله</button>
-        <p id="cloudAccountLine" class="auth-note">معرّف الحساب السحابي: —</p>
-        <button type="button" id="btnRefreshBridge" class="ghost">تحديث / إعادة ربط Exness</button>
+        <button type="button" id="btnSaveMetaToken" class="primary">حفظ توكن MetaApi</button>
+
+        <h2>المسار 2 — MT5 على Linux Docker</h2>
+        <ol class="steps">
+          <li>على أي سيرفر Linux: شغّل <code>deploy/mt5-linux</code> عبر Docker Compose.</li>
+          <li>افتح المنفذ 3000 وسجّل Exness مرة واحدة عبر VNC.</li>
+          <li>الصق رابط API (منفذ 5001) بالأسفل.</li>
+        </ol>
+        <label>رابط منفّذ Linux
+          <input id="linuxExecutorUrl" type="url" placeholder="http://IP:5001" autocomplete="off" />
+        </label>
+        <label>توكن المنفّذ (اختياري)
+          <input id="linuxExecutorToken" type="password" placeholder="Bearer إن وُجد" autocomplete="off" />
+        </label>
+        <button type="button" id="btnSaveLinux" class="primary">حفظ منفّذ Linux</button>
+
+        <p id="cloudAccountLine" class="auth-note">معرّف الحساب: —</p>
+        <button type="button" id="btnRefreshBridge" class="ghost">تحديث / إعادة ربط</button>
         <p id="connectMsg" class="auth-msg"></p>
         <textarea id="agentCmd" class="hidden" rows="1" readonly aria-hidden="true"></textarea>
         <button type="button" id="btnCopyAgent" class="hidden" aria-hidden="true">نسخ</button>

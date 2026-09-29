@@ -102,21 +102,58 @@ class Bridge:
                         login=int(snap.get("login") or settings.mt5_login or 0),
                         detail=str(snap.get("detail") or "MetaApi cloud"),
                     )
-                return AccountSnapshot(
-                    balance=0.0,
-                    equity=0.0,
-                    margin=0.0,
-                    free_margin=0.0,
-                    currency="USD",
-                    mode="mt5",
-                    connected=False,
-                    server=settings.mt5_server or "Exness",
-                    login=int(settings.mt5_login or 0),
-                    detail=str(snap.get("detail") or "بانتظار اتصال MetaApi السحابي"),
-                )
+                # fall through to Linux executor if MetaApi not yet connected
+                if not settings.prefer_mt5_linux:
+                    return AccountSnapshot(
+                        balance=0.0,
+                        equity=0.0,
+                        margin=0.0,
+                        free_margin=0.0,
+                        currency="USD",
+                        mode="mt5",
+                        connected=False,
+                        server=settings.mt5_server or "Exness",
+                        login=int(settings.mt5_login or 0),
+                        detail=str(snap.get("detail") or "بانتظار اتصال MetaApi السحابي"),
+                    )
 
-        # 2) Legacy Windows agent hub
-        if self.mode == "mt5" and self.remote_user_id and self.execution != "metaapi":
+        # 2) Linux Docker/Wine MT5 — real Exness without Windows OS
+        if self.mode == "mt5" and settings.prefer_mt5_linux:
+            from goldbot.mt5.mt5_linux import mt5_linux
+
+            mt5_linux.refresh()
+            if mt5_linux.configured:
+                snap = mt5_linux.snapshot()
+                if snap.get("connected"):
+                    self.execution = "mt5_linux"
+                    return AccountSnapshot(
+                        balance=float(snap["balance"]),
+                        equity=float(snap["equity"]),
+                        margin=float(snap["margin"]),
+                        free_margin=float(snap["free_margin"]),
+                        currency=str(snap.get("currency") or "USD"),
+                        mode="mt5",
+                        connected=True,
+                        server=str(snap.get("server") or settings.mt5_server),
+                        login=int(snap.get("login") or settings.mt5_login or 0),
+                        detail=str(snap.get("detail") or "MT5 Linux Docker"),
+                    )
+                if self.execution == "mt5_linux" or not self.metaapi_account_id:
+                    return AccountSnapshot(
+                        balance=0.0,
+                        equity=0.0,
+                        margin=0.0,
+                        free_margin=0.0,
+                        currency="USD",
+                        mode="mt5",
+                        connected=False,
+                        server=settings.mt5_server or "Exness",
+                        login=int(settings.mt5_login or 0),
+                        detail=str(snap.get("detail") or "منفّذ Linux غير متصل — افتح VNC وسجّل Exness مرة واحدة"),
+                    )
+
+        # 3) Legacy Windows agent hub
+        if self.mode == "mt5" and self.remote_user_id and self.execution not in {"metaapi", "mt5_linux"}:
             from goldbot.mt5.remote_hub import hub
 
             st = hub.status_for_user(self.remote_user_id)
@@ -492,10 +529,25 @@ class Bridge:
                 )
                 result.setdefault("mode", "mt5")
                 result["execution"] = "metaapi"
-                return result
+                if result.get("ok"):
+                    return result
+                # if MetaApi fails, try Linux executor before giving up
+                log.warning("metaapi order failed: %s", result.get("error"))
+
+        # Secondary: Linux Docker MT5 (no Windows OS)
+        if self.mode == "mt5" and settings.prefer_mt5_linux:
+            from goldbot.mt5.mt5_linux import mt5_linux
+
+            mt5_linux.refresh()
+            if mt5_linux.configured:
+                result = mt5_linux.order_market(
+                    side, float(lot), float(sl), float(tp), symbol=settings.symbol, comment=comment
+                )
+                if result.get("ok") or self.execution == "mt5_linux":
+                    return result
 
         # Fallback: queue to Windows MT5 agent
-        if self.mode == "mt5" and self.remote_user_id and self.execution != "metaapi":
+        if self.mode == "mt5" and self.remote_user_id and self.execution not in {"metaapi", "mt5_linux"}:
             from goldbot.mt5.remote_hub import hub
 
             enq = hub.enqueue(
