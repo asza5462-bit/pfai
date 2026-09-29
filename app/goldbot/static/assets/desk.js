@@ -244,19 +244,23 @@
     startDeskTimers();
   }
 
-  // tabs auth
-  $("tabLogin").onclick = () => {
+  // tabs auth (explicit handlers + keyboard)
+  function showLoginTab() {
     $("tabLogin").classList.add("on");
     $("tabRegister").classList.remove("on");
     $("loginForm").classList.remove("hidden");
     $("registerForm").classList.add("hidden");
-  };
-  $("tabRegister").onclick = () => {
+    $("loginUser").focus();
+  }
+  function showRegisterTab() {
     $("tabRegister").classList.add("on");
     $("tabLogin").classList.remove("on");
     $("registerForm").classList.remove("hidden");
     $("loginForm").classList.add("hidden");
-  };
+    $("regUser").focus();
+  }
+  $("tabLogin").addEventListener("click", (e) => { e.preventDefault(); showLoginTab(); });
+  $("tabRegister").addEventListener("click", (e) => { e.preventDefault(); showRegisterTab(); });
 
   $("loginForm").onsubmit = async (e) => {
     e.preventDefault();
