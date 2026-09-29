@@ -52,10 +52,22 @@ def normalize_account_id(value: str | None) -> str:
         return s if is_metaapi_account_id(s) else ""
 
 
+def is_validation_cooldown_error(exc: MetaApiError | Exception | str) -> bool:
+    msg = str(getattr(exc, "message", None) or exc).lower()
+    return "rejected too many times" in msg or "retry in 1 hour" in msg or "validation for trading account" in msg and "rejected" in msg
+
+
 def arabic_metaapi_error(exc: MetaApiError | Exception) -> str:
     msg = str(getattr(exc, "message", None) or exc)
     code = str(getattr(exc, "code", "") or "")
     low = msg.lower()
+    # Rate-limited by MetaApi after repeated bad credentials / wrong server
+    if is_validation_cooldown_error(exc):
+        return (
+            "MetaApi أوقف التحقق من هذا الحساب مؤقتاً بعد محاولات فاشلة كثيرة. "
+            "تأكد من: كلمة مرور التداول (ليس Investor) + السيرفر حرفياً من Exness "
+            "(مثل Exness-MT5Trial15) ثم انتظر ساعة كاملة قبل «إعادة ربط كامل»."
+        )
     # "Trading account with id: 1215 not found (...)" and similar MetaApi payloads
     if (
         "not found" in low
@@ -370,6 +382,22 @@ class MetaApiCloud:
                     continue
                 # Hard fail fast on credential / server problems — do not spin for minutes
                 msg = (e.message or "").lower()
+                if is_validation_cooldown_error(e):
+                    try:
+                        from goldbot.storage.state import store
+
+                        store.set_kv(
+                            "metaapi_validation_cooldown",
+                            {
+                                "until": time.time() + 3600,
+                                "login": str(login).strip(),
+                                "server": str(server).strip(),
+                                "error": e.message,
+                            },
+                        )
+                    except Exception:
+                        pass
+                    raise MetaApiError(e.message, code="E_VALIDATION_COOLDOWN", status=429, details=e.details) from e
                 if e.code in {"E_AUTH", "UnauthorizedError"} or any(
                     x in msg for x in ("wrong password", "invalid password", "authenticate", "investor password")
                 ):
@@ -464,6 +492,25 @@ class MetaApiCloud:
                 code="NO_TOKEN",
                 status=503,
             )
+
+        # Honor MetaApi "retry in 1 hour" lockout — do not keep hammering credentials
+        try:
+            from goldbot.storage.state import store
+
+            cool = store.get_kv("metaapi_validation_cooldown") or {}
+            until = float((cool or {}).get("until") or 0)
+            if until > time.time():
+                mins = max(1, int((until - time.time()) / 60))
+                raise MetaApiError(
+                    f"MetaApi ما زال يمنع التحقق من الحساب — انتظر حوالي {mins} دقيقة ثم أعد المحاولة بعد تصحيح كلمة المرور/السيرفر.",
+                    code="E_VALIDATION_COOLDOWN",
+                    status=429,
+                    details=cool,
+                )
+        except MetaApiError:
+            raise
+        except Exception:
+            pass
 
         acc = None
         existing = normalize_account_id(existing_id) if is_metaapi_account_id(existing_id) else ""

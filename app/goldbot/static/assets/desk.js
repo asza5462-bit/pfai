@@ -308,6 +308,27 @@
       await refreshBridge(true);
     };
   }
+  if ($("btnRefreshBridge")) {
+    $("btnRefreshBridge").onclick = async () => {
+      $("connectMsg").textContent = "جاري التحديث…";
+      // Status-only first; full reconnect only if user confirms when cooled down
+      try {
+        const st = await refreshCloudStatusOnly();
+        const prov = (st && st.provision) || {};
+        if (prov.status === "error" && /ساعة|دقيقة|cooldown|rejected/i.test(prov.message || "")) {
+          $("connectMsg").textContent = prov.message;
+          $("connectMsg").classList.remove("ok");
+          return;
+        }
+        if (!(st && st.live_execution)) {
+          await refreshBridge(false);
+        }
+      } catch (e) {
+        $("connectMsg").textContent = e.message || "تعذّر التحديث";
+        $("connectMsg").classList.remove("ok");
+      }
+    };
+  }
 
   if ($("btnSaveMetaToken")) {
     $("btnSaveMetaToken").onclick = async () => {

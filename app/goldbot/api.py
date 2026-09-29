@@ -22,6 +22,7 @@ from goldbot.mt5.metaapi_cloud import (
     MetaApiError,
     arabic_metaapi_error,
     is_metaapi_account_id,
+    is_validation_cooldown_error,
     metaapi,
     normalize_account_id,
 )
@@ -140,8 +141,11 @@ def _finish_cloud_in_background(
         except Exception as e:
             msg = arabic_metaapi_error(e) if isinstance(e, MetaApiError) else str(e)
             log.warning("background metaapi finish failed: %s", e)
-            _set_provision_state("error", msg, code=getattr(e, "code", None), login=login, server=server)
-            store.log_event("metaapi_bg_error", {"user_id": user_id, "error": str(e)})
+            code = getattr(e, "code", None)
+            if is_validation_cooldown_error(e):
+                code = "E_VALIDATION_COOLDOWN"
+            _set_provision_state("error", msg, code=code, login=login, server=server)
+            store.log_event("metaapi_bg_error", {"user_id": user_id, "error": str(e), "code": code})
         finally:
             with _bg_lock:
                 _bg_jobs.discard(job_key)
@@ -634,16 +638,32 @@ def _cloud_status_for_user(user_id: int) -> dict:
             "detail": snap.get("detail") or ("متصل عبر Linux Docker" if online else "منفّذ Linux غير متصل"),
             "windows_required": False,
         }
+    # MetaApi token present but cloud account not bound yet — never show Windows-agent copy
+    if metaapi.configured and settings.prefer_metaapi:
+        prov = _get_provision_state()
+        detail = (
+            (prov.get("message") if prov.get("status") in {"pending", "error"} else None)
+            or "توكن MetaApi جاهز — أعد إدخال بيانات Exness أو اضغط «إعادة ربط كامل»"
+        )
+        return {
+            "online": False,
+            "execution": "pending",
+            "provider": "metaapi",
+            "account_id": "",
+            "detail": detail,
+            "windows_required": False,
+            "provision": prov,
+        }
     st = hub.status_for_user(user_id)
     st = dict(st)
-    st.setdefault("execution", "windows_bridge" if st.get("online") else "pending")
-    st.setdefault("provider", "windows_bridge")
+    # Rewrite legacy Windows-agent wording when MetaApi is the product path
+    detail = st.get("detail") or ""
+    if "وكيل" in detail or "Windows" in detail:
+        detail = "اختر مسار MetaApi السحابي (بدون Windows) من الأعلى"
+    st["detail"] = detail or "فعّل توكن MetaApi ثم اربط حساب Exness"
+    st.setdefault("execution", "pending")
+    st.setdefault("provider", "metaapi" if metaapi.configured else "none")
     st.setdefault("windows_required", False)
-    st.setdefault(
-        "detail",
-        st.get("detail")
-        or "اختر: توكن MetaApi (سحابة) أو عنوان منفّذ Linux Docker — كلاهما بدون Windows",
-    )
     return st
 
 
