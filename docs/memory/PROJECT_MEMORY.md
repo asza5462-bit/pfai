@@ -1,6 +1,6 @@
 # PFAI Project Memory
 
-Last updated: 2026-09-28 (PFAI 8.9.0 — free sovereign integrity / self-repair)
+Last updated: 2026-09-29 (PFAI 8.12.0 — elite natural reply brain)
 
 ## Snapshot
 
@@ -34,11 +34,12 @@ Last updated: 2026-09-28 (PFAI 8.9.0 — free sovereign integrity / self-repair)
 - Command Chat sole runtime when PFAI_UNIFIED_BRAIN=1
 - Soft-degrade lanes; never invent; never silent weight promote
 
-## Legendary chat mind (8.6)
+## Legendary chat mind (8.12)
 
-- Deep comprehension before plan/compose
-- Legendary memory: facts + digests + ranked recall + desire ingest
-- Elite replies: فهمتك → memory → live → next step
+- Deep comprehension before plan/compose (internal only — not dumped to user)
+- Legendary memory: facts + digests + ranked recall + desire ingest + guardian
+- Elite replies: natural Arabic/EN via `elite_reply.py`; provider `pfai-brain`
+- Short-circuits: remember confirm, name recall, honest empty-name (no JSON/timeline fog)
 
 ## Free Sovereign Integrity (8.9)
 
