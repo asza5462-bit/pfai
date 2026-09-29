@@ -3,6 +3,7 @@ from __future__ import annotations
 
 import logging
 import os
+import threading
 from contextlib import asynccontextmanager
 from pathlib import Path
 
@@ -29,6 +30,147 @@ from goldbot.storage.state import store
 
 log = logging.getLogger("aurum.api")
 STATIC = Path(__file__).resolve().parent / "static"
+_bg_lock = threading.Lock()
+_bg_jobs: set[str] = set()
+
+
+def _apply_cloud_binding(user_id: int, cloud: dict) -> None:
+    auth.update_settings(
+        user_id,
+        {
+            "metaapi_account_id": cloud["account_id"],
+            "metaapi_region": cloud.get("region") or settings.metaapi_region,
+            "execution": "metaapi",
+            "mode": "mt5",
+        },
+    )
+    bridge.bind_metaapi(cloud["account_id"], cloud.get("region"))
+
+
+def _finish_cloud_in_background(
+    user_id: int,
+    login: str,
+    password: str,
+    server: str,
+    symbol: str,
+    account_id: str,
+) -> None:
+    """Complete MetaApi deploy/connect after the HTTP response (avoids Safari Load failed)."""
+    job_key = f"{user_id}:{account_id or login}"
+    with _bg_lock:
+        if job_key in _bg_jobs:
+            return
+        _bg_jobs.add(job_key)
+
+    def _run() -> None:
+        try:
+            cloud = metaapi.ensure_account(
+                str(login),
+                password,
+                server,
+                symbol=symbol or "XAUUSDm",
+                existing_id=account_id or None,
+                wait=True,
+                fast=False,
+                deploy_wait=90.0,
+            )
+            _apply_cloud_binding(user_id, cloud)
+            desk.account = bridge.connect()
+            if desk.account.connected and not desk.auto_trade:
+                if desk.risk.state.halted:
+                    desk.risk.reset_day(desk.account.equity or settings.paper_balance, note="bg_cloud_ready")
+                try:
+                    desk.start_desk()
+                except Exception as e:
+                    log.warning("bg start_desk: %s", e)
+            store.log_event(
+                "metaapi_bg_ready",
+                {"user_id": user_id, "account_id": cloud["account_id"], "connected": cloud.get("connected")},
+            )
+        except Exception as e:
+            log.warning("background metaapi finish failed: %s", e)
+            store.log_event("metaapi_bg_error", {"user_id": user_id, "error": str(e)})
+        finally:
+            with _bg_lock:
+                _bg_jobs.discard(job_key)
+
+    threading.Thread(target=_run, name=f"aurum-cloud-{user_id}", daemon=True).start()
+
+
+def _provision_cloud_fast(
+    user_id: int,
+    login: str,
+    password: str,
+    server: str,
+    symbol: str,
+    existing_id: str | None,
+    *,
+    timeout_sec: float = 22.0,
+) -> dict:
+    """Run MetaApi provisioning with a hard timeout so Render/Safari do not drop the request."""
+    box: dict = {}
+
+    def _call() -> None:
+        try:
+            cloud = metaapi.ensure_account(
+                str(login),
+                password,
+                server,
+                symbol=symbol or "XAUUSDm",
+                existing_id=existing_id,
+                wait=False,
+                fast=True,
+                deploy_wait=6.0,
+            )
+            _apply_cloud_binding(user_id, cloud)
+            box["cloud"] = cloud
+            if not cloud.get("connected"):
+                # Same thread finishes CONNECTED so a timed-out HTTP request still completes binding
+                try:
+                    done = metaapi.ensure_account(
+                        str(login),
+                        password,
+                        server,
+                        symbol=symbol or "XAUUSDm",
+                        existing_id=cloud["account_id"],
+                        wait=True,
+                        fast=False,
+                        deploy_wait=90.0,
+                    )
+                    _apply_cloud_binding(user_id, done)
+                    desk.account = bridge.connect()
+                    box["cloud"] = done
+                except Exception as e:
+                    log.warning("post-provision connect: %s", e)
+        except Exception as e:
+            box["error"] = e
+
+    t = threading.Thread(target=_call, name=f"aurum-provision-{user_id}", daemon=True)
+    t.start()
+    t.join(timeout=float(timeout_sec))
+
+    if "cloud" in box:
+        cloud = box["cloud"]
+        if not cloud.get("connected") and t.is_alive():
+            # Thread still finishing CONNECTED — HTTP can return pending
+            cloud = dict(cloud)
+            cloud["pending"] = True
+        return cloud
+
+    if t.is_alive():
+        # Creation still running; do not start a second job — this thread will persist when done
+        raise MetaApiError(
+            "جاري تجهيز الطرفية السحابية — أكملنا الحفظ وستكتمل خلال دقيقة. حدّث من تبويب الربط.",
+            code="E_PROVISION_PENDING",
+            status=202,
+        )
+
+    err = box.get("error")
+    if isinstance(err, MetaApiError):
+        raise err
+    if err:
+        raise MetaApiError(str(err), code="E_PROVISION")
+    raise MetaApiError("تعذّر إكمال الربط السحابي", code="E_PROVISION")
 
 
 @asynccontextmanager
@@ -285,38 +427,33 @@ async def mt5_login(body: Mt5LoginBody, response: Response):
     message = ""
     if metaapi.configured and settings.prefer_metaapi:
         try:
-            cloud = metaapi.ensure_account(
+            cloud = _provision_cloud_fast(
+                user["id"],
                 str(secrets["login"]),
                 secrets["password"],
                 secrets["server"],
-                symbol=settings.symbol,
-                existing_id=secrets.get("metaapi_account_id") or None,
-                wait=True,
+                settings.symbol,
+                secrets.get("metaapi_account_id") or None,
+                timeout_sec=22.0,
             )
-            auth.update_settings(
-                user["id"],
-                {
-                    "metaapi_account_id": cloud["account_id"],
-                    "metaapi_region": cloud.get("region") or settings.metaapi_region,
-                    "execution": "metaapi",
-                    "mode": "mt5",
-                },
-            )
-            bridge.bind_metaapi(cloud["account_id"], cloud.get("region"))
             if cloud.get("connected"):
                 message = "تم الربط السحابي المباشر بـ Exness عبر MetaApi — التنفيذ الحقيقي من التطبيق بدون Windows."
             else:
                 message = (
-                    "تم إنشاء الطرفية السحابية. الاتصال بالوسيط قيد التثبيت — "
-                    "حدّث الحالة خلال دقيقة ثم ابدأ التداول."
+                    "تم حفظ الحساب وبدء الطرفية السحابية. الاتصال بالوسيط يكتمل خلال أقل من دقيقة — "
+                    "لا تغلق الصفحة، حدّث من تبويب الربط إن لزم."
                 )
         except MetaApiError as e:
             # Clear corrupt MetaApi ids (e.g. numeric 1215) so next attempt recreates
             if "not found" in (e.message or "").lower() or e.code in {"E_BAD_ACCOUNT_ID", "NotFoundError"}:
                 auth.update_settings(user["id"], {"metaapi_account_id": "", "execution": ""})
                 bridge.metaapi_account_id = ""
-            cloud = {"ok": False, "configured": True, "error": e.message, "code": e.code, "details": e.details}
-            message = arabic_metaapi_error(e)
+            if e.code == "E_PROVISION_PENDING":
+                cloud = {"ok": True, "configured": True, "pending": True, "code": e.code}
+                message = e.message
+            else:
+                cloud = {"ok": False, "configured": True, "error": e.message, "code": e.code, "details": e.details}
+                message = arabic_metaapi_error(e)
             store.log_event("metaapi_login_error", {"user": user["username"], "error": e.message, "code": e.code})
     else:
         message = (
@@ -577,28 +714,35 @@ async def start_desk(authorization: str | None = Header(default=None), aurum_ses
         if raw_cloud_id:
             bridge.bind_metaapi(raw_cloud_id, secrets.get("metaapi_region"))
         desk.account = bridge.connect()
-        # Auto-heal: stale MetaApi id cleared by connect → re-provision once
+        # Auto-heal: stale MetaApi id cleared by connect → fast re-provision
         if not desk.account.connected and metaapi.configured and secrets.get("password"):
             try:
-                cloud = metaapi.ensure_account(
+                cloud = _provision_cloud_fast(
+                    user["id"],
                     str(secrets["login"]),
                     secrets["password"],
                     secrets["server"],
-                    symbol=secrets.get("symbol") or settings.symbol,
-                    existing_id=bridge.metaapi_account_id or None,
-                    wait=True,
+                    secrets.get("symbol") or settings.symbol,
+                    bridge.metaapi_account_id or None,
+                    timeout_sec=18.0,
                 )
-                auth.update_settings(
-                    user["id"],
-                    {
-                        "metaapi_account_id": cloud["account_id"],
-                        "metaapi_region": cloud.get("region") or settings.metaapi_region,
-                        "execution": "metaapi",
-                    },
-                )
-                bridge.bind_metaapi(cloud["account_id"], cloud.get("region"))
                 desk.account = bridge.connect()
+                if not desk.account.connected and cloud.get("pending"):
+                    return {
+                        "ok": False,
+                        "error": "connecting",
+                        "message": "الطرفية السحابية قيد الاتصال — انتظر ثوانٍ ثم أعد «ابدأ التداول».",
+                        "bridge": _cloud_status_for_user(user["id"]),
+                        "cloud": cloud,
+                    }
             except MetaApiError as e:
+                if e.code == "E_PROVISION_PENDING":
+                    return {
+                        "ok": False,
+                        "error": "connecting",
+                        "message": e.message,
+                        "bridge": _cloud_status_for_user(user["id"]),
+                    }
                 return {
                     "ok": False,
                     "error": e.code or "metaapi",
@@ -853,31 +997,22 @@ async def cloud_save_token(
             settings.mt5_server = secrets["server"]
             settings.symbol = secrets.get("symbol") or settings.symbol
             bridge.bind_remote_user(user["id"])
-            cloud = metaapi.ensure_account(
+            cloud = _provision_cloud_fast(
+                user["id"],
                 str(secrets["login"]),
                 secrets["password"],
                 secrets["server"],
-                symbol=settings.symbol,
-                existing_id=secrets.get("metaapi_account_id") or None,
-                wait=True,
+                settings.symbol,
+                secrets.get("metaapi_account_id") or None,
+                timeout_sec=20.0,
             )
-            auth.update_settings(
-                user["id"],
-                {
-                    "metaapi_account_id": cloud["account_id"],
-                    "metaapi_region": cloud.get("region") or settings.metaapi_region,
-                    "execution": "metaapi",
-                    "mode": "mt5",
-                },
-            )
-            bridge.bind_metaapi(cloud["account_id"], cloud.get("region"))
             desk.account = bridge.connect()
             if desk.account.connected:
                 if desk.risk.state.halted:
                     desk.risk.reset_day(desk.account.equity or settings.paper_balance, note="token_auto_reconnect")
                 started = desk.start_desk()
         except MetaApiError as e:
-            store.log_event("metaapi_auto_reconnect_error", {"error": e.message})
+            store.log_event("metaapi_auto_reconnect_error", {"error": e.message, "code": e.code})
 
     connected = bool(desk.account.connected and bridge.execution == "metaapi")
     return {
@@ -937,51 +1072,36 @@ async def cloud_reconnect(
     cloud = None
     if metaapi.configured and secrets.get("login") and secrets.get("password"):
         try:
-            cloud = metaapi.ensure_account(
+            cloud = _provision_cloud_fast(
+                user["id"],
                 str(secrets["login"]),
                 secrets["password"],
                 secrets["server"],
-                symbol=secrets.get("symbol") or "XAUUSDm",
-                existing_id=existing_id,
-                wait=True,
+                secrets.get("symbol") or "XAUUSDm",
+                existing_id,
+                timeout_sec=22.0,
             )
-            auth.update_settings(
-                user["id"],
-                {
-                    "metaapi_account_id": cloud["account_id"],
-                    "metaapi_region": cloud.get("region") or settings.metaapi_region,
-                    "execution": "metaapi",
-                    "mode": "mt5",
-                },
-            )
-            bridge.bind_metaapi(cloud["account_id"], cloud.get("region"))
         except MetaApiError as e:
             if "not found" in (e.message or "").lower() or e.code in {"E_BAD_ACCOUNT_ID", "NotFoundError"}:
                 auth.update_settings(user["id"], {"metaapi_account_id": ""})
                 bridge.metaapi_account_id = ""
-                # one automatic retry without stale id
                 try:
-                    cloud = metaapi.ensure_account(
+                    cloud = _provision_cloud_fast(
+                        user["id"],
                         str(secrets["login"]),
                         secrets["password"],
                         secrets["server"],
-                        symbol=secrets.get("symbol") or "XAUUSDm",
-                        existing_id=None,
-                        wait=True,
+                        secrets.get("symbol") or "XAUUSDm",
+                        None,
+                        timeout_sec=22.0,
                     )
-                    auth.update_settings(
-                        user["id"],
-                        {
-                            "metaapi_account_id": cloud["account_id"],
-                            "metaapi_region": cloud.get("region") or settings.metaapi_region,
-                            "execution": "metaapi",
-                            "mode": "mt5",
-                        },
-                    )
-                    bridge.bind_metaapi(cloud["account_id"], cloud.get("region"))
                 except MetaApiError as e2:
-                    if not mt5_linux.configured:
+                    if e2.code == "E_PROVISION_PENDING":
+                        cloud = {"ok": True, "pending": True, "code": e2.code}
+                    elif not mt5_linux.configured:
                         raise HTTPException(400, arabic_metaapi_error(e2))
+            elif e.code == "E_PROVISION_PENDING":
+                cloud = {"ok": True, "pending": True, "code": e.code}
             elif not mt5_linux.configured:
                 raise HTTPException(400, arabic_metaapi_error(e))
             store.log_event("metaapi_reconnect_error", {"error": e.message, "code": e.code})
@@ -1004,7 +1124,7 @@ async def cloud_reconnect(
         "message": (
             "متصل للتنفيذ الحقيقي على Exness"
             if desk.account.connected
-            else "الربط جارٍ — إن استمر الفشل اضغط «إعادة ربط كامل»"
+            else "الربط جارٍ في الخلفية — حدّث خلال 30 ثانية أو اضغط «إعادة ربط كامل»"
         ),
     }
 

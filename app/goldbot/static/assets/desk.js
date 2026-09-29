@@ -49,16 +49,30 @@
   const biasClass = (b) => (b === "buy" ? "bias-buy" : b === "sell" ? "bias-sell" : "bias-neutral");
 
   async function api(path, opts = {}) {
-    const r = await fetch(path, {
-      credentials: "include",
-      headers: { "Content-Type": "application/json", ...(opts.headers || {}) },
-      ...opts,
-    });
+    let r;
+    try {
+      r = await fetch(path, {
+        credentials: "include",
+        headers: { "Content-Type": "application/json", ...(opts.headers || {}) },
+        ...opts,
+      });
+    } catch (netErr) {
+      const msg = String(netErr && netErr.message || netErr || "");
+      const friendly = new Error(
+        /load failed|failed to fetch|networkerror|aborted/i.test(msg)
+          ? "انقطع الاتصال بالخادم (الطلب استغرق طويلاً). أعد المحاولة — الربط أصبح أسرع الآن."
+          : (msg || "فشل الاتصال بالخادم")
+      );
+      friendly.status = 0;
+      friendly.network = true;
+      throw friendly;
+    }
     const text = await r.text();
     let j = {};
     try { j = text ? JSON.parse(text) : {}; } catch { j = { error: text }; }
     if (!r.ok) {
-      const err = new Error(j.detail || j.error || j.message || `HTTP ${r.status}`);
+      const detail = typeof j.detail === "string" ? j.detail : (j.detail && j.detail.msg) || j.error || j.message;
+      const err = new Error(detail || `HTTP ${r.status}`);
       err.status = r.status;
       err.body = j;
       throw err;
@@ -404,6 +418,7 @@
 
   $("mt5FormLogin").onsubmit = async (e) => {
     e.preventDefault();
+    const btn = $("mt5FormLogin").querySelector("button[type=submit]");
     const metaTok = ($("mt5MetaToken") && $("mt5MetaToken").value || "").trim();
     const setup = await loadSetupNext();
     if (!metaTok && !(setup && setup.metaapi_configured)) {
@@ -416,7 +431,8 @@
       showAuth("تأكد من اسم السيرفر كما في Exness (مثال: Exness-MT5Trial15)");
       return;
     }
-    showAuth("جاري الارتباط السحابي بـ Exness… قد يستغرق حتى دقيقة");
+    if (btn) { btn.disabled = true; btn.textContent = "جاري الربط…"; }
+    showAuth("جاري الارتباط السحابي بـ Exness… عادةً أقل من 30 ثانية");
     try {
       const j = await api("/api/auth/mt5-login", {
         method: "POST",
@@ -429,13 +445,27 @@
           metaapi_token: metaTok || null,
         }),
       });
-      showAuth(j.message || "تم الربط السحابي", true);
+      showAuth(j.message || "تم الربط السحابي", !!(j.account && j.account.connected) || !!(j.cloud && j.cloud.ok));
       await enterLoggedIn(j.user, j);
       if (!(j.account && j.account.connected)) {
-        document.querySelector('.tabs button[data-tab="connect"]').click();
+        document.querySelector('.tabs button[data-tab="connect"]')?.click();
+        // Poll background MetaApi deploy without blocking login again
+        for (let i = 0; i < 8; i++) {
+          await new Promise((r) => setTimeout(r, 4000));
+          try {
+            const st = await refreshCloudStatusOnly();
+            const online = st && st.bridge && st.bridge.online;
+            if (online) {
+              showAuth("اكتمل الربط السحابي — جاهز للتداول", true);
+              break;
+            }
+          } catch (_) {}
+        }
       }
     } catch (err) {
       showAuth(err.message || "فشل الارتباط");
+    } finally {
+      if (btn) { btn.disabled = false; btn.textContent = "ارتباط سحابي وابدأ التداول"; }
     }
   };
 

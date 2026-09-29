@@ -66,6 +66,8 @@ def arabic_metaapi_error(exc: MetaApiError | Exception) -> str:
             "حساب MetaApi السحابي غير موجود أو تالف. "
             "اضغط «إعادة ربط كامل» من تبويب الربط ليُنشأ من جديد."
         )
+    if code == "E_PROVISION_PENDING" or "قيد التجهيز" in msg or "جاري تجهيز" in msg:
+        return "الطرفية السحابية قيد التجهيز — انتظر نصف دقيقة ثم اضغط «تحديث / إعادة ربط»."
     if code in {"E_AUTH"} or "authenticate" in low or "invalid account" in low:
         return "رفض Exness بيانات الدخول — تحقق من الرقم وكلمة مرور التداول والسيرفر (مثل Exness-MT5Trial15)."
     if code == "NO_TOKEN" or "metaapi_token" in low or "لا يوجد" in msg and "token" in low:
@@ -305,6 +307,7 @@ class MetaApiCloud:
         symbol: str = "XAUUSD",
         keywords: list[str] | None = None,
         resource_slots: int | None = None,
+        fast: bool = False,
     ) -> dict:
         """Create cloud-g2 MT5 account with retries for broker detection / 202."""
         body: dict[str, Any] = {
@@ -326,14 +329,15 @@ class MetaApiCloud:
 
         tx = secrets.token_hex(16)
         last_err: MetaApiError | None = None
-        for attempt in range(8):
+        attempts = 3 if fast else 8
+        for attempt in range(attempts):
             try:
                 data = self._http(
                     "POST",
                     self._prov_url("/users/current/accounts"),
                     body,
                     transaction_id=tx,
-                    timeout=90,
+                    timeout=35 if fast else 90,
                 )
                 if isinstance(data, dict) and is_metaapi_account_id(str(data.get("id") or "")):
                     data = dict(data)
@@ -359,22 +363,33 @@ class MetaApiCloud:
                     tx = secrets.token_hex(16)
                     continue
                 if e.code == "ACCEPTED" or e.status == 202:
-                    wait = 12 + attempt * 6
+                    wait = (3 + attempt * 2) if fast else (12 + attempt * 6)
                     log.info("metaapi create accepted, retry in %ss", wait)
                     time.sleep(wait)
+                    # After 202, account may already exist — try find before retry POST
+                    found = self.find_account_by_login(login, server)
+                    if found and is_metaapi_account_id(str(found.get("id") or "")):
+                        return found
                     continue
                 msg = (e.message or "").lower()
                 if "retry" in msg or "in progress" in msg or "detection" in msg:
-                    time.sleep(15 + attempt * 5)
+                    time.sleep((4 + attempt * 2) if fast else (15 + attempt * 5))
+                    found = self.find_account_by_login(login, server)
+                    if found and is_metaapi_account_id(str(found.get("id") or "")):
+                        return found
                     continue
                 raise
+        # Last chance: broker detection may have created it despite timeout
+        found = self.find_account_by_login(login, server)
+        if found and is_metaapi_account_id(str(found.get("id") or "")):
+            return found
         raise last_err or MetaApiError("create account timed out")
 
     def deploy(self, account_id: str) -> dict:
         data = self._http("POST", self._prov_url(f"/users/current/accounts/{account_id}/deploy"), {}, transaction=True)
         return data if isinstance(data, dict) else {"ok": True}
 
-    def ensure_deployed(self, account_id: str) -> dict:
+    def ensure_deployed(self, account_id: str, *, max_wait: float = 60.0) -> dict:
         acc = self.get_account(account_id)
         state = str(acc.get("state") or "").upper()
         if state != "DEPLOYED":
@@ -384,9 +399,9 @@ class MetaApiCloud:
                 # already deploying / deployed is fine
                 if "already" not in (e.message or "").lower():
                     log.warning("deploy: %s", e.message)
-            # refresh
-            for _ in range(12):
-                time.sleep(5)
+            deadline = time.time() + max(0.0, float(max_wait))
+            while time.time() < deadline:
+                time.sleep(2 if max_wait <= 12 else 5)
                 acc = self.get_account(account_id)
                 if str(acc.get("state") or "").upper() == "DEPLOYED":
                     break
@@ -413,7 +428,7 @@ class MetaApiCloud:
                     self.deploy(account_id)
                 except Exception:
                     pass
-            time.sleep(4)
+            time.sleep(3)
         return last
 
     def ensure_account(
@@ -425,8 +440,13 @@ class MetaApiCloud:
         symbol: str = "XAUUSD",
         existing_id: str | None = None,
         wait: bool = True,
+        fast: bool = False,
+        deploy_wait: float | None = None,
     ) -> dict:
-        """Find or create cloud account; optionally wait until CONNECTED."""
+        """Find or create cloud account; optionally wait until CONNECTED.
+
+        Use fast=True for HTTP login paths (Render/Safari kill long requests).
+        """
         if not self.configured:
             raise MetaApiError(
                 "METAAPI_TOKEN غير مضبوط — أضفه في التطبيق لربط Exness من السحابة بدون Windows",
@@ -447,7 +467,7 @@ class MetaApiCloud:
         if not acc:
             acc = self.find_account_by_login(login, server)
         if not acc:
-            created = self.create_account(login, password, server, symbol=symbol)
+            created = self.create_account(login, password, server, symbol=symbol, fast=fast)
             account_id = normalize_account_id(str(created["id"]))
             if not account_id:
                 raise MetaApiError("MetaApi أعاد معرّفاً غير صالح بعد الإنشاء", code="E_BAD_ACCOUNT_ID")
@@ -473,20 +493,22 @@ class MetaApiCloud:
             except MetaApiError as e:
                 log.info("password update skipped: %s", e.message)
 
+        deploy_budget = deploy_wait if deploy_wait is not None else (8.0 if fast else 60.0)
         try:
-            acc = self.ensure_deployed(account_id)
+            acc = self.ensure_deployed(account_id, max_wait=deploy_budget)
         except MetaApiError as e:
             if "not found" in (e.message or "").lower():
                 # Force fresh create once
-                created = self.create_account(login, password, server, symbol=symbol)
+                created = self.create_account(login, password, server, symbol=symbol, fast=fast)
                 account_id = normalize_account_id(str(created["id"]))
-                acc = self.ensure_deployed(account_id)
+                acc = self.ensure_deployed(account_id, max_wait=deploy_budget)
             else:
                 raise
 
         connected = False
         if wait:
-            acc = self.wait_connected(account_id, timeout=float(settings.metaapi_connect_timeout))
+            wait_timeout = 25.0 if fast else float(settings.metaapi_connect_timeout)
+            acc = self.wait_connected(account_id, timeout=wait_timeout)
             status = str(acc.get("connectionStatus") or "").upper()
             replicas = acc.get("accountReplicas") or acc.get("replicas") or []
             if not status and isinstance(replicas, list):
@@ -495,6 +517,9 @@ class MetaApiCloud:
                         status = "CONNECTED"
                         break
             connected = status == "CONNECTED"
+        else:
+            status = str(acc.get("connectionStatus") or "").upper()
+            connected = status == "CONNECTED" and str(acc.get("state") or "").upper() == "DEPLOYED"
 
         region = str(acc.get("region") or self.region)
         if region:
@@ -510,6 +535,7 @@ class MetaApiCloud:
             "server": acc.get("server") or server,
             "raw": acc,
             "healed": bool(existing_id and existing_id != account_id),
+            "pending": not connected,
         }
 
     def account_information(self, account_id: str, region: str | None = None) -> dict:
