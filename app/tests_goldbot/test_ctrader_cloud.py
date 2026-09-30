@@ -246,8 +246,11 @@ def test_oauth_start_requires_app(tmp_path, monkeypatch):
         json={"username": "ctoauth", "password": "password12", "password_confirm": "password12"},
     )
     r = client.get("/api/ctrader/oauth/start")
-    assert r.status_code == 400
-    assert "openapi.ctrader.com" in r.json()["detail"]
+    assert r.status_code == 200
+    body = r.json()
+    assert body.get("disabled") is True
+    assert "Playground" in (body.get("hint_ar") or "")
+    assert body.get("playground", "").endswith("/apps")
 
 
 def test_ctrader_auth_url_uses_oauth_v2(monkeypatch):
