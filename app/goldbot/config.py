@@ -46,21 +46,19 @@ class Settings:
     mt5_server: str = field(default_factory=lambda: os.getenv("MT5_SERVER", "FPMarkets-Live"))
     mt5_path: str = field(default_factory=lambda: os.getenv("MT5_PATH", ""))
 
-    # MetaApi cloud — real FP Markets / MT5 execution from Linux/Render (no Windows)
+    # MetaApi / MT5 — disabled by default (product primary path is cTrader Open API)
     metaapi_token: str = field(default_factory=lambda: os.getenv("METAAPI_TOKEN", os.getenv("META_API_TOKEN", "")))
     metaapi_region: str = field(default_factory=lambda: os.getenv("METAAPI_REGION", "new-york"))
     metaapi_magic: int = field(default_factory=lambda: _env_int("METAAPI_MAGIC", 908070))
     metaapi_connect_timeout: int = field(default_factory=lambda: _env_int("METAAPI_CONNECT_TIMEOUT", 120))
-    # Prefer cloud MetaApi over legacy Windows bridge when token is present
-    prefer_metaapi: bool = field(default_factory=lambda: _env_bool("AURUM_PREFER_METAAPI", True))
+    prefer_metaapi: bool = field(default_factory=lambda: _env_bool("AURUM_PREFER_METAAPI", False))
 
-    # Linux Docker/Wine MT5 executor (headless-mt5 compatible) — no Windows OS
+    # Linux Docker/Wine MT5 — off (cTrader is the primary path)
     mt5_linux_url: str = field(default_factory=lambda: os.getenv("AURUM_MT5_LINUX_URL", "").rstrip("/"))
     mt5_linux_token: str = field(default_factory=lambda: os.getenv("AURUM_MT5_LINUX_TOKEN", ""))
-    # Off by default — MetaApi is the primary no-Windows path; enable only with a Linux executor URL
     prefer_mt5_linux: bool = field(default_factory=lambda: _env_bool("AURUM_PREFER_MT5_LINUX", False))
 
-    # cTrader Open API — real FP Markets/cTrader from the app (no Windows; cTrader accounts only)
+    # cTrader Open API — primary real FP Markets execution from the app
     prefer_ctrader: bool = field(default_factory=lambda: _env_bool("AURUM_PREFER_CTRADER", True))
     ctrader_client_id: str = field(default_factory=lambda: os.getenv("CTRADER_CLIENT_ID", ""))
     ctrader_client_secret: str = field(default_factory=lambda: os.getenv("CTRADER_CLIENT_SECRET", ""))

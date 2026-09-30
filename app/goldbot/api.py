@@ -509,10 +509,11 @@ async def health():
         "auto_trade": desk.auto_trade,
         "state": desk.state,
         "tick_seconds": settings.tick_seconds,
-        "metaapi_configured": meta_ok,
+        "primary": "ctrader",
+        "metaapi_configured": bool(meta_ok and settings.prefer_metaapi),
         "ctrader_configured": ct_cfg,
         "ctrader_ready": ct_ready,
-        "mt5_linux_configured": linux_ok,
+        "mt5_linux_configured": bool(linux_ok and settings.prefer_mt5_linux),
         "execution": bridge.execution or desk.account.mode,
         "live_execution": live,
         "real_orders_only": True,
@@ -523,45 +524,33 @@ async def health():
 
 @app.get("/api/setup-next")
 async def setup_next():
-    """Public next-step guide for first-time FP Markets cloud connect."""
-    metaapi.refresh_token()
-    mt5_linux.refresh()
+    """Public next-step guide — cTrader Open API is the primary path."""
     ctrader.refresh()
-    if desk.account.connected and desk.account.mode == "mt5":
+    if desk.account.connected and desk.account.mode == "mt5" and bridge.execution == "ctrader":
         step = "ready"
-        next_ar = "الحساب متصل — اضغط «ابدأ التداول» من المكتب."
+        next_ar = "cTrader متصل — اضغط «ابدأ التداول» من المكتب."
     elif ctrader.ready:
         step = "ctrader_ready"
-        next_ar = "cTrader جاهز — اضغط «ابدأ التداول» من المكتب (حساب FP Markets على منصة cTrader)."
+        next_ar = "cTrader جاهز — اضغط «ابدأ التداول» (حساب FP Markets على منصة cTrader)."
     elif ctrader.configured and ctrader.access_token:
         step = "ctrader_select_account"
-        next_ar = "فوّض cTrader ثم اختر حسابك من تبويب الربط."
-    elif metaapi.configured:
-        step = "bind_metaapi_account"
-        next_ar = (
-            "التوكن محفوظ. الطريقة المضمونة: من لوحة MetaApi أضف حساب FP Markets وانتظر Connected، "
-            "ثم من تبويب الربط الصق Account ID واضغط «ربط هذا الحساب»."
-        )
-    elif mt5_linux.configured:
-        step = "fpmarkets_vnc_or_login"
-        next_ar = "منفّذ Linux مضبوط. سجّل FP Markets عبر VNC إن لزم، ثم ادخل من شاشة MT5."
+        next_ar = "اختر حساب cTrader من تبويب الربط."
+    elif ctrader.configured:
+        step = "ctrader_oauth"
+        next_ar = "اضغط «تفويض cTrader» ثم اختر الحساب."
     else:
-        step = "choose_path"
-        next_ar = (
-            "اختر مساراً: cTrader Open API (حساب FP Markets cTrader) من تبويب الربط، "
-            "أو توكن MetaApi لحساب MT5، أو Windows."
-        )
+        step = "ctrader_app"
+        next_ar = "من تبويب الربط: احفظ Client ID/Secret من openapi.ctrader.com ثم فوّض واختر الحساب."
     return {
         "ok": True,
         "step": step,
         "next_ar": next_ar,
-        "metaapi_configured": metaapi.configured,
+        "primary": "ctrader",
         "ctrader_configured": ctrader.configured,
         "ctrader_ready": ctrader.ready,
-        "mt5_linux_configured": mt5_linux.configured,
-        "token_url": "https://app.metaapi.cloud/api-access/generate-token",
+        "metaapi_configured": False,
+        "mt5_linux_configured": False,
         "ctrader_signup": "https://openapi.ctrader.com",
-        "default_server": DEFAULT_SERVER,
         "default_symbol": DEFAULT_SYMBOL,
         "version": __version__,
     }
@@ -984,7 +973,7 @@ def _readiness(snap: dict) -> dict:
         "real_orders_only": True,
     }
     paper_ready = all(checks[k] for k in ("service_up", "price_live", "feed_ok", "candles_ok", "risk_active", "auth_configured"))
-    live_ready = paper_ready and live_exec and (checks["metaapi_configured"] or checks["ctrader_ready"])
+    live_ready = paper_ready and live_exec and checks["ctrader_ready"]
     grade = "live_ready" if live_ready else "paper_ready" if paper_ready else "not_ready"
     return {
         "grade": grade,
@@ -993,16 +982,16 @@ def _readiness(snap: dict) -> dict:
         "live_execution": live_exec,
         "checks": checks,
         "summary_ar": (
-            "متصل للتنفيذ الحقيقي على FP Markets (ليس ورقي)"
+            "متصل للتنفيذ الحقيقي عبر cTrader على FP Markets"
             if grade == "live_ready"
-            else "وضع ورقي للتجربة فقط — أكمل ربط FP Markets للتنفيذ الحقيقي"
+            else "وضع ورقي للتجربة فقط — أكمل ربط cTrader للتنفيذ الحقيقي"
             if grade == "paper_ready"
-            else "أكمل توكن MetaApi + حساب FP Markets من شاشة الدخول"
+            else "اربط cTrader Open API من تبويب الربط (حساب FP Markets cTrader)"
         ),
         "next_for_broker": [
-            "الصق توكن MetaApi (ويفضّل أيضاً METAAPI_TOKEN في Render حتى لا يُمسح بعد النشر)",
-            "أدخل رقم FP Markets + كلمة مرور التداول + السيرفر (مثل FPMarkets-Live)",
-            "انتظر «MetaApi: متصل FP Markets» والرصيد الحقيقي (ليس 10000 ورقي)",
+            "أنشئ تطبيقاً على openapi.ctrader.com",
+            "احفظ Client ID/Secret في تبويب الربط",
+            "فوّض cTrader واختر حساب FP Markets",
             "ثم اضغط ابدأ التداول — لن تُفتح صفقات وهمية",
         ],
     }
@@ -1250,22 +1239,21 @@ async def schools(authorization: str | None = Header(default=None), aurum_sessio
 
 @app.get("/api/ways")
 async def execution_ways():
-    """Research-backed real paths to trade FP Markets without Windows."""
-    metaapi.refresh_token()
-    mt5_linux.refresh()
+    """Primary path: cTrader Open API for FP Markets (MT5/MetaApi removed from product)."""
     ctrader.refresh()
     return {
         "ok": True,
+        "primary": "ctrader",
         "finding_ar": (
-            "FP Markets لا توفّر REST API عام للأفراد على MT5. التنفيذ الحقيقي: "
-            "cTrader Open API (حساب cTrader)، أو MetaApi/MT5 سحابي، أو Windows/Linux MT5."
+            "النظام الأساسي هو cTrader Open API لحسابات FP Markets على منصة cTrader — "
+            "التنفيذ من التطبيق مباشرة بدون MetaTrader / MetaApi."
         ),
         "ways": [
             {
                 "id": "ctrader",
-                "title_ar": "cTrader Open API (من التطبيق مباشرة)",
+                "title_ar": "cTrader Open API (النظام الأساسي)",
                 "windows_required": False,
-                "cost": "مجاني — تطبيق Spotware Open API + حساب FP Markets على cTrader",
+                "cost": "مجاني — تطبيق Spotware Open API + حساب FP Markets cTrader",
                 "ready": ctrader.ready,
                 "steps_ar": [
                     "أنشئ تطبيقاً على openapi.ctrader.com (Client ID + Secret)",
@@ -1273,43 +1261,17 @@ async def execution_ways():
                     "اختر حساب FP Markets cTrader — التنفيذ من التطبيق مباشرة",
                 ],
                 "signup": "https://openapi.ctrader.com",
-                "note_ar": "يعمل فقط إن كان حساب FP Markets على منصة cTrader (وليس MT5 فقط).",
-            },
-            {
-                "id": "metaapi",
-                "title_ar": "MetaApi سحابي (حسابات MT5)",
-                "windows_required": False,
-                "cost": "حساب MT واحد مجاني تقريباً + تجربة",
-                "ready": metaapi.configured,
-                "steps_ar": [
-                    "سجّل في app.metaapi.cloud وانسخ API token",
-                    "الصقه في AURUM",
-                    "أدخل رقم FP Markets — التطبيق يفتح طرفية سحابية وينفّذ",
-                ],
-                "signup": "https://app.metaapi.cloud/api-access/generate-token",
-            },
-            {
-                "id": "mt5_linux",
-                "title_ar": "MT5 على Linux Docker/Wine (بدون نظام Windows)",
-                "windows_required": False,
-                "cost": "VPS لينكس رخيص أو مجاني (Oracle/…) + Docker",
-                "ready": mt5_linux.configured,
-                "steps_ar": [
-                    "شغّل docker compose من مجلد deploy/mt5-linux على سيرفر Linux",
-                    "افتح VNC مرة واحدة وسجّل دخول FP Markets",
-                    "الصق رابط الـ API (منفذ 5001) في AURUM",
-                ],
-                "repo": "https://github.com/thanderoy/headless-mt5",
+                "note_ar": "يلزم حساب FP Markets على منصة cTrader.",
             },
         ],
         "rejected_ar": [
-            "لا يوجد توكن FP Markets رسمي للتداول بالـ REST للأفراد على MT5",
-            "أتمتة واجهة المتصفح غير موثوقة ومخالفة لشروط الاستخدام",
+            "مسار MetaTrader 5 / MetaApi غير مفعّل في هذا الإصدار",
+            "يلزم حساب cTrader لدى FP Markets",
         ],
-        "metaapi_configured": metaapi.configured,
+        "metaapi_configured": False,
         "ctrader_configured": ctrader.configured,
         "ctrader_ready": ctrader.ready,
-        "mt5_linux_configured": mt5_linux.configured,
+        "mt5_linux_configured": False,
         "servers": BROKER_SERVERS,
     }
 
@@ -1318,15 +1280,15 @@ async def execution_ways():
 async def connect_guide():
     ways = await execution_ways()
     return {
-        "title": "طرق التنفيذ الحقيقي بدون Windows",
-        "steps": ways["ways"][0]["steps_ar"] + ["أو MetaApi / Linux Docker من /api/ways"],
-        "metaapi_configured": ways["metaapi_configured"],
+        "title": "ربط FP Markets عبر cTrader Open API",
+        "steps": ways["ways"][0]["steps_ar"],
+        "primary": "ctrader",
+        "metaapi_configured": False,
         "ctrader_configured": ways["ctrader_configured"],
         "ctrader_ready": ways["ctrader_ready"],
-        "mt5_linux_configured": ways["mt5_linux_configured"],
+        "mt5_linux_configured": False,
         "warning": ways["finding_ar"],
         "servers": BROKER_SERVERS,
-        "metaapi_signup": "https://app.metaapi.cloud/api-access/generate-token",
         "ctrader_signup": "https://openapi.ctrader.com",
         "ways": ways["ways"],
     }

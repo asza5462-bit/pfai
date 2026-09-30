@@ -3,7 +3,7 @@
 <head>
   <meta charset="utf-8" />
   <meta name="viewport" content="width=device-width, initial-scale=1" />
-  <title>AURUM — دخول FP Markets/MT5 | مكتب الذهب</title>
+  <title>AURUM — FP Markets cTrader | مكتب الذهب</title>
   <link rel="preconnect" href="https://fonts.googleapis.com" />
   <link rel="preconnect" href="https://fonts.gstatic.com" crossorigin />
   <link href="https://fonts.googleapis.com/css2?family=Syne:wght@600;700;800&family=IBM+Plex+Sans+Arabic:wght@300;400;500;600;700&display=swap" rel="stylesheet" />
@@ -16,50 +16,20 @@
   <section id="authGate" class="auth-gate">
     <div class="auth-card wide">
       <div class="brand-lock">AURUM</div>
-      <p class="auth-tag">FP Markets مباشر من التطبيق · بدون Windows</p>
+      <p class="auth-tag">FP Markets عبر cTrader Open API · من التطبيق مباشرة</p>
       <ol id="setupSteps" class="setup-steps">
-        <li><strong>١</strong> الأفضل لحساب cTrader: من تبويب الربط → cTrader Open API</li>
-        <li><strong>٢</strong> لحساب MT5: توكن من <a href="https://app.metaapi.cloud/api-access/generate-token" target="_blank" rel="noopener">MetaApi</a> + الصقه هنا</li>
-        <li><strong>٣</strong> أو مسار Windows من تبويب الربط إن لزم</li>
+        <li><strong>١</strong> أنشئ حساب تطبيق (أو سجّل الدخول)</li>
+        <li><strong>٢</strong> من تبويب الربط: Client ID/Secret من <a href="https://openapi.ctrader.com" target="_blank" rel="noopener">openapi.ctrader.com</a></li>
+        <li><strong>٣</strong> فوّض cTrader واختر حساب FP Markets ثم ابدأ التداول</li>
       </ol>
-      <p id="setupNext" class="setup-next">الخطوة التالية: اختر cTrader أو MetaApi من تبويب الربط</p>
+      <p id="setupNext" class="setup-next">الخطوة التالية: سجّل الدخول ثم اربط cTrader</p>
 
       <div class="auth-tabs">
-        <button type="button" id="tabMt5" class="on">دخول FP Markets/MT5</button>
-        <button type="button" id="tabLogin">دخول التطبيق</button>
+        <button type="button" id="tabLogin" class="on">دخول التطبيق</button>
         <button type="button" id="tabRegister">حساب تطبيق</button>
       </div>
 
-      <form id="mt5FormLogin" class="auth-form">
-        <label>توكن MetaApi <span class="req">مطلوب لأول ربط</span>
-          <input id="mt5MetaToken" type="password" placeholder="الصق API token هنا" autocomplete="off" />
-        </label>
-        <p class="auth-note tight">
-          <a href="https://app.metaapi.cloud/api-access/generate-token" target="_blank" rel="noopener">اضغط هنا لفتح صفحة التوكن</a>
-          — سجّل ثم Generate / Copy
-        </p>
-        <label>رقم حساب MetaTrader 5 / FP Markets
-          <input id="mt5Login" inputmode="numeric" required placeholder="من منطقة العميل في FP Markets" />
-        </label>
-        <label>كلمة مرور MT5 (تداول Investor غير كافية — استخدم كلمة التداول)
-          <input id="mt5Pass" type="password" required minlength="4" placeholder="كلمة مرور التداول" />
-        </label>
-        <label>سيرفر FP Markets (انسخه حرفياً من حسابك)
-          <input id="mt5Server" list="mt5ServerList" required placeholder="FPMarkets-Live" value="FPMarkets-Live" autocomplete="off" />
-          <datalist id="mt5ServerList"></datalist>
-        </label>
-        <label>رمز الذهب
-          <select id="mt5Symbol">
-            <option value="XAUUSD" selected>XAUUSD</option>
-            <option value="XAUUSDm">XAUUSDm</option>
-            <option value="XAUUSDc">XAUUSDc</option>
-            <option value="GOLD">GOLD</option>
-          </select>
-        </label>
-        <button type="submit" class="primary">ارتباط سحابي وابدأ التداول</button>
-      </form>
-
-      <form id="loginForm" class="auth-form hidden">
+      <form id="loginForm" class="auth-form">
         <label>اسم المستخدم<input id="loginUser" required minlength="3" /></label>
         <label>كلمة المرور<input id="loginPass" type="password" required minlength="8" /></label>
         <button type="submit" class="primary">تسجيل الدخول</button>
@@ -81,7 +51,7 @@
       <div class="brand-lock">AURUM</div>
       <div class="meta">
         <span id="userPill">—</span>
-        <span id="bridgePill">السحابة: —</span>
+        <span id="bridgePill">cTrader: —</span>
         <span id="readyPill">…</span>
         <span id="statePill">IDLE</span>
         <span id="modePill">paper</span>
@@ -93,15 +63,15 @@
 
     <nav class="tabs">
       <button type="button" data-tab="trade" class="on">التداول</button>
-      <button type="button" data-tab="connect">ربط FP Markets السحابي</button>
+      <button type="button" data-tab="connect">ربط cTrader</button>
       <button type="button" data-tab="history">الصفقات</button>
     </nav>
 
     <main id="tab-trade" class="panel">
       <section class="hero compact">
-        <p class="eyebrow">FP Markets · cTrader / MetaApi · نبض سريع · إدارة ذكية</p>
+        <p class="eyebrow">FP Markets · cTrader Open API · نبض سريع · إدارة ذكية</p>
         <h1 id="headline">بانتظار الارتباط</h1>
-        <p class="sub" id="narrative">أدخل حساب FP Markets — الربط والتنفيذ من التطبيق مباشرة.</p>
+        <p class="sub" id="narrative">اربط حساب FP Markets cTrader — التنفيذ الحقيقي من التطبيق مباشرة.</p>
         <div class="cta">
           <button id="btnStart" type="button">ابدأ التداول</button>
           <button id="btnScan" type="button" class="ghost">مسح الآن</button>
@@ -124,25 +94,24 @@
           <article><h2>السيولة / المؤسسات</h2><pre id="inst"></pre></article>
           <article><h2>آخر الصفقات</h2><ul id="trades"></ul></article>
         </div>
-        <p class="disclaimer">التنفيذ الحقيقي على FP Markets عبر cTrader Open API أو MetaApi من هذا التطبيق — بدون Windows.</p>
+        <p class="disclaimer">التنفيذ الحقيقي على FP Markets يتم عبر cTrader Open API فقط من هذا التطبيق.</p>
       </section>
     </main>
 
     <main id="tab-connect" class="panel hidden">
       <section class="connect-box">
-        <h1>طرق التنفيذ الحقيقي بدون Windows</h1>
+        <h1>ربط FP Markets عبر cTrader</h1>
         <p id="bridgeStatusText">حالة التنفيذ: —</p>
-        <p id="waysFinding" class="auth-note">جاري تحميل الطرق المتاحة…</p>
+        <p id="waysFinding" class="auth-note">جاري التحميل…</p>
         <p id="ctraderConfiguredLine" class="auth-note">cTrader Open API: —</p>
-        <p id="metaConfiguredLine" class="auth-note">توكن MetaApi: —</p>
-        <p id="linuxConfiguredLine" class="auth-note">منفّذ Linux: —</p>
+        <p id="ctraderStatusLine" class="auth-note">حالة cTrader: —</p>
 
-        <h2>cTrader Open API — من التطبيق مباشرة</h2>
-        <p class="auth-note">لحسابات FP Markets على منصة <strong>cTrader</strong> فقط (ليس MT5). بدون Windows وبدون MetaApi.</p>
+        <h2>الخطوات</h2>
+        <p class="auth-note">يلزم حساب FP Markets على منصة <strong>cTrader</strong> (ليس MetaTrader).</p>
         <ol class="steps">
           <li>أنشئ تطبيقاً على <a href="https://openapi.ctrader.com" target="_blank" rel="noopener">openapi.ctrader.com</a>.</li>
           <li>أضف Redirect URI الظاهر بالأسفل حرفياً في إعدادات التطبيق.</li>
-          <li>الصق Client ID و Secret ثم احفظ → تفويض → اختر الحساب.</li>
+          <li>الصق Client ID و Secret → احفظ → تفويض → اختر الحساب.</li>
         </ol>
         <label>Client ID
           <input id="ctraderClientId" type="text" placeholder="من openapi.ctrader.com" autocomplete="off" />
@@ -165,71 +134,10 @@
           <button type="button" id="btnListCtraderAccounts" class="ghost">عرض حساباتي</button>
         </div>
         <ul id="ctraderAccountsList" class="trades" style="margin-top:0.75rem"></ul>
-        <p id="ctraderStatusLine" class="auth-note">حالة cTrader: —</p>
-
-        <h2>مسار MetaApi — حسابات MT5</h2>
-        <ol class="steps">
-          <li>افتح <a href="https://app.metaapi.cloud/" target="_blank" rel="noopener">لوحة MetaApi</a> بنفس التوكن.</li>
-          <li>Add account → MT5 → أدخل FP Markets (كلمة <strong>Master/Trading</strong> + السيرفر حرفياً).</li>
-          <li>انتظر حتى تصبح الحالة <strong>Connected</strong> (أخضر) داخل MetaApi.</li>
-          <li>انسخ Account ID والصقه بالأسفل، أو اختره من القائمة ثم «ربط هذا الحساب».</li>
-        </ol>
-        <label>توكن MetaApi
-          <input id="cloudMetaToken" type="password" placeholder="الصق التوكن هنا" autocomplete="off" />
-        </label>
-        <button type="button" id="btnSaveMetaToken" class="primary">حفظ توكن MetaApi</button>
-        <label>معرّف حساب MetaApi (Account ID)
-          <input id="cloudAccountId" type="text" placeholder="مثال: b68bf70c-c3c1-40d5-b4c5-f3855561d3b7" autocomplete="off" />
-        </label>
-        <div class="cta" style="margin-top:0.5rem">
-          <button type="button" id="btnBindAccount" class="primary">ربط هذا الحساب</button>
-          <button type="button" id="btnListAccounts" class="ghost">عرض حساباتي في MetaApi</button>
-        </div>
-        <ul id="metaAccountsList" class="trades" style="margin-top:0.75rem"></ul>
-
-        <h2>مسار بديل — تصحيح كلمة المرور ثم إنشاء تلقائي</h2>
-        <p class="auth-note">إن فشل الإنشاء التلقائي سابقاً: صحّح كلمة مرور التداول ثم احفظ. الأضمن يبقى الربط من لوحة MetaApi أعلاه.</p>
-        <label>كلمة مرور التداول
-          <input id="cloudMt5Pass" type="password" placeholder="كلمة مرور التداول من FP Markets" autocomplete="off" />
-        </label>
-        <label>سيرفر FP Markets
-          <input id="cloudMt5Server" list="mt5ServerList" placeholder="FPMarkets-Live" value="FPMarkets-Live" autocomplete="off" />
-        </label>
-        <button type="button" id="btnSaveBrokerCreds" class="primary">حفظ وتصحيح الربط</button>
-
-        <h2>مسار Windows — MetaTrader 5 على جهازك (مضمون)</h2>
-        <ol class="steps">
-          <li>ثبّت <strong>MetaTrader 5</strong> من FP Markets وسجّل بحسابك (كلمة التداول).</li>
-          <li>احفظ بيانات FP Markets في AURUM من شاشة الدخول إن لم تكن محفوظة.</li>
-          <li>اضغط الزر بالأسفل لنسخ أمر الوكيل، ثم شغّله على ويندوز وMT5 مفتوح.</li>
-        </ol>
-        <button type="button" id="btnEnableWindows" class="primary">تفعيل مسار Windows ونسخ الأمر</button>
-        <label>أمر الوكيل (شغّله على ويندوز)
-          <textarea id="agentCmd" rows="3" readonly placeholder="سيظهر الأمر هنا بعد التفعيل"></textarea>
-        </label>
-        <div class="cta" style="margin-top:0.5rem">
-          <button type="button" id="btnCopyAgent" class="ghost">نسخ الأمر</button>
-          <a id="agentDownloadLink" class="ghost" href="/aurum_fpmarkets_agent.py" download>تحميل aurum_fpmarkets_agent.py</a>
-        </div>
-
-        <h2>مسار Linux Docker</h2>
-        <ol class="steps">
-          <li>على أي سيرفر Linux: شغّل <code>deploy/mt5-linux</code> عبر Docker Compose.</li>
-          <li>افتح المنفذ 3000 وسجّل FP Markets مرة واحدة عبر VNC.</li>
-          <li>الصق رابط API (منفذ 5001) بالأسفل.</li>
-        </ol>
-        <label>رابط منفّذ Linux
-          <input id="linuxExecutorUrl" type="url" placeholder="http://IP:5001" autocomplete="off" />
-        </label>
-        <label>توكن المنفّذ (اختياري)
-          <input id="linuxExecutorToken" type="password" placeholder="Bearer إن وُجد" autocomplete="off" />
-        </label>
-        <button type="button" id="btnSaveLinux" class="primary">حفظ منفّذ Linux</button>
 
         <p id="cloudAccountLine" class="auth-note">معرّف الحساب: —</p>
         <div class="cta" style="margin-top:0.75rem">
-          <button type="button" id="btnRefreshBridge" class="primary">تحديث / إعادة ربط</button>
-          <button type="button" id="btnResetCloud" class="ghost">إعادة ربط كامل</button>
+          <button type="button" id="btnRefreshBridge" class="primary">تحديث الحالة</button>
         </div>
         <p id="connectMsg" class="auth-msg"></p>
       </section>

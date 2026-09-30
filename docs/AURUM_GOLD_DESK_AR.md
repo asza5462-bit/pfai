@@ -1,18 +1,12 @@
 # AURUM — مكتب ذهب نخبة (XAUUSD)
 
-بوت تداول ذهب جاهز للربط مع **FP Markets** عبر MetaTrader 5 أو cTrader.
+بوت تداول ذهب مربوط بـ **FP Markets عبر cTrader Open API** (النظام الأساسي).
 
-## ماذا يفعل
+## التنفيذ
 
-- يقرأ الشموع والأنماط (Pin, Engulfing, Stars, Structure)
-- يجمع أصوات مدارس عالمية: Price Action · SMC/ICT · Trend · Sessions · ATR
-- تقديرات سيولة/مؤسسات من OHLC
-- إدارة مخاطر صارمة: لوت حسب المخاطرة، حد خسارة يومي، تبريد، رفض السبريد الواسع
-- وضع `paper` على Render/Linux · وضع `mt5` مع FP Markets
+المسار الوحيد المفعّل: **cTrader Open API** لحسابات FP Markets على منصة cTrader.
 
-## حقيقة مهمة
-
-**لا يمكن ضمان خسارة صفر أو تكات رابحة دائماً.** AURUM مصمم لتقليل الصفقات السيئة وحماية رأس المال.
+مسارات MetaTrader 5 / MetaApi غير مفعّلة في هذا الإصدار.
 
 ## التشغيل
 
@@ -22,25 +16,9 @@ pip install -r requirements.txt
 AURUM_MODE=paper uvicorn goldbot.api:app --host 0.0.0.0 --port 8000
 ```
 
-## ربط FP Markets
+## ربط FP Markets (cTrader)
 
-راجع `GET /api/connect-guide` أو تبويب «ربط FP Markets السحابي».
-
-### MT5 عبر MetaApi (بدون Windows)
-
-1. توكن من [MetaApi](https://app.metaapi.cloud/api-access/generate-token)
-2. من لوحة MetaApi أضف حساب MT5 بسيرفر مثل `FPMarkets-Live` وانتظر Connected
-3. اربط Account ID من تبويب الربط في AURUM
-4. الرمز الافتراضي: `XAUUSD`
-
-### cTrader Open API
-
-يعمل إن كان حساب FP Markets على منصة **cTrader**:
-
-1. تطبيق على [openapi.ctrader.com](https://openapi.ctrader.com)
+1. أنشئ تطبيقاً على [openapi.ctrader.com](https://openapi.ctrader.com)
 2. Redirect URI: `https://YOUR_HOST/api/ctrader/oauth/callback`
-3. احفظ → فوّض → اختر الحساب
-
-### Windows agent
-
-فعّل المسار من تبويب الربط وشغّل `aurum_fpmarkets_agent.py` مع MT5 مفتوح على سيرفر FP Markets.
+3. من تبويب «ربط cTrader»: احفظ Client ID/Secret → تفويض → اختر الحساب
+4. الرمز: `XAUUSD`

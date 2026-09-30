@@ -80,9 +80,9 @@ def test_ways_and_save_linux_executor(tmp_path, monkeypatch):
     assert ways.status_code == 200
     body = ways.json()
     assert body["ok"] is True
-    assert len(body["ways"]) >= 2
-    assert any(w["id"] == "metaapi" for w in body["ways"])
-    assert any(w["id"] == "mt5_linux" for w in body["ways"])
+    assert len(body["ways"]) >= 1
+    assert any(w["id"] == "ctrader" for w in body["ways"])
+    assert body.get("primary") == "ctrader"
 
     reg = client.post(
         "/api/auth/register",
