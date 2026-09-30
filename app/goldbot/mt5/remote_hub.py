@@ -1,4 +1,4 @@
-"""Cloud hub for Windows MT5/Exness agent — real execution off Linux Render."""
+"""Cloud hub for Windows MT5 / FP Markets agent — real execution off Linux Render."""
 from __future__ import annotations
 
 import json
@@ -9,17 +9,11 @@ import time
 from pathlib import Path
 
 from goldbot.config import settings
+from goldbot.mt5.broker import BROKER_SERVERS
 
-def _exness_servers() -> list[str]:
-    """Generate common Exness MT5 trial/real server names (incl. Trial15+)."""
-    out: list[str] = ["Exness-MT5Trial"]
-    out.extend(f"Exness-MT5Trial{i}" for i in range(2, 31))
-    out.append("Exness-MT5Real")
-    out.extend(f"Exness-MT5Real{i}" for i in range(2, 61))
-    return out
-
-
-EXNESS_SERVERS = _exness_servers()
+# Public list for UI/API (FP Markets). Legacy alias kept for imports.
+EXNESS_SERVERS = list(BROKER_SERVERS)
+BROKER_SERVERS_LIST = EXNESS_SERVERS
 
 
 class RemoteHub:
@@ -141,7 +135,7 @@ class RemoteHub:
             "last_seen_age_sec": round(age, 1) if row["last_seen"] else None,
             "account": account,
             "agent": info,
-            "detail": "وكيل MT5 متصل — التنفيذ على Exness" if online else "بانتظار تشغيل وكيل Windows MT5",
+            "detail": "وكيل MT5 متصل — التنفيذ على FP Markets" if online else "بانتظار تشغيل وكيل Windows MT5",
         }
 
     def enqueue(self, user_id: int, kind: str, payload: dict) -> dict:

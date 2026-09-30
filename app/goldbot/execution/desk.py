@@ -85,7 +85,7 @@ class TradingDesk:
                 "error": "not_live",
                 "message": (
                     "التداول الحقيقي غير متصل بعد — لن نفتح صفقات وهمية. "
-                    "أكمل ربط MetaApi/Exness حتى يظهر «متصل Exness» ثم اضغط ابدأ."
+                    "أكمل ربط MetaApi/FP Markets حتى يظهر «متصل FP Markets» ثم اضغط ابدأ."
                 ),
             }
         self.armed = True
@@ -108,9 +108,9 @@ class TradingDesk:
             "scan": snap,
             "executed": executed,
             "message": (
-                "التنفيذ الحقيقي على Exness يعمل — تحليل بأجزاء الثانية + إدارة ذكية."
+                "التنفيذ الحقيقي على FP Markets يعمل — تحليل بأجزاء الثانية + إدارة ذكية."
                 if live
-                else "المكتب الورقي يعمل للتجربة فقط — ليس تنفيذاً على Exness."
+                else "المكتب الورقي يعمل للتجربة فقط — ليس تنفيذاً على FP Markets."
             ),
         }
 

@@ -1,15 +1,15 @@
 #!/usr/bin/env python3
 """
-AURUM Exness / MetaTrader 5 Windows Agent
+AURUM FP Markets / MetaTrader 5 Windows Agent
 ========================================
-Runs on Windows where MetaTrader 5 terminal is installed and logged into Exness.
+Runs on Windows where MetaTrader 5 terminal is installed and logged into FP Markets.
 Connects to the AURUM cloud desk and executes real orders.
 
 Usage:
   pip install MetaTrader5 requests
   python aurum_exness_agent.py --cloud https://pfai-v8.onrender.com --token YOUR_BRIDGE_TOKEN
 
-Keep MT5 open. Use Demo server first (Exness-MT5Trial*).
+Keep MT5 open. Use Demo server first (FPMarkets-Demo*).
 """
 from __future__ import annotations
 
@@ -29,7 +29,7 @@ def api(cloud: str, token: str, method: str, path: str, json_body=None):
     r = requests.request(
         method,
         url,
-        headers={"Authorization": f"Bearer {token}", "User-Agent": "AURUM-Exness-Agent/3.1"},
+        headers={"Authorization": f"Bearer {token}", "User-Agent": "AURUM-FPMarkets-Agent/3.1"},
         json=json_body,
         timeout=30,
     )
@@ -126,7 +126,7 @@ def execute_order(mt5, payload: dict) -> dict:
 
 
 def main():
-    p = argparse.ArgumentParser(description="AURUM Exness MT5 agent")
+    p = argparse.ArgumentParser(description="AURUM FP Markets MT5 agent")
     p.add_argument("--cloud", required=True, help="AURUM cloud URL")
     p.add_argument("--token", required=True, help="Bridge token from web login")
     p.add_argument("--poll", type=float, default=1.0, help="Poll seconds")

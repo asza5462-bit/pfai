@@ -1,5 +1,5 @@
-"""AURUM — Elite XAUUSD trading desk (MT5 / Exness ready)."""
+"""AURUM — Elite XAUUSD trading desk (MT5 / FP Markets ready)."""
 
-__version__ = "3.7.0"
+__version__ = "3.8.0"
 PRODUCT_NAME = "AURUM"
-PRODUCT_TAGLINE = "Exness Direct · cTrader Open API / MetaApi / Windows MT5 / Linux MT5"
+PRODUCT_TAGLINE = "FP Markets Direct · cTrader Open API / MetaApi / Windows MT5 / Linux MT5"

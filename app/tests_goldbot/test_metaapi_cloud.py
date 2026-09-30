@@ -1,4 +1,4 @@
-"""MetaApi cloud path — direct Exness without Windows."""
+"""MetaApi cloud path — direct FP Markets without Windows (FP Markets)."""
 from __future__ import annotations
 
 from fastapi.testclient import TestClient
@@ -139,12 +139,17 @@ def test_account_id_validation():
     assert normalize_account_id("1215") == ""
 
 
-def test_normalize_exness_server_real32():
+def test_normalize_broker_server_fpmarkets():
+    from goldbot.mt5.broker import normalize_broker_server
     from goldbot.mt5.metaapi_cloud import normalize_exness_server
 
+    assert normalize_broker_server("FPMarkets-Live") == "FPMarkets-Live"
+    assert normalize_broker_server("fpmarkets live") == "FPMarkets-Live"
+    assert normalize_broker_server("FPMarkets-Live2") == "FPMarkets-Live2"
+    assert normalize_broker_server("FP Markets Demo") == "FPMarkets-Demo"
+    # legacy alias still works for old Exness paste
     assert normalize_exness_server("Exness-MT5Real32") == "Exness-MT5Real32"
-    assert normalize_exness_server("exness-mt5real32") == "Exness-MT5Real32"
-    assert normalize_exness_server("Exness MT5 Real32") == "Exness-MT5Real32"
+
 
 
 def test_ensure_account_real32_server(monkeypatch):
@@ -154,12 +159,12 @@ def test_ensure_account_real32_server(monkeypatch):
     out = client.ensure_account(
         "55667788",
         "TradePass1",
-        "Exness MT5 Real32",
+        "FPMarkets Live",
         wait=True,
     )
     assert out["ok"] is True
     assert out["connected"] is True
-    assert fake.accounts[FAKE_ACCOUNT_ID]["server"] == "Exness-MT5Real32"
+    assert fake.accounts[FAKE_ACCOUNT_ID]["server"] == "FPMarkets-Live"
 
 
 def test_ensure_account_ignores_stale_numeric_id(monkeypatch):
@@ -169,7 +174,7 @@ def test_ensure_account_ignores_stale_numeric_id(monkeypatch):
     out = client.ensure_account(
         "55667788",
         "TradePass1",
-        "Exness-MT5Trial15",
+        "FPMarkets-Demo",
         existing_id="1215",  # corrupt id from production bug
         wait=True,
     )
@@ -182,7 +187,7 @@ def test_metaapi_ensure_and_order(monkeypatch):
     monkeypatch.setattr("time.sleep", lambda *_: None)
     fake = FakeMetaHttp()
     client = MetaApiCloud(token="test-token", region="new-york", http=fake)
-    out = client.ensure_account("55667788", "TradePass1", "Exness-MT5Trial", wait=True)
+    out = client.ensure_account("55667788", "TradePass1", "FPMarkets-Demo", wait=True)
     assert out["ok"] is True
     assert out["account_id"] == FAKE_ACCOUNT_ID
     assert out["connected"] is True
@@ -265,7 +270,7 @@ def test_mt5_login_uses_metaapi_cloud(tmp_path, monkeypatch):
         json={
             "mt5_login": "55667788",
             "mt5_password": "TradePass1",
-            "mt5_server": "Exness-MT5Trial",
+            "mt5_server": "FPMarkets-Demo",
             "symbol": "XAUUSD",
             "auto_start": False,
         },
@@ -304,7 +309,7 @@ def test_arabic_validation_failed_message():
     ar = arabic_metaapi_error(err)
     assert "مصادقة" in ar or "رفض" in ar
     assert "كلمة مرور التداول" in ar
-    assert "Exness-MT5Real32" in ar
+    assert "FPMarkets-Live" in ar
 
 
 def test_windows_bridge_enable(tmp_path, monkeypatch):
@@ -325,7 +330,7 @@ def test_windows_bridge_enable(tmp_path, monkeypatch):
     )
     assert reg.status_code == 200
     uid = reg.json()["user"]["id"]
-    users.login_with_mt5("55667788", "TradePass1", "Exness-MT5Real32", "XAUUSDm")
+    users.login_with_mt5("55667788", "TradePass1", "FPMarkets-Live", "XAUUSD")
     # ensure session still valid after login_with_mt5 created another session — re-login app
     client.post("/api/auth/login", json={"username": "win1", "password": "password12"})
     # attach mt5 secrets to registered user
@@ -334,7 +339,7 @@ def test_windows_bridge_enable(tmp_path, monkeypatch):
         {
             "mt5_login": "55667788",
             "mt5_password": "TradePass1",
-            "mt5_server": "Exness-MT5Real32",
+            "mt5_server": "FPMarkets-Live",
             "mode": "mt5",
         },
     )
@@ -353,7 +358,7 @@ def test_prepare_bound_account_ready(monkeypatch):
     fake.accounts[FAKE_ACCOUNT_ID] = {
         "id": FAKE_ACCOUNT_ID,
         "login": "55667788",
-        "server": "Exness-MT5Real32",
+        "server": "FPMarkets-Live",
         "state": "DEPLOYED",
         "connectionStatus": "CONNECTED",
         "region": "new-york",
@@ -380,7 +385,7 @@ def test_cloud_bind_endpoint(tmp_path, monkeypatch):
     fake.accounts[FAKE_ACCOUNT_ID] = {
         "id": FAKE_ACCOUNT_ID,
         "login": "55667788",
-        "server": "Exness-MT5Real32",
+        "server": "FPMarkets-Live",
         "state": "DEPLOYED",
         "connectionStatus": "CONNECTED",
         "region": "new-york",
@@ -422,7 +427,7 @@ def test_force_new_deletes_stuck_account_then_recreates(monkeypatch):
     fake.accounts[stuck_id] = {
         "id": stuck_id,
         "login": "55667788",
-        "server": "Exness-MT5Real32",
+        "server": "FPMarkets-Live",
         "state": "DEPLOYED",
         "connectionStatus": "DISCONNECTED",
         "connectionError": "Validation failed (b68bf70cc3c140d5b4c5f3855561d3b7)",
@@ -432,7 +437,7 @@ def test_force_new_deletes_stuck_account_then_recreates(monkeypatch):
     out = client.ensure_account(
         "55667788",
         "TradePass1",
-        "Exness-MT5Real32",
+        "FPMarkets-Live",
         existing_id=stuck_id,
         wait=True,
         force_new=True,
@@ -452,13 +457,13 @@ def test_metaapi_candles_and_bridge_feed(monkeypatch):
     fake.accounts[FAKE_ACCOUNT_ID] = {
         "id": FAKE_ACCOUNT_ID,
         "login": "55667788",
-        "server": "Exness-MT5Real32",
+        "server": "FPMarkets-Live",
         "state": "DEPLOYED",
         "connectionStatus": "CONNECTED",
         "region": "new-york",
     }
     cloud = MetaApiCloud(token="test-token", region="new-york", http=fake)
-    bars = cloud.candles(FAKE_ACCOUNT_ID, "XAUUSDm", "M15", count=80)
+    bars = cloud.candles(FAKE_ACCOUNT_ID, "XAUUSD", "M15", count=80)
     assert len(bars) >= 50
     assert "close" in bars[0]
 
@@ -467,7 +472,7 @@ def test_metaapi_candles_and_bridge_feed(monkeypatch):
 
     settings.mode = "mt5"
     settings.prefer_metaapi = True
-    settings.symbol = "XAUUSDm"
+    settings.symbol = "XAUUSD"
     monkeypatch.setattr("goldbot.mt5.metaapi_cloud.metaapi", cloud)
     b = Bridge()
     b.mode = "mt5"
@@ -501,15 +506,15 @@ def test_find_account_by_login_rejects_cross_server():
     fake.accounts[FAKE_ACCOUNT_ID] = {
         "id": FAKE_ACCOUNT_ID,
         "login": "55667788",
-        "server": "Exness-MT5Trial15",
+        "server": "FPMarkets-Demo",
         "state": "DEPLOYED",
         "connectionStatus": "CONNECTED",
         "region": "new-york",
     }
     client = MetaApiCloud(token="test-token", region="new-york", http=fake)
-    assert client.find_account_by_login("55667788", "Exness-MT5Real32") is None
-    assert client.find_account_by_login("55667788", "Exness-MT5Trial15")["id"] == FAKE_ACCOUNT_ID
-    assert client.find_account_by_login("55667788")["server"] == "Exness-MT5Trial15"
+    assert client.find_account_by_login("55667788", "FPMarkets-Live") is None
+    assert client.find_account_by_login("55667788", "FPMarkets-Demo")["id"] == FAKE_ACCOUNT_ID
+    assert client.find_account_by_login("55667788")["server"] == "FPMarkets-Demo"
 
 
 def test_ensure_account_migrates_trial_to_real32(monkeypatch):
@@ -518,7 +523,7 @@ def test_ensure_account_migrates_trial_to_real32(monkeypatch):
     fake.accounts[FAKE_ACCOUNT_ID] = {
         "id": FAKE_ACCOUNT_ID,
         "login": "55667788",
-        "server": "Exness-MT5Trial15",
+        "server": "FPMarkets-Demo",
         "state": "DEPLOYED",
         "connectionStatus": "DISCONNECTED",
         "region": "new-york",
@@ -527,7 +532,7 @@ def test_ensure_account_migrates_trial_to_real32(monkeypatch):
     out = client.ensure_account(
         "55667788",
         "TradePass1",
-        "Exness-MT5Real32",
+        "FPMarkets-Live",
         wait=True,
         fast=False,
     )
@@ -536,7 +541,7 @@ def test_ensure_account_migrates_trial_to_real32(monkeypatch):
     assert out["connected"] is True
     assert fake.migrated is True
     assert fake.create_calls == 0
-    assert fake.accounts[FAKE_ACCOUNT_ID]["server"] == "Exness-MT5Real32"
+    assert fake.accounts[FAKE_ACCOUNT_ID]["server"] == "FPMarkets-Live"
 
 
 def test_ensure_account_migrates_existing_id_wrong_server(monkeypatch):
@@ -545,7 +550,7 @@ def test_ensure_account_migrates_existing_id_wrong_server(monkeypatch):
     fake.accounts[FAKE_ACCOUNT_ID] = {
         "id": FAKE_ACCOUNT_ID,
         "login": "55667788",
-        "server": "Exness-MT5Trial15",
+        "server": "FPMarkets-Demo",
         "state": "DEPLOYED",
         "connectionStatus": "CONNECTED",
         "region": "new-york",
@@ -554,13 +559,13 @@ def test_ensure_account_migrates_existing_id_wrong_server(monkeypatch):
     out = client.ensure_account(
         "55667788",
         "TradePass1",
-        "Exness-MT5Real32",
+        "FPMarkets-Live",
         existing_id=FAKE_ACCOUNT_ID,
         wait=True,
     )
     assert out["ok"] is True
     assert out["migrated"] is True
-    assert fake.accounts[FAKE_ACCOUNT_ID]["server"] == "Exness-MT5Real32"
+    assert fake.accounts[FAKE_ACCOUNT_ID]["server"] == "FPMarkets-Live"
 
 
 def test_cloud_diagnose_server_mismatch(tmp_path, monkeypatch):
@@ -579,7 +584,7 @@ def test_cloud_diagnose_server_mismatch(tmp_path, monkeypatch):
     fake.accounts[FAKE_ACCOUNT_ID] = {
         "id": FAKE_ACCOUNT_ID,
         "login": "55667788",
-        "server": "Exness-MT5Trial15",
+        "server": "FPMarkets-Demo",
         "state": "DEPLOYED",
         "connectionStatus": "DISCONNECTED",
         "region": "new-york",
@@ -614,18 +619,18 @@ def test_cloud_diagnose_server_mismatch(tmp_path, monkeypatch):
         {
             "mt5_login": "55667788",
             "mt5_password": "TradePass1",
-            "mt5_server": "Exness-MT5Real32",
+            "mt5_server": "FPMarkets-Live",
             "metaapi_account_id": FAKE_ACCOUNT_ID,
             "mode": "mt5",
         },
     )
     # update_settings may not accept password plaintext the same way — use login_with_mt5 path
-    users.login_with_mt5("55667788", "TradePass1", "Exness-MT5Real32", "XAUUSDm")
+    users.login_with_mt5("55667788", "TradePass1", "FPMarkets-Live", "XAUUSD")
 
     diag = client.get("/api/cloud/diagnose")
     assert diag.status_code == 200, diag.text
     body = diag.json()
     assert body["ok"] is True
-    assert body["requested_server"] == "Exness-MT5Real32"
+    assert body["requested_server"] == "FPMarkets-Live"
     assert any(i.get("code") == "E_SERVER_MISMATCH" for i in body.get("issues") or [])
     assert body["error_code"] == "E_SERVER_MISMATCH"

@@ -1,4 +1,4 @@
-"""cTrader Open API path — real Exness/cTrader from the app (no Windows)."""
+"""cTrader Open API path — real FP Markets/cTrader from the app (no Windows)."""
 from __future__ import annotations
 
 from fastapi.testclient import TestClient
@@ -134,7 +134,7 @@ def test_ctrader_bind_and_bridge_order(tmp_path, monkeypatch):
                     "ctidTraderAccountId": 123456,
                     "isLive": True,
                     "traderLogin": 990011,
-                    "brokerTitle": "Exness",
+                    "brokerTitle": "FP Markets",
                     "depositCurrency": "USD",
                 }
             ]

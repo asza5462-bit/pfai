@@ -1,9 +1,9 @@
 """
-cTrader Open API connector — real Exness/cTrader execution from AURUM (no Windows).
+cTrader Open API connector — real FP Markets/cTrader execution from AURUM (no Windows).
 
 Uses WebSocket JSON protocol (wss://live|demo.ctraderapi.com:5036).
 Requires a Spotware Open API app (clientId/secret) + user OAuth access token.
-Only works if the Exness account is a **cTrader** account (not MT5-only).
+Only works if the FP Markets account is a **cTrader** account (not MT5-only).
 """
 from __future__ import annotations
 
@@ -74,7 +74,7 @@ def arabic_ctrader_error(exc: CTraderError | Exception) -> str:
     if code == "NO_ACCOUNT" or "account" in low and "select" in low:
         return "اختر حساب cTrader من القائمة بعد التفويض."
     if "mt5" in low or "not a ctrader" in low:
-        return "هذا الحساب MT5 فقط — cTrader Open API يحتاج حساب Exness على منصة cTrader."
+        return "هذا الحساب MT5 فقط — cTrader Open API يحتاج حساب FP Markets على منصة cTrader."
     if "timeout" in low or code == "TIMEOUT":
         return "انتهت مهلة الاتصال بـ cTrader — أعد المحاولة."
     if "websocket" in low or code == "NETWORK":
@@ -316,7 +316,7 @@ class CTraderSession:
         if not self._symbols:
             self.load_symbols()
         want = str(symbol or "").upper().replace("/", "")
-        candidates = [want, want.replace("M", ""), "XAUUSD", "XAUUSDm", "GOLD"]
+        candidates = [want, want.replace("M", ""), "XAUUSD", "XAUUSD", "GOLD"]
         for c in candidates:
             if c in self._symbols:
                 return self._symbols[c]
@@ -657,7 +657,7 @@ class CTraderCloud:
                 "currency": str(trader.get("depositAssetId") or trader.get("currency") or "USD"),
                 "server": "cTrader-Live" if self.live else "cTrader-Demo",
                 "login": login,
-                "detail": "Exness عبر cTrader Open API (من التطبيق مباشرة)",
+                "detail": "FP Markets عبر cTrader Open API (من التطبيق مباشرة)",
                 "account_id": self.account_id,
             }
         finally:

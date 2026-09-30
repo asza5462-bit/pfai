@@ -36,17 +36,17 @@ class Settings:
     )
 
     # Trading
-    symbol: str = field(default_factory=lambda: os.getenv("AURUM_SYMBOL", "XAUUSDm"))
+    symbol: str = field(default_factory=lambda: os.getenv("AURUM_SYMBOL", "XAUUSD"))
     timeframe: str = field(default_factory=lambda: os.getenv("AURUM_TIMEFRAME", "M15"))
     mode: str = field(default_factory=lambda: os.getenv("AURUM_MODE", "paper"))  # paper | mt5
 
-    # MT5 / Exness — never commit secrets; set via Render/VPS env
+    # MT5 / FP Markets — never commit secrets; set via Render/VPS env
     mt5_login: int = field(default_factory=lambda: _env_int("MT5_LOGIN", 0))
     mt5_password: str = field(default_factory=lambda: os.getenv("MT5_PASSWORD", ""))
-    mt5_server: str = field(default_factory=lambda: os.getenv("MT5_SERVER", "Exness-MT5Real32"))
+    mt5_server: str = field(default_factory=lambda: os.getenv("MT5_SERVER", "FPMarkets-Live"))
     mt5_path: str = field(default_factory=lambda: os.getenv("MT5_PATH", ""))
 
-    # MetaApi cloud — real Exness execution from Linux/Render (no Windows)
+    # MetaApi cloud — real FP Markets / MT5 execution from Linux/Render (no Windows)
     metaapi_token: str = field(default_factory=lambda: os.getenv("METAAPI_TOKEN", os.getenv("META_API_TOKEN", "")))
     metaapi_region: str = field(default_factory=lambda: os.getenv("METAAPI_REGION", "new-york"))
     metaapi_magic: int = field(default_factory=lambda: _env_int("METAAPI_MAGIC", 908070))
@@ -60,7 +60,7 @@ class Settings:
     # Off by default — MetaApi is the primary no-Windows path; enable only with a Linux executor URL
     prefer_mt5_linux: bool = field(default_factory=lambda: _env_bool("AURUM_PREFER_MT5_LINUX", False))
 
-    # cTrader Open API — real Exness/cTrader from the app (no Windows; cTrader accounts only)
+    # cTrader Open API — real FP Markets/cTrader from the app (no Windows; cTrader accounts only)
     prefer_ctrader: bool = field(default_factory=lambda: _env_bool("AURUM_PREFER_CTRADER", True))
     ctrader_client_id: str = field(default_factory=lambda: os.getenv("CTRADER_CLIENT_ID", ""))
     ctrader_client_secret: str = field(default_factory=lambda: os.getenv("CTRADER_CLIENT_SECRET", ""))

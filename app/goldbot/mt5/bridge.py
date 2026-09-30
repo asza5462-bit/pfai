@@ -1,9 +1,9 @@
 """
-MT5 / Exness bridge.
+MT5 / FP Markets bridge.
 
 - `paper` mode: works on Linux/Render with live gold quotes + simulated fills.
-- `mt5` + MetaApi: real Exness execution from cloud (no Windows).
-- `mt5` + cTrader Open API: real Exness/cTrader execution from the app (no Windows).
+- `mt5` + MetaApi: real FP Markets execution from cloud (no Windows).
+- `mt5` + cTrader Open API: real FP Markets/cTrader execution from the app (no Windows).
 - Legacy Windows agent hub remains as optional fallback.
 """
 from __future__ import annotations
@@ -107,7 +107,7 @@ class Bridge:
             self.execution = "ctrader"
 
     def connect(self) -> AccountSnapshot:
-        # 0) cTrader Open API — in-app Exness/cTrader (no Windows; cTrader accounts only)
+        # 0) cTrader Open API — in-app FP Markets/cTrader (no Windows; cTrader accounts only)
         if (
             self.mode == "mt5"
             and self.execution != "windows_bridge"
@@ -186,7 +186,7 @@ class Bridge:
                         currency="USD",
                         mode="mt5",
                         connected=False,
-                        server=settings.mt5_server or "Exness",
+                        server=settings.mt5_server or "FP Markets",
                         login=int(settings.mt5_login or 0),
                         detail=str(snap.get("detail") or "معرّف MetaApi تالف — أعد الربط الكامل"),
                     )
@@ -200,12 +200,12 @@ class Bridge:
                         currency="USD",
                         mode="mt5",
                         connected=False,
-                        server=settings.mt5_server or "Exness",
+                        server=settings.mt5_server or "FP Markets",
                         login=int(settings.mt5_login or 0),
                         detail=str(snap.get("detail") or "بانتظار اتصال MetaApi السحابي"),
                     )
 
-        # 2) Linux Docker/Wine MT5 — real Exness without Windows OS
+        # 2) Linux Docker/Wine MT5 — real FP Markets without Windows OS
         if self.mode == "mt5" and settings.prefer_mt5_linux:
             from goldbot.mt5.mt5_linux import mt5_linux
 
@@ -235,9 +235,9 @@ class Bridge:
                         currency="USD",
                         mode="mt5",
                         connected=False,
-                        server=settings.mt5_server or "Exness",
+                        server=settings.mt5_server or "FP Markets",
                         login=int(settings.mt5_login or 0),
-                        detail=str(snap.get("detail") or "منفّذ Linux غير متصل — افتح VNC وسجّل Exness مرة واحدة"),
+                        detail=str(snap.get("detail") or "منفّذ Linux غير متصل — افتح VNC وسجّل FP Markets مرة واحدة"),
                     )
 
         # 3) MetaApi configured but account id not ready yet — never pretend Windows agent is required
@@ -253,9 +253,9 @@ class Bridge:
                     currency="USD",
                     mode="mt5",
                     connected=False,
-                    server=settings.mt5_server or "Exness",
+                    server=settings.mt5_server or "FP Markets",
                     login=int(settings.mt5_login or 0),
-                    detail="توكن MetaApi جاهز — جاري إنشاء الطرفية السحابية على Exness (بدون Windows)",
+                    detail="توكن MetaApi جاهز — جاري إنشاء الطرفية السحابية على FP Markets (بدون Windows)",
                 )
 
         # 4) Windows MT5 agent — explicit choice or fallback when MetaApi/Linux/cTrader not live
@@ -276,7 +276,7 @@ class Bridge:
                     connected=True,
                     server=str(acc.get("server") or settings.mt5_server),
                     login=int(acc.get("login") or settings.mt5_login or 0),
-                    detail=st.get("detail") or "Exness via MT5 agent",
+                    detail=st.get("detail") or "FP Markets via MT5 agent",
                 )
             return AccountSnapshot(
                 balance=float(acc.get("balance") or 0),
@@ -286,9 +286,9 @@ class Bridge:
                 currency="USD",
                 mode="mt5",
                 connected=False,
-                server=settings.mt5_server or "Exness",
+                server=settings.mt5_server or "FP Markets",
                 login=int(settings.mt5_login or 0),
-                detail=st.get("detail") or "بانتظار اتصال السحابة بـ Exness",
+                detail=st.get("detail") or "بانتظار اتصال السحابة بـ FP Markets",
             )
         if self.mode == "mt5":
             return self._connect_mt5()
@@ -302,7 +302,7 @@ class Bridge:
             connected=True,
             server="AURUM-PAPER",
             login=0,
-            detail="Paper desk — سجّل دخول Exness من التطبيق للربط السحابي الحقيقي.",
+            detail="Paper desk — سجّل دخول FP Markets من التطبيق للربط السحابي الحقيقي.",
         )
 
     def _connect_mt5(self) -> AccountSnapshot:
@@ -315,7 +315,7 @@ class Bridge:
             currency="USD",
             mode="mt5",
             connected=False,
-            server=settings.mt5_server or "Exness",
+            server=settings.mt5_server or "FP Markets",
             login=int(settings.mt5_login or 0),
             detail="",
         )
@@ -801,7 +801,7 @@ class Bridge:
             return result
         if self.mode == "mt5" and self._mt5 is not None:
             return self._order_mt5(side, lot, sl, tp, comment)
-        # CRITICAL: never silently paper-fill when user asked for live Exness/MT5
+        # CRITICAL: never silently paper-fill when user asked for live FP Markets/MT5
         if self.mode == "mt5":
             return {
                 "ok": False,
