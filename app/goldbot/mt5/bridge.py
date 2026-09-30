@@ -365,25 +365,71 @@ class Bridge:
     def fetch_candles(self, symbol: str | None = None, timeframe: str | None = None, count: int = 200) -> list[Candle]:
         symbol = symbol or settings.symbol
         timeframe = (timeframe or settings.timeframe).upper()
+        # Primary live path: cTrader Open API OHLC (FP Markets)
+        if self.mode == "mt5" and settings.prefer_ctrader and (
+            self.execution == "ctrader" or self.ctrader_account_id
+        ):
+            bars = self._fetch_ctrader(symbol, timeframe, count)
+            if bars:
+                return bars
+            log.warning("ctrader candles empty — refusing paper/Yahoo fallback")
+            return []
         # Live MetaApi path: broker OHLC only (never mix Yahoo/synth into live signals)
         if self.mode == "mt5" and self.metaapi_account_id and settings.prefer_metaapi:
             bars = self._fetch_metaapi(symbol, timeframe, count)
             if bars:
                 return bars
             log.warning("metaapi candles empty — refusing paper fallback while live mode active")
-            # Keep last cache briefly so desk doesn't stall hard
-            if self._candle_cache and time.time() - self._candle_cache_ts < 120:
+            if self._candle_cache and self._feed_source == "metaapi" and time.time() - self._candle_cache_ts < 120:
                 return self._candle_cache[-count:] if len(self._candle_cache) > count else list(self._candle_cache)
             return []
         if self.mode == "mt5" and self._mt5 is not None:
             return self._fetch_mt5(symbol, timeframe, count)
-        # Live mt5 mode: never mix Yahoo/synth into broker signals (cTrader/Windows/Linux)
+        # Live mt5 mode: never mix Yahoo/synth into broker signals
         if self.mode == "mt5":
-            if self._candle_cache and time.time() - self._candle_cache_ts < 120:
-                return self._candle_cache[-count:] if len(self._candle_cache) > count else list(self._candle_cache)
             log.warning("live mt5 candles unavailable — refusing paper/Yahoo fallback")
             return []
         return self._fetch_paper(count)
+
+    def _fetch_ctrader(self, symbol: str, timeframe: str, count: int) -> list[Candle]:
+        from goldbot.mt5.ctrader_cloud import ctrader
+
+        ctrader.refresh()
+        if not ctrader.ready:
+            return []
+        now = time.time()
+        if (
+            self._candle_cache
+            and self._feed_source == "ctrader"
+            and now - self._candle_cache_ts < 20
+            and len(self._candle_cache) >= min(count, 50)
+        ):
+            return self._candle_cache[-count:] if len(self._candle_cache) > count else list(self._candle_cache)
+        try:
+            raw = ctrader.candles(symbol, timeframe=timeframe, count=count)
+        except Exception as e:
+            log.warning("ctrader candles fail: %s", e)
+            return []
+        bars: list[Candle] = []
+        for r in raw or []:
+            try:
+                bars.append(
+                    Candle(
+                        time=int(r["time"]),
+                        open=float(r["open"]),
+                        high=float(r["high"]),
+                        low=float(r["low"]),
+                        close=float(r["close"]),
+                        volume=float(r.get("volume") or 0),
+                    )
+                )
+            except Exception:
+                continue
+        if bars:
+            self._candle_cache = bars
+            self._candle_cache_ts = now
+            self._feed_source = "ctrader"
+        return bars[-count:] if len(bars) > count else bars
 
     def _fetch_metaapi(self, symbol: str, timeframe: str, count: int) -> list[Candle]:
         from goldbot.mt5.metaapi_cloud import metaapi
@@ -949,7 +995,16 @@ class Bridge:
         return {"ok": False, "error": "no_live_executor", "execution": self.execution or "none", "mode": self.mode}
 
     def modify_position_sl_tp(self, position_id: str | int, sl: float | None = None, tp: float | None = None) -> dict:
-        if self.mode == "mt5" and self.metaapi_account_id and self.execution == "metaapi":
+        if self.mode == "mt5" and self.execution == "ctrader":
+            from goldbot.mt5.ctrader_cloud import ctrader
+
+            if position_id in (None, "", 0, "0") or not ctrader.ready:
+                return {"ok": False, "error": "no_position_id", "execution": "ctrader"}
+            try:
+                return ctrader.amend_position_sl_tp(position_id, sl=sl, tp=tp)
+            except Exception as e:
+                return {"ok": False, "error": str(e), "execution": "ctrader"}
+        if self.mode == "mt5" and self.metaapi_account_id and self.execution == "metaapi" and settings.prefer_metaapi:
             from goldbot.mt5.metaapi_cloud import SUCCESS_CODES, SUCCESS_STRINGS, metaapi
 
             if not metaapi.configured or position_id in (None, "", 0, "0"):

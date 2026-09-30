@@ -269,7 +269,7 @@ class TradingDesk:
                         "action": "flat",
                         "confluence": 0,
                         "quality": "none",
-                        "narrative": "بانتظار شموع الوسيط من MetaApi",
+                        "narrative": "بانتظار شموع الوسيط من FP Markets / cTrader",
                         "entry": bid,
                         "stop": 0,
                         "take": 0,

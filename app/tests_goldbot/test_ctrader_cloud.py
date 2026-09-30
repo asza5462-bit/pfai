@@ -23,6 +23,29 @@ def test_fp_markets_ctrader_broker_detect():
     assert "FP Markets" in arabic_ctrader_error(CTraderError("not FP Markets", code="WRONG_BROKER"))
 
 
+
+
+def test_ctrader_price_and_volume_helpers():
+    from goldbot.mt5.ctrader_cloud import CTraderSession, _decode_price, _trendbar_ohlc
+
+    assert abs(_decode_price(265000000) - 2650.0) < 1e-6
+    assert abs(_decode_price(2650.5) - 2650.5) < 1e-6
+    o, h, low, c = _trendbar_ohlc(
+        {"low": 265000000, "deltaOpen": 100000, "deltaHigh": 300000, "deltaClose": 200000}
+    )
+    assert abs(low - 2650.0) < 1e-6
+    assert abs(o - 2651.0) < 1e-6
+    assert abs(h - 2653.0) < 1e-6
+    assert abs(c - 2652.0) < 1e-6
+    sess = CTraderSession("a", "b", "c", account_id=1, live=True)
+    assert sess._volume_from_lot({"lotSize": 10000000}, 0.01) == 100000
+    assert sess._volume_from_lot({}, 0.01) == 100
+
+
+def test_wrong_broker_arabic():
+    assert "FP Markets" in arabic_ctrader_error(CTraderError("x", code="WRONG_BROKER"))
+
+
 def test_arabic_ctrader_errors():
     assert "openapi.ctrader.com" in arabic_ctrader_error(CTraderError("x", code="NO_APP"))
     assert "تفويض" in arabic_ctrader_error(CTraderError("x", code="NO_TOKEN"))
@@ -141,6 +164,19 @@ def test_ctrader_bind_and_bridge_order(tmp_path, monkeypatch):
                 "ticket": 42,
                 "position_id": "42",
             }
+
+        def candles(self, symbol="XAUUSD", timeframe="M15", count=200):
+            now = 1_700_000_000
+            return [
+                {"time": now - 60 * (count - i), "open": 2650, "high": 2651, "low": 2649, "close": 2650.5, "volume": 10}
+                for i in range(count)
+            ]
+
+        def open_positions(self):
+            return []
+
+        def amend_position_sl_tp(self, position_id, sl=None, tp=None):
+            return {"ok": True, "execution": "ctrader"}
 
         def list_accounts(self, *, fp_markets_only=True):
             rows = [

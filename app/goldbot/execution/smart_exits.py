@@ -236,16 +236,26 @@ def reconcile_broker_positions() -> list[dict]:
     if now - _last_reconcile < 12:
         return []
     _last_reconcile = now
-    if not bridge.is_live_execution() or not bridge.metaapi_account_id:
+    if not bridge.is_live_execution():
         return []
-    from goldbot.mt5.metaapi_cloud import metaapi
-
-    if not metaapi.configured:
-        return []
+    positions: list = []
     try:
-        positions = metaapi.positions(bridge.metaapi_account_id, region=bridge.metaapi_region or None)
+        if bridge.execution == "ctrader":
+            from goldbot.mt5.ctrader_cloud import ctrader
+
+            if not ctrader.ready:
+                return []
+            positions = ctrader.open_positions()
+        elif bridge.metaapi_account_id and settings.prefer_metaapi:
+            from goldbot.mt5.metaapi_cloud import metaapi
+
+            if not metaapi.configured:
+                return []
+            positions = metaapi.positions(bridge.metaapi_account_id, region=bridge.metaapi_region or None)
+        else:
+            return []
     except Exception as e:
-        store.log_event("reconcile_fail", {"error": str(e)})
+        store.log_event("reconcile_fail", {"error": str(e), "execution": bridge.execution})
         return []
     live_ids = set()
     for p in positions or []:
