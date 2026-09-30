@@ -313,8 +313,9 @@
 
   if ($("btnResetCloud")) {
     $("btnResetCloud").onclick = async () => {
-      if (!confirm("إعادة إنشاء الطرفية السحابية بالكامل؟")) return;
-      $("connectMsg").textContent = "جاري إعادة الربط الكامل…";
+      if (!confirm("سيتم حذف الطرفية السحابية العالقة من MetaApi وإنشاء واحدة جديدة. هل تريد المتابعة؟")) return;
+      $("connectMsg").textContent = "جاري حذف الطرفية العالقة وإنشاء طرفية جديدة…";
+      $("connectMsg").classList.remove("ok");
       await refreshBridge(true);
     };
   }

@@ -175,15 +175,17 @@ def arabic_metaapi_error(exc: MetaApiError | Exception) -> str:
         )
     if (
         is_validation_failed_error(exc)
-        or code == "E_VALIDATION_FAILED"
+        or code in {"E_VALIDATION_FAILED", "E_AUTH", "ValidationError"}
         or "validation failed" in low
+        or "failed to authenticate to your broker" in low
     ):
         return (
-            "MetaApi رفض التحقق من حساب Exness (Validation failed). "
-            "صحّح من تبويب الربط: ١) كلمة مرور التداول فقط — ليس Investor "
-            "٢) السيرفر حرفياً مثل Exness-MT5Real32 من تطبيق Exness "
-            "٣) احفظ ثم اضغط «إعادة ربط كامل». "
-            "إن غيّرت كلمة المرور مؤخراً في Exness أدخل الجديدة هنا."
+            "MetaApi رفض مصادقة Exness (بيانات الدخول غير مقبولة). "
+            "من تبويب الربط → «تصحيح بيانات Exness»: "
+            "١) الصق كلمة مرور التداول Master فقط (Investor مرفوضة) "
+            "٢) السيرفر حرفياً من تطبيق Exness مثل Exness-MT5Real32 "
+            "٣) اضغط «حفظ وتصحيح الربط» — سيُحذف الحساب السحابي العالق ويُنشأ من جديد. "
+            "تأكد أيضاً أن الحساب غير معطّل في Exness."
         )
     if code == "E_SRV_NOT_FOUND" or ".dat file for server" in low:
         suggestions = _suggested_servers_from_error(details)
@@ -361,10 +363,17 @@ class MetaApiCloud:
         headers = self._headers(transaction=False)
         if transaction or transaction_id:
             headers["transaction-id"] = transaction_id or secrets.token_hex(16)
+        # DELETE with empty body — drop Content-Type noise
+        if method.upper() == "DELETE" and data is None:
+            headers.pop("Content-Type", None)
         req = urllib.request.Request(url, data=data, method=method.upper(), headers=headers)
         try:
             with urllib.request.urlopen(req, timeout=timeout) as resp:
-                raw = resp.read().decode("utf-8") or "{}"
+                raw = resp.read().decode("utf-8") or ""
+                if resp.status in (204, 202) and not raw.strip():
+                    return {"ok": True, "status": int(resp.status)}
+                if not raw.strip():
+                    return {"ok": True}
                 return json.loads(raw)
         except urllib.error.HTTPError as e:
             raw = e.read().decode("utf-8", errors="replace")
@@ -718,9 +727,60 @@ class MetaApiCloud:
             )
             return data if isinstance(data, dict) else {"ok": True}
         except MetaApiError as e:
-            if "already" in (e.message or "").lower():
+            if "already" in (e.message or "").lower() or e.status == 404:
                 return {"ok": True}
             raise
+
+    def delete_account(self, account_id: str) -> dict:
+        """Permanently remove a MetaApi cloud terminal (required after stuck Validation failed)."""
+        aid = normalize_account_id(account_id)
+        if not aid:
+            raise MetaApiError(f"معرّف حساب MetaApi غير صالح: {account_id!r}", code="E_BAD_ACCOUNT_ID")
+        try:
+            self.undeploy(aid)
+            time.sleep(1.2)
+        except Exception as e:
+            log.info("undeploy before delete: %s", e)
+        try:
+            data = self._http(
+                "DELETE",
+                self._prov_url(f"/users/current/accounts/{aid}?executeForAllReplicas=true"),
+                None,
+                transaction=True,
+                timeout=60,
+            )
+            log.warning("metaapi deleted account %s", aid)
+            return data if isinstance(data, dict) else {"ok": True, "deleted": True, "id": aid}
+        except MetaApiError as e:
+            if e.status == 404 or "not found" in (e.message or "").lower():
+                return {"ok": True, "deleted": False, "missing": True, "id": aid}
+            raise
+
+    def purge_accounts_for_login(self, login: str, *, also_ids: list[str] | None = None) -> list[str]:
+        """Delete every MetaApi terminal bound to this Exness login (+ optional ids)."""
+        login_s = str(login).strip()
+        seen: set[str] = set()
+        targets: list[str] = []
+        for acc in self.find_accounts_by_login(login_s):
+            aid = normalize_account_id(str(acc.get("id") or ""))
+            if aid and aid not in seen:
+                seen.add(aid)
+                targets.append(aid)
+        for raw in also_ids or []:
+            aid = normalize_account_id(raw)
+            if aid and aid not in seen:
+                seen.add(aid)
+                targets.append(aid)
+        deleted: list[str] = []
+        for aid in targets:
+            try:
+                self.delete_account(aid)
+                deleted.append(aid)
+            except Exception as e:
+                log.error("purge delete %s failed: %s", aid, e)
+        if deleted:
+            time.sleep(2.5)  # MetaApi needs a beat before re-create with same login
+        return deleted
 
     def redeploy(self, account_id: str, *, wait: float = 45.0) -> dict:
         """Undeploy then deploy — heals stuck DISCONNECTED Exness terminals."""
@@ -818,7 +878,8 @@ class MetaApiCloud:
         """Find or create cloud account; optionally wait until CONNECTED.
 
         Use fast=True for HTTP login paths (Render/Safari kill long requests).
-        force_new=True skips find-by-login so «إعادة ربط كامل» creates a fresh terminal.
+        force_new=True DELETES all MetaApi terminals for this login then creates fresh
+        (required after stuck «Validation failed» — migrate alone is not enough).
         """
         if not self.configured:
             raise MetaApiError(
@@ -852,7 +913,17 @@ class MetaApiCloud:
 
         acc = None
         migrated = False
+        recreated = False
         deploy_budget = deploy_wait if deploy_wait is not None else (10.0 if fast else 75.0)
+
+        # Nuclear path: wipe stuck Validation-failed terminals then create clean
+        if force_new:
+            also = [existing_id] if is_metaapi_account_id(existing_id) else []
+            purged = self.purge_accounts_for_login(login, also_ids=also)
+            if purged:
+                log.warning("force_new purged %s MetaApi account(s) for login=%s: %s", len(purged), login, purged)
+                recreated = True
+
         existing = "" if force_new else (normalize_account_id(existing_id) if is_metaapi_account_id(existing_id) else "")
         if existing_id and not force_new and not existing:
             log.warning("ignoring invalid metaapi_account_id=%r", existing_id)
@@ -909,14 +980,28 @@ class MetaApiCloud:
             try:
                 created = self.create_account(login, password, server, symbol=symbol, fast=fast)
             except MetaApiError as create_err:
-                # Duplicate login / force_new race: reuse existing terminal + refresh password
-                found = self.find_account_by_login(login, server)
-                if found and is_metaapi_account_id(str(found.get("id") or "")):
-                    acc = found
-                    created = None
+                # Duplicate login: if force_new / auth failure → DELETE then create again
+                siblings = self.find_accounts_by_login(login)
+                hard = force_new or is_validation_failed_error(create_err) or create_err.code in {
+                    "E_VALIDATION_FAILED",
+                    "E_AUTH",
+                    "ValidationError",
+                }
+                if hard and siblings:
+                    log.warning(
+                        "create blocked for login=%s — purging %s sibling(s) then recreate",
+                        login,
+                        len(siblings),
+                    )
+                    self.purge_accounts_for_login(login)
+                    recreated = True
+                    created = self.create_account(login, password, server, symbol=symbol, fast=fast)
                 else:
-                    siblings = self.find_accounts_by_login(login)
-                    if siblings and is_metaapi_account_id(str(siblings[0].get("id") or "")):
+                    found = self.find_account_by_login(login, server)
+                    if found and is_metaapi_account_id(str(found.get("id") or "")):
+                        acc = found
+                        created = None
+                    elif siblings and is_metaapi_account_id(str(siblings[0].get("id") or "")):
                         try:
                             acc = self.migrate_account_server(
                                 siblings[0],
@@ -928,8 +1013,10 @@ class MetaApiCloud:
                             migrated = True
                             created = None
                         except MetaApiError as e:
-                            log.error("post-create migrate failed: %s", e.message)
-                            raise create_err from e
+                            log.error("post-create migrate failed: %s — trying purge+create", e.message)
+                            self.purge_accounts_for_login(login)
+                            recreated = True
+                            created = self.create_account(login, password, server, symbol=symbol, fast=fast)
                     else:
                         raise
             if not acc:
@@ -1014,31 +1101,32 @@ class MetaApiCloud:
                         status = "CONNECTED"
                         break
             connected = status == "CONNECTED"
-            # Credential reject → refresh password/server + redeploy once
+            # Credential reject → DELETE stuck terminal + create brand-new (migrate is not enough)
             if not connected and not fast:
                 detail = (
                     (early_validation.message if early_validation else "")
                     or self._connection_error_text(acc)
                     or "الطرفية السحابية لم تتصل بـ Exness"
                 )
-                if is_validation_failed_error(detail) or early_validation is not None:
+                if (is_validation_failed_error(detail) or early_validation is not None) and not recreated:
                     try:
                         log.warning(
-                            "validation failed on %s — refreshing password/server + redeploy once",
+                            "validation failed on %s — DELETE+CREATE fresh terminal for login=%s",
                             account_id,
+                            login,
                         )
-                        acc = self.migrate_account_server(
-                            {"id": account_id, "server": acc.get("server") or server},
-                            login=login,
-                            password=password,
-                            server=server,
-                            deploy_wait=min(75.0, deploy_budget + 30),
-                        )
+                        self.purge_accounts_for_login(login, also_ids=[account_id])
+                        created = self.create_account(login, password, server, symbol=symbol, fast=False)
+                        account_id = normalize_account_id(str(created["id"]))
+                        recreated = True
+                        migrated = False
+                        acc = self.ensure_deployed(account_id, max_wait=min(90.0, deploy_budget + 40))
                         try:
-                            acc = self.wait_connected(account_id, timeout=45.0 if is_real else 30.0)
+                            acc = self.wait_connected(account_id, timeout=55.0 if is_real else 35.0)
                         except MetaApiError as e2:
                             detail = e2.message or detail
-                            acc = getattr(e2, "details", None) if isinstance(getattr(e2, "details", None), dict) else acc
+                            if isinstance(getattr(e2, "details", None), dict):
+                                acc = e2.details  # type: ignore[assignment]
                         status = str(acc.get("connectionStatus") or "").upper()
                         connected = status == "CONNECTED"
                         if connected:
@@ -1047,6 +1135,7 @@ class MetaApiCloud:
                             detail = self._connection_error_text(acc) or detail
                     except MetaApiError as heal_err:
                         detail = heal_err.message or detail
+                        log.error("delete+create heal failed: %s", heal_err.message)
                 if not connected:
                     code = (
                         "E_VALIDATION_FAILED"
@@ -1079,8 +1168,9 @@ class MetaApiCloud:
             "login": acc.get("login") or login,
             "server": acc.get("server") or server,
             "raw": acc,
-            "healed": bool(existing_id and existing_id != account_id) or migrated,
+            "healed": bool(existing_id and existing_id != account_id) or migrated or recreated,
             "migrated": migrated,
+            "recreated": recreated,
             "pending": not connected,
         }
 

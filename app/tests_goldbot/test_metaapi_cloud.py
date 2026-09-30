@@ -121,6 +121,10 @@ class FakeMetaHttp:
                 self.accounts[acc_id]["name"] = body["name"]
             self.accounts[acc_id]["state"] = "UNDEPLOYED"
             return dict(self.accounts[acc_id])
+        if method == "DELETE" and "/users/current/accounts/" in url:
+            acc_id = url.split("/accounts/")[1].split("?")[0].rstrip("/")
+            self.accounts.pop(acc_id, None)
+            return {"ok": True, "deleted": True, "id": acc_id}
         raise MetaApiError(f"unexpected {method} {url}", code="TEST")
 
 
@@ -298,9 +302,40 @@ def test_arabic_validation_failed_message():
     )
     assert is_validation_failed_error(err) is True
     ar = arabic_metaapi_error(err)
-    assert "Validation failed" not in ar or "رفض التحقق" in ar
+    assert "مصادقة" in ar or "رفض" in ar
     assert "كلمة مرور التداول" in ar
     assert "Exness-MT5Real32" in ar
+
+
+def test_force_new_deletes_stuck_account_then_recreates(monkeypatch):
+    monkeypatch.setattr("time.sleep", lambda *_: None)
+    fake = FakeMetaHttp()
+    stuck_id = FAKE_ACCOUNT_ID
+    fake.accounts[stuck_id] = {
+        "id": stuck_id,
+        "login": "55667788",
+        "server": "Exness-MT5Real32",
+        "state": "DEPLOYED",
+        "connectionStatus": "DISCONNECTED",
+        "connectionError": "Validation failed (b68bf70cc3c140d5b4c5f3855561d3b7)",
+        "region": "new-york",
+    }
+    client = MetaApiCloud(token="test-token", region="new-york", http=fake)
+    out = client.ensure_account(
+        "55667788",
+        "TradePass1",
+        "Exness-MT5Real32",
+        existing_id=stuck_id,
+        wait=True,
+        force_new=True,
+    )
+    assert out["ok"] is True
+    assert out["recreated"] is True
+    assert out["connected"] is True
+    assert stuck_id in fake.accounts  # recreated with same id in fake, but delete was called
+    assert fake.create_calls >= 1
+    # After purge+create there should be exactly one account for login
+    assert len(client.find_accounts_by_login("55667788")) == 1
 
 
 def test_metaapi_candles_and_bridge_feed(monkeypatch):
