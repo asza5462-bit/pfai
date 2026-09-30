@@ -1,5 +1,5 @@
 # AURUM — Elite Gold Desk on Render
-# Live Exness execution via MetaApi cloud (no Windows). Set METAAPI_TOKEN in dashboard.
+# Live FP Markets execution via cTrader Open API (from the app). Set CTRADER_* in dashboard.
 
 services:
   - type: web
@@ -20,14 +20,14 @@ services:
         value: "8000"
       - key: AURUM_MODE
         value: "paper"
-      - key: AURUM_PREFER_METAAPI
+      - key: AURUM_PREFER_CTRADER
         value: "true"
+      - key: AURUM_PREFER_METAAPI
+        value: "false"
       - key: AURUM_PREFER_MT5_LINUX
         value: "false"
-      - key: METAAPI_REGION
-        value: "new-york"
       - key: AURUM_SYMBOL
-        value: "XAUUSDm"
+        value: "XAUUSD"
       - key: AURUM_TIMEFRAME
         value: "M15"
       - key: AURUM_AUTO_TRADE
@@ -63,5 +63,6 @@ services:
       - key: AURUM_PAPER_BALANCE
         value: "10000"
       # Secrets — set in Render dashboard, never commit:
-      # METAAPI_TOKEN (required for direct Exness cloud trading)
-      # AURUM_OWNER_TOKEN, AURUM_AUTH_SECRET
+      # CTRADER_CLIENT_ID, CTRADER_CLIENT_SECRET (Spotware Open API app)
+      # AURUM_AUTH_SECRET (strong random)
+      # Optional after OAuth: CTRADER_ACCESS_TOKEN, CTRADER_REFRESH_TOKEN, CTRADER_ACCOUNT_ID

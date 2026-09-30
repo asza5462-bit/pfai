@@ -369,46 +369,51 @@
         j.bridge || j.cloud,
         null,
         null,
-        j.metaapi_configured,
-        j.mt5_linux_configured,
+        false,
+        false,
         j.ctrader_ready || j.ctrader_configured
       );
-      if (j.account) {
-        $("equity").textContent = Number(j.account.equity || 0).toFixed(2);
+      const acc = j.account || (j.bridge && j.bridge.account) || null;
+      if (acc && $("equity")) {
+        $("equity").textContent = Number(acc.equity || 0).toFixed(2);
       }
-      applyProvisionUI(j);
+      if ($("connectMsg") && j.bridge && j.bridge.detail) {
+        $("connectMsg").textContent = j.bridge.detail;
+        $("connectMsg").classList.toggle("ok", !!(j.live_execution || (j.bridge && j.bridge.online)));
+      }
       await refreshCtraderStatus();
       return j;
     } catch (_) {
-      const j = await api("/api/bridge/status");
-      setBridgeUI(j.bridge || j.cloud, null, null, j.metaapi_configured, j.mt5_linux_configured, null);
-      return j;
+      try {
+        const j = await api("/api/bridge/status");
+        setBridgeUI(j.bridge || j.cloud, null, null, false, false, j.ctrader_ready || j.ctrader_configured);
+        await refreshCtraderStatus();
+        return j;
+      } catch (e2) {
+        await refreshCtraderStatus();
+        return null;
+      }
     }
   }
 
-  async function refreshBridge(forceNew = false) {
+  async function refreshBridge(_forceNew = false) {
     try {
-      const path = forceNew ? "/api/cloud/reset" : "/api/cloud/reconnect";
-      const j = await api(path, {
-        method: "POST",
-        body: JSON.stringify(forceNew ? {} : { force_new: false }),
-      });
-      setBridgeUI(j.bridge || j.cloud, null, null, true);
-      if (j.account) {
-        $("equity").textContent = Number(j.account.equity || 0).toFixed(2);
-        $("modePill").textContent = j.account.mode || "mt5";
+      $("connectMsg").textContent = "جاري تحديث حالة cTrader / FP Markets…";
+      const j = await refreshCloudStatusOnly();
+      if (j && j.account && $("modePill")) {
+        $("modePill").textContent = j.live_execution
+          ? `FP Markets حي · ${(j.account.server || "cTrader")}`
+          : (j.account.mode || "—");
       }
-      if (j.started && j.started.scan) render(j.started.scan);
-      if ($("connectMsg")) {
-        $("connectMsg").textContent = j.message || "";
-        $("connectMsg").classList.toggle("ok", !!(j.account && j.account.connected));
+      if ($("connectMsg") && !(j && j.bridge && j.bridge.detail)) {
+        $("connectMsg").textContent = (j && j.live_execution)
+          ? "متصل بـ FP Markets عبر cTrader"
+          : "أكمل ربط cTrader من الحقول أعلاه";
+        $("connectMsg").classList.toggle("ok", !!(j && j.live_execution));
       }
     } catch (e) {
-      try {
-        await refreshCloudStatusOnly();
-      } catch (_) {}
       if ($("connectMsg")) {
-        $("connectMsg").textContent = e.message || "تعذّر تحديث السحابة";
+        $("connectMsg").textContent = e.message || "تعذّر تحديث حالة الربط";
         $("connectMsg").classList.remove("ok");
       }
     }
@@ -424,8 +429,10 @@
   }
   if ($("btnRefreshBridge")) {
     $("btnRefreshBridge").onclick = async () => {
+      await refreshBridge(false);
+      return;
       $("connectMsg").textContent = "جاري التحديث…";
-      // Status-only first; full reconnect only if user confirms when cooled down
+      // legacy MetaApi reconnect path disabled
       try {
         const st = await refreshCloudStatusOnly();
         const prov = (st && st.provision) || {};
@@ -686,20 +693,26 @@
     setGate(true);
     $("userPill").textContent = u.username;
     await loadWays();
+    let st = null;
     try {
-      const st = await refreshCloudStatusOnly();
+      st = await refreshCloudStatusOnly();
       if (extra.bridge) {
-        setBridgeUI(extra.bridge, extra.bridge_token, extra.agent_command, st && st.metaapi_configured, st && st.mt5_linux_configured);
+        setBridgeUI(extra.bridge, null, null, false, false, st && (st.ctrader_ready || st.ctrader_configured));
       }
-    } catch (_) {
-      if (extra.bridge_token || extra.agent_command || extra.bridge) {
-        setBridgeUI(extra.bridge, extra.bridge_token, extra.agent_command, true, null);
-      }
-    }
+    } catch (_) {}
     try { render(await api("/api/scan", { method: "POST" })); }
     catch { render(await fetch("/api/status").then((r) => r.json())); }
     await loadTrades();
     startTimers();
+    // Guide user to cTrader connect when not live yet
+    if (!(st && (st.live_execution || st.ctrader_ready))) {
+      document.querySelector('.tabs button[data-tab="connect"]')?.click();
+      if ($("connectMsg") && !extra.message) {
+        $("connectMsg").textContent = (st && st.bridge && st.bridge.detail)
+          || "اربط FP Markets عبر cTrader من هنا ثم اضغط ابدأ التداول";
+        $("connectMsg").classList.remove("ok");
+      }
+    }
     if (extra.message) {
       showAuth(extra.message, !!(extra.account && extra.account.connected));
       if ($("connectMsg")) {
