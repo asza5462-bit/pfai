@@ -559,11 +559,13 @@ async def setup_next():
         step = "ctrader_select_account"
         next_ar = "اختر حساب cTrader من تبويب الربط."
     elif ctrader.configured:
-        step = "ctrader_oauth"
-        next_ar = "اضغط «تفويض cTrader» ثم اختر الحساب."
+        step = "ctrader_playground"
+        next_ar = "افتح Playground من openapi.ctrader.com/apps → Get token → الصق Access Token في تبويب الربط."
     else:
         step = "ctrader_app"
-        next_ar = "من تبويب الربط: احفظ Client ID/Secret من openapi.ctrader.com ثم فوّض واختر الحساب."
+        next_ar = (
+            "من تبويب الربط: احفظ Client ID/Secret ثم افتح Playground والصق Access Token واختر حساب FP Markets."
+        )
     return {
         "ok": True,
         "step": step,
@@ -1379,25 +1381,19 @@ async def ctrader_oauth_start(
     authorization: str | None = Header(default=None),
     aurum_session: str | None = Cookie(default=None, alias=SESSION_COOKIE),
 ):
-    user = require_user(authorization, aurum_session)
-    try:
-        import secrets as _secrets
-
-        state = _secrets.token_urlsafe(16)
-        store.set_kv("ctrader_oauth_state", {"state": state, "user_id": user["id"], "ts": time.time()})
-        url = ctrader.auth_url(state=state, style="oauth_v2")
-        url_grant = ctrader.auth_url(state=state, style="grant")
-    except CTraderError as e:
-        raise HTTPException(400, arabic_ctrader_error(e))
+    """OAuth redirect is unreliable (Spotware 404 on mobile). Prefer Playground token paste."""
+    require_user(authorization, aurum_session)
+    ctrader.refresh()
     return {
-        "ok": True,
-        "auth_url": url,
-        "auth_url_alt": url_grant,
+        "ok": False,
+        "disabled": True,
+        "error": "oauth_redirect_disabled",
+        "auth_url": None,
         "redirect_uri": ctrader.redirect_uri,
         "playground": "https://openapi.ctrader.com/apps",
         "hint_ar": (
-            "إن ظهر 404 بعد تسجيل الدخول: تأكد أن التطبيق Active وRedirect URI مطابق، "
-            "أو استخدم مسار Playground والصق Access Token بالأسفل."
+            "تفويض التحويل معطّل لأن Spotware يعيد 404 على الجوال. "
+            "افتح Playground من openapi.ctrader.com/apps والصق Access Token في AURUM."
         ),
     }
 

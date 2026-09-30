@@ -929,44 +929,24 @@
       }
     };
   }
-  let lastAuthUrl = "";
-  if ($("btnCtraderAuth")) {
-    $("btnCtraderAuth").onclick = async () => {
-      $("connectMsg").textContent = "جاري فتح تفويض cTrader…";
-      try {
-        const j = await api("/api/ctrader/oauth/start");
-        lastAuthUrl = j.auth_url || j.auth_url_alt || "";
-        if (lastAuthUrl) {
-          // Prefer OAuth v2; if user previously hit 404 on grant page, this URL is different
-          window.location.href = lastAuthUrl;
-          return;
-        }
-        $("connectMsg").textContent = (j.hint_ar) || "تعذّر الحصول على رابط التفويض — استخدم Playground بالأسفل";
-        $("connectMsg").classList.remove("ok");
-      } catch (e) {
-        $("connectMsg").textContent = (e.message || "احفظ Client ID/Secret أولاً") + " — أو الصق توكن Playground";
-        $("connectMsg").classList.remove("ok");
+  if ($("btnOpenPlayground")) {
+    $("btnOpenPlayground").onclick = () => {
+      window.open("https://openapi.ctrader.com/apps", "_blank", "noopener");
+      if ($("connectMsg")) {
+        $("connectMsg").textContent = "افتح Playground → Get token → الصق Access Token هنا";
+        $("connectMsg").classList.add("ok");
       }
+      if ($("ctraderAccessToken")) $("ctraderAccessToken").focus();
     };
   }
-  if ($("btnCopyAuthUrl")) {
-    $("btnCopyAuthUrl").onclick = async () => {
-      try {
-        if (!lastAuthUrl) {
-          const j = await api("/api/ctrader/oauth/start");
-          lastAuthUrl = j.auth_url || j.auth_url_alt || "";
-        }
-        if (!lastAuthUrl) {
-          $("connectMsg").textContent = "احفظ Client ID/Secret أولاً";
-          return;
-        }
-        await navigator.clipboard.writeText(lastAuthUrl);
-        $("connectMsg").textContent = "تم نسخ رابط التفويض — افتحه في Safari";
-        $("connectMsg").classList.add("ok");
-      } catch (e) {
-        $("connectMsg").textContent = e.message || "تعذّر نسخ الرابط";
+  // OAuth redirect disabled — Spotware returns 404 on mobile for /oauth and /grantingaccess
+  if ($("btnCtraderAuth")) {
+    $("btnCtraderAuth").onclick = async () => {
+      if ($("connectMsg")) {
+        $("connectMsg").textContent = "التفويض بالتحويل معطّل بسبب 404 من Spotware — استخدم Playground ولصق التوكن";
         $("connectMsg").classList.remove("ok");
       }
+      if ($("btnOpenPlayground")) $("btnOpenPlayground").click();
     };
   }
   if ($("btnSaveCtraderToken")) {
