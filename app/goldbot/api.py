@@ -1385,10 +1385,21 @@ async def ctrader_oauth_start(
 
         state = _secrets.token_urlsafe(16)
         store.set_kv("ctrader_oauth_state", {"state": state, "user_id": user["id"], "ts": time.time()})
-        url = ctrader.auth_url(state=state)
+        url = ctrader.auth_url(state=state, style="oauth_v2")
+        url_grant = ctrader.auth_url(state=state, style="grant")
     except CTraderError as e:
         raise HTTPException(400, arabic_ctrader_error(e))
-    return {"ok": True, "auth_url": url, "redirect_uri": ctrader.redirect_uri}
+    return {
+        "ok": True,
+        "auth_url": url,
+        "auth_url_alt": url_grant,
+        "redirect_uri": ctrader.redirect_uri,
+        "playground": "https://openapi.ctrader.com/apps",
+        "hint_ar": (
+            "إن ظهر 404 بعد تسجيل الدخول: تأكد أن التطبيق Active وRedirect URI مطابق، "
+            "أو استخدم مسار Playground والصق Access Token بالأسفل."
+        ),
+    }
 
 
 @app.get("/api/ctrader/oauth/callback")
@@ -1431,7 +1442,9 @@ async def ctrader_save_token(
     return {
         "ok": True,
         "has_token": True,
-        "message": "تم حفظ توكن cTrader — اختر الحساب من القائمة.",
+        "broker": BROKER_NAME,
+        "message": "تم حفظ توكن cTrader — اضغط «عرض حساباتي» واختر حساب FP Markets.",
+        "next_ar": "عرض حساباتي → ربط FP Markets → ابدأ التداول",
         "bridge": _cloud_status_for_user(user["id"]),
     }
 

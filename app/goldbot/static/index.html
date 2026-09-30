@@ -134,8 +134,23 @@
         <div class="cta" style="margin-top:0.5rem">
           <button type="button" id="btnSaveCtraderApp" class="primary">حفظ تطبيق cTrader</button>
           <button type="button" id="btnCtraderAuth" class="ghost">تفويض cTrader</button>
+          <button type="button" id="btnCopyAuthUrl" class="ghost">نسخ رابط التفويض</button>
           <button type="button" id="btnListCtraderAccounts" class="ghost">عرض حساباتي</button>
         </div>
+        <p class="auth-note">إن ظهر <strong>404</strong> بعد تسجيل الدخول: التطبيق يجب أن يكون <strong>Active</strong> وRedirect URI مطابق حرفياً. أو استخدم Playground بالأسفل.</p>
+        <h2>بديل سريع — توكن Playground</h2>
+        <ol class="steps">
+          <li>افتح <a href="https://openapi.ctrader.com/apps" target="_blank" rel="noopener">openapi.ctrader.com/apps</a> → تطبيقك → <strong>Playground</strong>.</li>
+          <li>اختر scope: Account info and trading → Get token → Allow access.</li>
+          <li>الصق Access Token (وRefresh إن وُجد) ثم احفظ.</li>
+        </ol>
+        <label>Access Token
+          <input id="ctraderAccessToken" type="password" placeholder="الصق Access Token من Playground" autocomplete="off" />
+        </label>
+        <label>Refresh Token (اختياري)
+          <input id="ctraderRefreshToken" type="password" placeholder="اختياري" autocomplete="off" />
+        </label>
+        <button type="button" id="btnSaveCtraderToken" class="primary">حفظ التوكن وعرض الحسابات</button>
         <ul id="ctraderAccountsList" class="trades" style="margin-top:0.75rem"></ul>
 
         <p id="cloudAccountLine" class="auth-note">معرّف الحساب: —</p>

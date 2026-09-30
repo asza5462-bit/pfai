@@ -929,19 +929,69 @@
       }
     };
   }
+  let lastAuthUrl = "";
   if ($("btnCtraderAuth")) {
     $("btnCtraderAuth").onclick = async () => {
       $("connectMsg").textContent = "جاري فتح تفويض cTrader…";
       try {
         const j = await api("/api/ctrader/oauth/start");
-        if (j.auth_url) {
-          window.location.href = j.auth_url;
+        lastAuthUrl = j.auth_url || j.auth_url_alt || "";
+        if (lastAuthUrl) {
+          // Prefer OAuth v2; if user previously hit 404 on grant page, this URL is different
+          window.location.href = lastAuthUrl;
           return;
         }
-        $("connectMsg").textContent = "تعذّر الحصول على رابط التفويض";
+        $("connectMsg").textContent = (j.hint_ar) || "تعذّر الحصول على رابط التفويض — استخدم Playground بالأسفل";
         $("connectMsg").classList.remove("ok");
       } catch (e) {
-        $("connectMsg").textContent = e.message || "احفظ Client ID/Secret أولاً";
+        $("connectMsg").textContent = (e.message || "احفظ Client ID/Secret أولاً") + " — أو الصق توكن Playground";
+        $("connectMsg").classList.remove("ok");
+      }
+    };
+  }
+  if ($("btnCopyAuthUrl")) {
+    $("btnCopyAuthUrl").onclick = async () => {
+      try {
+        if (!lastAuthUrl) {
+          const j = await api("/api/ctrader/oauth/start");
+          lastAuthUrl = j.auth_url || j.auth_url_alt || "";
+        }
+        if (!lastAuthUrl) {
+          $("connectMsg").textContent = "احفظ Client ID/Secret أولاً";
+          return;
+        }
+        await navigator.clipboard.writeText(lastAuthUrl);
+        $("connectMsg").textContent = "تم نسخ رابط التفويض — افتحه في Safari";
+        $("connectMsg").classList.add("ok");
+      } catch (e) {
+        $("connectMsg").textContent = e.message || "تعذّر نسخ الرابط";
+        $("connectMsg").classList.remove("ok");
+      }
+    };
+  }
+  if ($("btnSaveCtraderToken")) {
+    $("btnSaveCtraderToken").onclick = async () => {
+      const access_token = ($("ctraderAccessToken") && $("ctraderAccessToken").value || "").trim();
+      const refresh_token = ($("ctraderRefreshToken") && $("ctraderRefreshToken").value || "").trim();
+      if (!access_token || access_token.length < 10) {
+        $("connectMsg").textContent = "الصق Access Token من Playground أولاً";
+        $("connectMsg").classList.remove("ok");
+        return;
+      }
+      $("connectMsg").textContent = "جاري حفظ التوكن…";
+      try {
+        const j = await api("/api/ctrader/token", {
+          method: "POST",
+          body: JSON.stringify({ access_token, refresh_token: refresh_token || null }),
+        });
+        $("connectMsg").textContent = j.message || "تم حفظ التوكن";
+        $("connectMsg").classList.add("ok");
+        if ($("ctraderAccessToken")) $("ctraderAccessToken").value = "";
+        if ($("ctraderRefreshToken")) $("ctraderRefreshToken").value = "";
+        await refreshCtraderStatus();
+        await listCtraderAccounts();
+      } catch (e) {
+        $("connectMsg").textContent = e.message || "تعذّر حفظ التوكن — احفظ Client ID/Secret أولاً";
         $("connectMsg").classList.remove("ok");
       }
     };
