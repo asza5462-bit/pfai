@@ -849,7 +849,9 @@
           password_confirm: $("regPass2").value,
         }),
       });
-      await enterLoggedIn(j.user);
+      await enterLoggedIn(j.user, {
+        message: "تم إنشاء الحساب — أكمل ربط FP Markets عبر cTrader من هذا التبويب",
+      });
     } catch (err) { showAuth(err.message); }
   };
 
@@ -863,7 +865,8 @@
         $(`tab-${name}`).classList.toggle("hidden", btn.dataset.tab !== name);
       });
       if (btn.dataset.tab === "connect") {
-        loadMetaAccounts().catch(() => {});
+        refreshCloudStatusOnly().catch(() => {});
+        refreshCtraderStatus().catch(() => {});
       }
     };
   });
@@ -985,17 +988,40 @@
     };
   }
 
+  if ($("btnCopyRedirect")) {
+    $("btnCopyRedirect").onclick = async () => {
+      const v = ($("ctraderRedirectUri") && $("ctraderRedirectUri").value || "").trim();
+      if (!v) {
+        await refreshCtraderStatus();
+      }
+      const text = ($("ctraderRedirectUri") && $("ctraderRedirectUri").value || "").trim();
+      if (!text) {
+        if ($("connectMsg")) $("connectMsg").textContent = "احفظ Client ID أولاً ليظهر Redirect URI";
+        return;
+      }
+      try {
+        await navigator.clipboard.writeText(text);
+        if ($("connectMsg")) {
+          $("connectMsg").textContent = "تم نسخ Redirect URI — الصقه في openapi.ctrader.com";
+          $("connectMsg").classList.add("ok");
+        }
+      } catch {
+        if ($("connectMsg")) $("connectMsg").textContent = "انسخ Redirect URI يدوياً من الحقل";
+      }
+    };
+  }
+
   (async () => {
     await loadWays();
     await loadSetupNext();
-    showTab("login");
+    showTab("register");
     try {
       const params = new URLSearchParams(window.location.search || "");
       const ct = params.get("ctrader");
       if (ct === "authorized") {
         document.querySelector('.tabs button[data-tab="connect"]')?.click();
         if ($("connectMsg")) {
-          $("connectMsg").textContent = "تم تفويض cTrader — اعرض الحسابات واختر واحداً";
+          $("connectMsg").textContent = "تم تفويض cTrader — اعرض الحسابات واختر حساب FP Markets";
           $("connectMsg").classList.add("ok");
         }
         try { await listCtraderAccounts(); } catch (_) {}
@@ -1014,11 +1040,15 @@
       if (st.authenticated && st.user) await enterLoggedIn(st.user);
       else {
         setGate(false);
+        showTab(st.needs_setup || st.open_register ? "register" : "login");
         try {
           const s = await fetch("/api/status").then((r) => r.json());
           candles = s.candles_tail || [];
         } catch (_) {}
       }
-    } catch (_) { setGate(false); }
+    } catch (_) {
+      setGate(false);
+      showTab("register");
+    }
   })();
 })();
