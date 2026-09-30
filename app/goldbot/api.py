@@ -1714,10 +1714,15 @@ async def cloud_reconnect(
         "account": desk.account.to_dict(),
         "user": auth.public_user(user["id"]),
         "started": started,
+        "recreated": bool((cloud or {}).get("recreated")),
         "message": (
             "متصل للتنفيذ الحقيقي على Exness"
             if desk.account.connected
-            else "الربط جارٍ في الخلفية — حدّث خلال 30 ثانية أو اضغط «إعادة ربط كامل»"
+            else (
+                "تم حذف الطرفية العالقة وإنشاء واحدة جديدة — انتظر اتصال Exness ثم حدّث"
+                if body.force_new or (cloud or {}).get("recreated")
+                else "الربط جارٍ في الخلفية — حدّث خلال 30 ثانية أو اضغط «إعادة ربط كامل»"
+            )
         ),
     }
 
