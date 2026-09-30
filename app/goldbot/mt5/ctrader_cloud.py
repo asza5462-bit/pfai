@@ -427,7 +427,7 @@ class CTraderSession:
         )
         return {
             "ok": True,
-            "mode": "ctrader",
+            "mode": "mt5",  # desk/smart_exits treat this as live broker (execution=ctrader)
             "execution": "ctrader",
             "side": side.lower(),
             "lot": float(lot),

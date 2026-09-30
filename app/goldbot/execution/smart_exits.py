@@ -31,9 +31,23 @@ def _meta(trade: dict) -> dict:
     return {}
 
 
+_LIVE_MODES = {
+    "mt5",
+    "metaapi",
+    "ctrader",
+    "windows_bridge",
+    "mt5_linux",
+    "local_mt5",
+}
+
+
 def _is_live_trade(trade: dict) -> bool:
-    mode = str(trade.get("mode") or trade.get("execution") or "paper").lower()
-    return mode in {"mt5", "metaapi"} or str((_meta(trade) or {}).get("execution") or "").lower() == "metaapi"
+    """True for any real broker fill — never treat cTrader/Windows/Linux as paper."""
+    mode = str(trade.get("mode") or "").lower()
+    execution = str(trade.get("execution") or (_meta(trade) or {}).get("execution") or "").lower()
+    if mode == "paper" or execution == "paper":
+        return False
+    return mode in _LIVE_MODES or execution in _LIVE_MODES
 
 
 def _broker_position_id(trade: dict) -> str | int | None:

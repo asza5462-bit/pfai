@@ -110,8 +110,11 @@ def servers_compatible(a: str | None, b: str | None) -> bool:
 
 
 def is_broker_server_suggestion(name: str) -> bool:
+    """Accept only FP Markets (or FP Trading) server suggestions — never Exness."""
     low = str(name or "").lower().replace(" ", "")
-    return any(k in low for k in ("fpmarkets", "fptrading", "fpmarketsllc", "exness"))
+    if "exness" in low:
+        return False
+    return any(k in low for k in ("fpmarkets", "fptrading", "fpmarketsllc", "firstprudential"))
 
 
 # Deprecated alias

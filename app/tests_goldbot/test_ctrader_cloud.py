@@ -116,7 +116,7 @@ def test_ctrader_bind_and_bridge_order(tmp_path, monkeypatch):
         def order_market(self, side, lot, sl, tp, *, symbol="XAUUSD", comment="AURUM"):
             return {
                 "ok": True,
-                "mode": "ctrader",
+                "mode": "mt5",
                 "execution": "ctrader",
                 "side": side,
                 "lot": lot,
