@@ -27,7 +27,7 @@ class FakeLinuxHttp:
                 "margin": 50.0,
                 "margin_free": 2460.0,
                 "currency": "USD",
-                "server": "Exness-MT5Trial",
+                "server": "FPMarkets-Demo",
             }
         if path.endswith("/order/send"):
             return {"success": True, "order": 4242, "price": 2655.2, "retcode": 10009}

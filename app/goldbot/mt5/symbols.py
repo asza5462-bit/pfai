@@ -1,23 +1,28 @@
-"""Exness gold symbol helpers — brokers often use XAUUSDm / XAUUSDc suffixes."""
+"""FP Markets gold symbol helpers — primary XAUUSD; keep micro suffixes if present."""
 from __future__ import annotations
 
-# Common Exness gold symbols across account types (preserve suffix case)
-EXNESS_GOLD_SYMBOLS = (
+from goldbot.mt5.broker import DEFAULT_SYMBOL
+
+# Common gold symbols across account types (FP Markets uses XAUUSD)
+GOLD_SYMBOLS = (
+    "XAUUSD",
     "XAUUSDm",
     "XAUUSDc",
     "XAUUSDr",
-    "XAUUSD",
     "GOLD",
     "XAUUSDs",
 )
 
+# Backward-compatible alias
+EXNESS_GOLD_SYMBOLS = GOLD_SYMBOLS
+
 
 def normalize_symbol(symbol: str | None) -> str:
-    """Normalize gold symbol without destroying Exness micro suffix (m/c/r)."""
-    raw = (symbol or "XAUUSDm").strip()
+    """Normalize gold symbol; FP Markets default is XAUUSD."""
+    raw = (symbol or DEFAULT_SYMBOL).strip()
     if not raw:
-        return "XAUUSDm"
-    # Map XAUUSDM / xauusdm → XAUUSDm (Exness is case-sensitive on suffix)
+        return DEFAULT_SYMBOL
+    # Map XAUUSDM / xauusdm → XAUUSDm (case-sensitive suffix brokers)
     if len(raw) >= 2 and raw[-1].isalpha() and raw[:-1].upper() == "XAUUSD":
         suf = raw[-1].lower()
         if suf in {"m", "c", "r", "s"}:
@@ -25,19 +30,18 @@ def normalize_symbol(symbol: str | None) -> str:
         return "XAUUSD" + raw[-1]
     s = raw.upper()
     if s in {"XAU", "GOLD", "XAUUSD"}:
-        return "XAUUSDm"  # Exness retail default
-    # Known full symbols with mixed case
-    for known in EXNESS_GOLD_SYMBOLS:
+        return DEFAULT_SYMBOL
+    for known in GOLD_SYMBOLS:
         if s == known.upper():
             return known
     return raw
 
 
 def symbol_candidates(symbol: str | None = None) -> list[str]:
-    """Ordered candidates to try when placing/quoting on Exness."""
+    """Ordered candidates to try when placing/quoting."""
     primary = normalize_symbol(symbol)
     out: list[str] = []
-    for s in (primary, *EXNESS_GOLD_SYMBOLS):
+    for s in (primary, *GOLD_SYMBOLS):
         if s not in out:
             out.append(s)
     return out

@@ -1,5 +1,5 @@
 """
-Linux MT5 executor client — real Exness without Windows.
+Linux MT5 executor client — real FP Markets without Windows.
 
 Talks to a headless MT5 REST wrapper running under Wine in Docker on any
 Linux host (e.g. thanderoy/headless-mt5). The user never needs Windows;
@@ -227,7 +227,7 @@ class Mt5LinuxClient:
             "currency": str(info.get("currency") or "USD"),
             "server": str(info.get("server") or ""),
             "login": int(info.get("login") or 0),
-            "detail": "Exness عبر MT5 على Linux Docker (بدون Windows)",
+            "detail": "FP Markets عبر MT5 على Linux Docker (بدون Windows)",
         }
 
 

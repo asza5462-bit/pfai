@@ -275,19 +275,19 @@ class UserAuth:
                 return int(row["id"])
         return None
 
-    def login_with_mt5(self, mt5_login: str, mt5_password: str, mt5_server: str, symbol: str = "XAUUSDm") -> dict:
-        """Primary Exness/MT5 login — creates account bound to trading number if needed."""
-        from goldbot.mt5.metaapi_cloud import normalize_exness_server
+    def login_with_mt5(self, mt5_login: str, mt5_password: str, mt5_server: str, symbol: str = "XAUUSD") -> dict:
+        """Primary FP Markets/MT5 login — creates account bound to trading number if needed."""
+        from goldbot.mt5.broker import normalize_broker_server
         from goldbot.mt5.symbols import normalize_symbol
 
         login = str(mt5_login or "").strip()
         if not login.isdigit() or len(login) < 5:
-            raise AuthError("رقم حساب MT5/Exness غير صالح")
+            raise AuthError("رقم حساب MT5/FP Markets غير صالح")
         if not mt5_password or len(mt5_password) < 4:
             raise AuthError("كلمة مرور MT5 مطلوبة")
-        server = normalize_exness_server(mt5_server) or (mt5_server or "").strip()
+        server = normalize_broker_server(mt5_server) or (mt5_server or "").strip()
         if not server:
-            raise AuthError("اختر سيرفر Exness (مثل Exness-MT5Real32)")
+            raise AuthError("اختر سيرفر FP Markets (مثل FPMarkets-Live)")
 
         uid = self.find_by_mt5_login(login)
         if uid is not None:
@@ -297,7 +297,7 @@ class UserAuth:
                 self._prove_mt5_password(login, mt5_password, server, uid)
         if uid is None:
             # auto provision app user from MT5 login
-            username = f"exness_{login}"
+            username = f"fpmarkets_{login}"
             # ensure unique
             base = username
             n = 1
@@ -327,7 +327,7 @@ class UserAuth:
                 "mt5_login": login,
                 "mt5_password": mt5_password,
                 "mt5_server": server,
-                "symbol": normalize_symbol(symbol or "XAUUSDm"),
+                "symbol": normalize_symbol(symbol or "XAUUSD"),
                 "mode": "mt5",
             },
         )

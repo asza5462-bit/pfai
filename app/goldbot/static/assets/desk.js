@@ -112,7 +112,7 @@
     const input = $("mt5Server");
     const list = $("mt5ServerList");
     try {
-      const j = await api("/api/exness/servers");
+      const j = await api("/api/broker/servers");
       if (list) {
         list.innerHTML = "";
         (j.servers || []).forEach((s) => {
@@ -123,11 +123,11 @@
       }
       // Keep whatever the user typed; only set default if empty
       if (input && !input.value.trim()) {
-        input.value = j.default || "Exness-MT5Real32";
+        input.value = j.default || "FPMarkets-Live";
       }
     } catch (_) {
       if (list) {
-        ["Exness-MT5Real32", "Exness-MT5Trial15", "Exness-MT5Real"].forEach((s) => {
+        ["FPMarkets-Live", "FPMarkets-Demo", "FPMarkets-Live"].forEach((s) => {
           const o = document.createElement("option");
           o.value = s;
           list.appendChild(o);
@@ -144,7 +144,7 @@
       provider === "mt5_linux" ? "Linux MT5" :
       provider === "metaapi" ? "MetaApi" :
       provider === "windows_bridge" ? "Windows" : "التنفيذ";
-    $("bridgePill").textContent = online ? `${label}: متصل Exness` : `${label}: غير متصل`;
+    $("bridgePill").textContent = online ? `${label}: متصل FP Markets` : `${label}: غير متصل`;
     $("bridgePill").classList.toggle("on", online);
     if ($("bridgeStatusText")) {
       $("bridgeStatusText").textContent =
@@ -252,7 +252,7 @@
       list.innerHTML = "";
       const rows = j.accounts || [];
       if (!rows.length) {
-        list.innerHTML = "<li>لا حسابات — تأكد أن حساب Exness على منصة cTrader وأن التفويض اكتمل</li>";
+        list.innerHTML = "<li>لا حسابات — تأكد أن حساب FP Markets على منصة cTrader وأن التفويض اكتمل</li>";
         return;
       }
       rows.forEach((a) => {
@@ -291,12 +291,12 @@
     const pulse = data.pulse || {};
     const ready = data.readiness || {};
     $("readyPill").textContent = ready.summary_ar || ready.grade || "—";
-    $("readyPill").classList.toggle("on", !!ready.exness_mt5_ready);
+    $("readyPill").classList.toggle("on", !!(ready.broker_mt5_ready || ready.exness_mt5_ready));
     $("statePill").textContent = data.state || "—";
-    const live = !!(ready.live_execution || ready.exness_mt5_ready || (acc.mode === "mt5" && acc.connected && acc.server && acc.server !== "AURUM-PAPER"));
-    $("modePill").textContent = live ? `Exness حي · ${acc.server || "MT5"}` : (acc.mode === "paper" ? "ورقي (تجربة)" : (acc.mode || "—"));
+    const live = !!(ready.live_execution || ready.broker_mt5_ready || ready.exness_mt5_ready || (acc.mode === "mt5" && acc.connected && acc.server && acc.server !== "AURUM-PAPER"));
+    $("modePill").textContent = live ? `FP Markets حي · ${acc.server || "MT5"}` : (acc.mode === "paper" ? "ورقي (تجربة)" : (acc.mode || "—"));
     $("modePill").classList.toggle("on", live);
-    $("symbolPill").textContent = data.symbol || "XAUUSDm";
+    $("symbolPill").textContent = data.symbol || "XAUUSD";
     $("latencyPill").textContent = data.latency_ms != null ? `${data.latency_ms}ms` : "—";
     $("price").textContent = tick.bid || "—";
     $("conf").textContent = sig.confluence != null ? `${Math.round(sig.confluence * 100)}%` : "—";
@@ -308,7 +308,7 @@
     $("riskState").textContent = risk.halted ? "متوقف" : "نشط";
     $("narrative").textContent = sig.narrative || data.disclaimer || "";
     $("headline").textContent =
-      !acc.connected && acc.mode === "mt5" ? "بانتظار اكتمال الربط السحابي بـ Exness" :
+      !acc.connected && acc.mode === "mt5" ? "بانتظار اكتمال الربط السحابي بـ FP Markets" :
       risk.halted ? "المخاطرة متوقفة" :
       data.state === "IN_TRADE" ? "صفقة مفتوحة على الحساب" :
       sig.action === "buy" ? "تقارب شراء" :
@@ -339,7 +339,7 @@
     const online = !!(j && j.bridge && j.bridge.online);
     if (!$("connectMsg")) return;
     if (live || online) {
-      $("connectMsg").textContent = (prov.message) || "متصل بسحابة Exness — التنفيذ الحقيقي جاهز";
+      $("connectMsg").textContent = (prov.message) || "متصل بسحابة FP Markets — التنفيذ الحقيقي جاهز";
       $("connectMsg").classList.add("ok");
       return;
     }
@@ -530,7 +530,7 @@
   if ($("btnSaveExnessCreds")) {
     $("btnSaveExnessCreds").onclick = async () => {
       const pass = ($("cloudMt5Pass") && $("cloudMt5Pass").value || "").trim();
-      const server = ($("cloudMt5Server") && $("cloudMt5Server").value || "").trim() || "Exness-MT5Real32";
+      const server = ($("cloudMt5Server") && $("cloudMt5Server").value || "").trim() || "FPMarkets-Live";
       if (pass.length < 4) {
         $("connectMsg").textContent = "أدخل كلمة مرور التداول (ليس Investor)";
         $("connectMsg").classList.remove("ok");
@@ -553,7 +553,7 @@
           $("modePill").textContent = j.account.mode || "mt5";
         }
         const live = !!(j.account && j.account.connected);
-        $("connectMsg").textContent = j.message || (live ? "تم التصحيح والاتصال" : "تم الحفظ — بانتظار اتصال Exness");
+        $("connectMsg").textContent = j.message || (live ? "تم التصحيح والاتصال" : "تم الحفظ — بانتظار اتصال FP Markets");
         $("connectMsg").classList.toggle("ok", live);
         if ($("cloudMt5Pass")) $("cloudMt5Pass").value = "";
         if (!live) {
@@ -574,7 +574,7 @@
           }
         }
       } catch (e) {
-        $("connectMsg").textContent = e.message || "تعذّر تصحيح بيانات Exness";
+        $("connectMsg").textContent = e.message || "تعذّر تصحيح بيانات FP Markets";
         $("connectMsg").classList.remove("ok");
       }
     };
@@ -733,12 +733,12 @@
       return;
     }
     const server = ($("mt5Server").value || "").trim();
-    if (!server.toLowerCase().includes("exness")) {
-      showAuth("تأكد من اسم السيرفر كما في Exness (مثال: Exness-MT5Real32)");
+    if (!/(fpmarkets|fptrading|fp\s*markets)/i.test(server)) {
+      showAuth("تأكد من اسم السيرفر كما في FP Markets (مثال: FPMarkets-Live)");
       return;
     }
     if (btn) { btn.disabled = true; btn.textContent = "جاري الربط…"; }
-    showAuth("جاري الارتباط السحابي بـ Exness… عادةً أقل من 30 ثانية");
+    showAuth("جاري الارتباط السحابي بـ FP Markets… عادةً أقل من 30 ثانية");
     try {
       const j = await api("/api/auth/mt5-login", {
         method: "POST",
@@ -746,7 +746,7 @@
           mt5_login: $("mt5Login").value.trim(),
           mt5_password: $("mt5Pass").value,
           mt5_server: server,
-          symbol: $("mt5Symbol").value.trim() || "XAUUSDm",
+          symbol: $("mt5Symbol").value.trim() || "XAUUSD",
           auto_start: true,
           metaapi_token: metaTok || null,
         }),
@@ -754,7 +754,7 @@
       const live = !!(j.account && j.account.connected) || !!(j.live_execution) || !!(j.cloud_ok);
       const softFail = !live && j.cloud && j.cloud.ok === false;
       const code = j.error_code || (j.cloud && (j.cloud.error_code || j.cloud.code));
-      let authMsg = j.message || (live ? "تم الربط السحابي" : "الحساب محفوظ — بانتظار اتصال Exness");
+      let authMsg = j.message || (live ? "تم الربط السحابي" : "الحساب محفوظ — بانتظار اتصال FP Markets");
       if (softFail && code && authMsg && !String(authMsg).includes(String(code))) {
         authMsg = `${authMsg} [${code}]`;
       }
@@ -794,7 +794,7 @@
         }
         if (!online) {
           showAuth(
-            (j.message || "لم يكتمل اتصال Exness بعد") + " — من تبويب الربط اضغط «إعادة ربط كامل»",
+            (j.message || "لم يكتمل اتصال FP Markets بعد") + " — من تبويب الربط اضغط «إعادة ربط كامل»",
             false
           );
         }

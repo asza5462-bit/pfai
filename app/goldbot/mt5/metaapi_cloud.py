@@ -1,5 +1,5 @@
 """
-MetaApi cloud connector — real Exness/MT5 execution without Windows.
+MetaApi cloud connector — real FP Markets / MT5 execution without Windows.
 
 Uses MetaApi Provisioning API + Client REST API so AURUM on Linux/Render
 can create a cloud MT5 terminal and place live orders from the app alone.
@@ -17,6 +17,13 @@ from typing import Any, Callable
 from uuid import UUID
 
 from goldbot.config import settings
+from goldbot.mt5.broker import (
+    DEFAULT_SYMBOL,
+    METAAPI_KEYWORDS,
+    is_broker_server_suggestion,
+    normalize_broker_server,
+    servers_compatible as broker_servers_compatible,
+)
 
 log = logging.getLogger("aurum.metaapi")
 
@@ -104,40 +111,13 @@ def is_validation_failed_error(exc: MetaApiError | Exception | str) -> bool:
 
 
 def normalize_exness_server(server: str | None) -> str:
-    """Normalize Exness MT5 server names (trim, collapse spaces, fix common typos)."""
-    s = str(server or "").strip()
-    if not s:
-        return ""
-    # Common paste variants: spaces / underscores → Exness-MT5Real32
-    s = re.sub(r"[\s_]+", "-", s)
-    s = re.sub(r"-{2,}", "-", s)
-    # ExnessMT5Real32 / exnessmt5real32
-    s = re.sub(r"(?i)^exness-?mt5-?", "Exness-MT5", s)
-    low = s.lower()
-    if low.startswith("exness-mt5"):
-        tail = s[len("Exness-MT5") :]
-        # Drop leftover hyphen after MT5
-        if tail.startswith("-"):
-            tail = tail[1:]
-        if tail.lower().startswith("trial"):
-            num = re.sub(r"(?i)^trial-?", "", tail)
-            return "Exness-MT5Trial" + num
-        if tail.lower().startswith("real"):
-            num = re.sub(r"(?i)^real-?", "", tail)
-            return "Exness-MT5Real" + num
-        return "Exness-MT5" + tail
-    return s.replace("-", "") if " " in str(server or "") else s
+    """Backward-compatible alias — now normalizes FP Markets (and legacy Exness)."""
+    return normalize_broker_server(server)
 
 
 def servers_compatible(a: str | None, b: str | None) -> bool:
-    """True when two Exness server strings refer to the same terminal host."""
-    na = normalize_exness_server(a) or str(a or "").strip()
-    nb = normalize_exness_server(b) or str(b or "").strip()
-    if not na or not nb:
-        return False
-    if na.lower() == nb.lower():
-        return True
-    return na.lower().replace("-", "") == nb.lower().replace("-", "")
+    """True when two broker server strings refer to the same terminal host."""
+    return broker_servers_compatible(a, b)
 
 
 def _suggested_servers_from_error(details: Any) -> list[str]:
@@ -170,8 +150,8 @@ def arabic_metaapi_error(exc: MetaApiError | Exception) -> str:
     if is_validation_cooldown_error(exc) or code == "E_VALIDATION_COOLDOWN":
         return (
             "MetaApi أوقف التحقق من هذا الحساب مؤقتاً بعد محاولات فاشلة كثيرة. "
-            "تأكد من: كلمة مرور التداول (ليس Investor) + السيرفر حرفياً من Exness "
-            "(مثل Exness-MT5Real32) ثم انتظر ساعة كاملة قبل «إعادة ربط كامل»."
+            "تأكد من: كلمة مرور التداول (ليس Investor) + السيرفر حرفياً من FP Markets "
+            "(مثل FPMarkets-Live) ثم انتظر ساعة كاملة قبل «إعادة ربط كامل»."
         )
     if (
         is_validation_failed_error(exc)
@@ -180,35 +160,35 @@ def arabic_metaapi_error(exc: MetaApiError | Exception) -> str:
         or "failed to authenticate to your broker" in low
     ):
         return (
-            "MetaApi رفض مصادقة Exness (بيانات الدخول غير مقبولة). "
-            "من تبويب الربط → «تصحيح بيانات Exness»: "
+            "MetaApi رفض مصادقة FP Markets (بيانات الدخول غير مقبولة). "
+            "من تبويب الربط → «تصحيح بيانات FP Markets»: "
             "١) الصق كلمة مرور التداول Master فقط (Investor مرفوضة) "
-            "٢) السيرفر حرفياً من تطبيق Exness مثل Exness-MT5Real32 "
+            "٢) السيرفر حرفياً من تطبيق FP Markets / MT5 مثل FPMarkets-Live "
             "٣) اضغط «حفظ وتصحيح الربط» — سيُحذف الحساب السحابي العالق ويُنشأ من جديد. "
-            "تأكد أيضاً أن الحساب غير معطّل في Exness."
+            "تأكد أيضاً أن الحساب غير معطّل في FP Markets."
         )
     if code == "E_SRV_NOT_FOUND" or ".dat file for server" in low:
         suggestions = _suggested_servers_from_error(details)
         hint = (" المقترحات: " + "، ".join(suggestions[:6])) if suggestions else ""
         return (
-            "اسم السيرفر غير موجود في MetaApi — انسخه حرفياً من تطبيق Exness "
-            f"(مثال Exness-MT5Real32).{hint}"
+            "اسم السيرفر غير موجود في MetaApi — انسخه حرفياً من تطبيق FP Markets / MT5 "
+            f"(مثال FPMarkets-Live).{hint}"
         )
     if code in {"E_AUTH", "UnauthorizedError"} or "authenticate" in low or "invalid account" in low or "wrong password" in low:
         return (
-            "رفض Exness بيانات الدخول — تحقق من: رقم الحساب + كلمة مرور التداول "
-            "(وليس Investor) + السيرفر حرفياً (مثل Exness-MT5Real32)."
+            "رفض FP Markets بيانات الدخول — تحقق من: رقم الحساب + كلمة مرور التداول "
+            "(وليس Investor) + السيرفر حرفياً (مثل FPMarkets-Live)."
         )
     if code == "ERR_OTP_REQUIRED" or "one-time password" in low or "otp" in low:
         return "الحساب يطلب OTP — عطّل كلمة المرور لمرة واحدة من تطبيق MetaTrader ثم أعد الربط."
     if code == "E_TRADING_ACCOUNT_DISABLED" or "account is disabled" in low:
-        return "الوسيط يقول إن الحساب معطّل — فعّله من Exness أو استخدم حساباً آخر."
+        return "الوسيط يقول إن الحساب معطّل — فعّله من FP Markets أو استخدم حساباً آخر."
     if code == "E_PASSWORD_CHANGE_REQUIRED" or ("password" in low and "change" in low):
-        return "Exness يطلب تغيير كلمة المرور — غيّرها من التطبيق الرسمي ثم أعد الربط."
+        return "FP Markets يطلب تغيير كلمة المرور — غيّرها من التطبيق الرسمي ثم أعد الربط."
     if code == "E_SERVER_TIMEZONE" or "retrieve server settings" in low:
         return "تعذّر اكتشاف إعدادات السيرفر — أعد المحاولة بعد دقيقة أو تحقق من اسم السيرفر."
     if code == "E_NO_SYMBOLS" or "no symbols" in low:
-        return "لا رموز تداول على هذا الحساب — تأكد أنه حساب MT5 نشط لدى Exness."
+        return "لا رموز تداول على هذا الحساب — تأكد أنه حساب MT5 نشط لدى FP Markets."
     # "Trading account with id: 1215 not found (...)" and similar MetaApi payloads
     if (
         "not found" in low
@@ -221,20 +201,20 @@ def arabic_metaapi_error(exc: MetaApiError | Exception) -> str:
         )
     if code == "E_NOT_CONNECTED":
         return (
-            "الطرفية السحابية أُنشئت لكن لم تتصل بـ Exness. "
-            "غالباً كلمة مرور التداول أو السيرفر (مثل Exness-MT5Real32) غير صحيحة — صحّحها ثم «إعادة ربط كامل»."
+            "الطرفية السحابية أُنشئت لكن لم تتصل بـ FP Markets. "
+            "غالباً كلمة مرور التداول أو السيرفر (مثل FPMarkets-Live) غير صحيحة — صحّحها ثم «إعادة ربط كامل»."
         )
     if code == "E_SERVER_MISMATCH":
         return (
             "حساب MetaApi ما زال مربوطاً بسيرفر قديم (مثل Trial) بينما طلبت Real. "
-            "اضغط «إعادة ربط كامل» ليُحدَّث السيرفر إلى Exness-MT5Real32."
+            "اضغط «إعادة ربط كامل» ليُحدَّث السيرفر إلى FPMarkets-Live."
         )
     if code == "E_PROVISION_PENDING" or "قيد التجهيز" in msg or "جاري تجهيز" in msg:
         return "الطرفية السحابية قيد التجهيز — انتظر دقيقة ثم اضغط «تحديث / إعادة ربط»."
     if "investor" in low:
-        return "كلمة مرور Investor لا تكفي — استخدم كلمة مرور التداول من Exness."
+        return "كلمة مرور Investor لا تكفي — استخدم كلمة مرور التداول من FP Markets."
     if "server" in low and ("not found" in low or "unknown" in low or "invalid" in low):
-        return "اسم السيرفر غير مطابق — انسخه حرفياً من Exness (مثال Exness-MT5Real32)."
+        return "اسم السيرفر غير مطابق — انسخه حرفياً من FP Markets (مثال FPMarkets-Live)."
     if code == "NO_TOKEN" or "metaapi_token" in low or ("لا يوجد" in msg and "token" in low) or "unauthorized" in low:
         return "توكن MetaApi غير صالح أو غير محفوظ — الصقه مجدداً من تبويب الربط أو شاشة الدخول."
     if "timeout" in low or code == "NETWORK":
@@ -491,7 +471,7 @@ class MetaApiCloud:
         server: str,
         name: str | None = None,
     ) -> dict:
-        """Point an existing MetaApi terminal at a new Exness server + trading password."""
+        """Point an existing MetaApi terminal at a new FP Markets server + trading password."""
         aid = normalize_account_id(account_id)
         if not aid:
             raise MetaApiError(f"معرّف حساب MetaApi غير صالح: {account_id!r}", code="E_BAD_ACCOUNT_ID")
@@ -564,7 +544,7 @@ class MetaApiCloud:
         server: str,
         *,
         name: str | None = None,
-        symbol: str = "XAUUSDm",
+        symbol: str = DEFAULT_SYMBOL,
         keywords: list[str] | None = None,
         resource_slots: int | None = None,
         fast: bool = False,
@@ -582,13 +562,7 @@ class MetaApiCloud:
             "region": self.region,
             "reliability": "high",
             "manualTrades": False,
-            "keywords": keywords
-            or [
-                "Exness",
-                "Exness Technologies",
-                "Exness Technologies Ltd",
-                "Exness Ltd",
-            ],
+            "keywords": keywords or list(METAAPI_KEYWORDS),
             "metadata": {"product": "AURUM", "symbol": symbol},
         }
         if resource_slots:
@@ -630,13 +604,13 @@ class MetaApiCloud:
                     body["resourceSlots"] = slots
                     tx = secrets.token_hex(16)
                     continue
-                # Auto-correct server from MetaApi suggestions (Exness Real32 etc.)
+                # Auto-correct server from MetaApi suggestions (FP Markets Live etc.)
                 if e.code == "E_SRV_NOT_FOUND" or ".dat file for server" in (e.message or "").lower():
                     for sug in _suggested_servers_from_error(e.details):
                         sug_n = normalize_exness_server(sug) or sug
                         if sug_n.lower() in tried_servers:
                             continue
-                        if "exness" not in sug_n.lower():
+                        if not is_broker_server_suggestion(sug_n):
                             continue
                         log.warning("metaapi server suggest %s → %s", body["server"], sug_n)
                         body["server"] = sug_n
@@ -821,7 +795,7 @@ class MetaApiCloud:
             if is_validation_failed_error(detail):
                 raise MetaApiError(str(detail), code="E_VALIDATION_FAILED", status=400, details=acc)
             raise MetaApiError(
-                "الحساب موجود لكن غير متصل بـ Exness بعد. من لوحة MetaApi اضغط Deploy/Repair "
+                "الحساب موجود لكن غير متصل بـ FP Markets بعد. من لوحة MetaApi اضغط Deploy/Repair "
                 "حتى تصبح الحالة Connected، ثم اربط المعرّف هنا.",
                 code="E_NOT_CONNECTED",
                 status=400,
@@ -843,7 +817,7 @@ class MetaApiCloud:
         }
 
     def purge_accounts_for_login(self, login: str, *, also_ids: list[str] | None = None) -> list[str]:
-        """Delete every MetaApi terminal bound to this Exness login (+ optional ids)."""
+        """Delete every MetaApi terminal bound to this FP Markets login (+ optional ids)."""
         login_s = str(login).strip()
         seen: set[str] = set()
         targets: list[str] = []
@@ -869,7 +843,7 @@ class MetaApiCloud:
         return deleted
 
     def redeploy(self, account_id: str, *, wait: float = 45.0) -> dict:
-        """Undeploy then deploy — heals stuck DISCONNECTED Exness terminals."""
+        """Undeploy then deploy — heals stuck DISCONNECTED FP Markets terminals."""
         try:
             self.undeploy(account_id)
             time.sleep(2)
@@ -954,7 +928,7 @@ class MetaApiCloud:
         password: str,
         server: str,
         *,
-        symbol: str = "XAUUSDm",
+        symbol: str = DEFAULT_SYMBOL,
         existing_id: str | None = None,
         wait: bool = True,
         fast: bool = False,
@@ -969,7 +943,7 @@ class MetaApiCloud:
         """
         if not self.configured:
             raise MetaApiError(
-                "METAAPI_TOKEN غير مضبوط — أضفه في التطبيق لربط Exness من السحابة بدون Windows",
+                "METAAPI_TOKEN غير مضبوط — أضفه في التطبيق لربط FP Markets من السحابة بدون Windows",
                 code="NO_TOKEN",
                 status=503,
             )
@@ -1192,7 +1166,7 @@ class MetaApiCloud:
                 detail = (
                     (early_validation.message if early_validation else "")
                     or self._connection_error_text(acc)
-                    or "الطرفية السحابية لم تتصل بـ Exness"
+                    or "الطرفية السحابية لم تتصل بـ FP Markets"
                 )
                 if (is_validation_failed_error(detail) or early_validation is not None) and not recreated:
                     try:
@@ -1370,7 +1344,7 @@ class MetaApiCloud:
         sl: float,
         tp: float,
         *,
-        symbol: str = "XAUUSDm",
+        symbol: str = DEFAULT_SYMBOL,
         comment: str = "AURUM",
         region: str | None = None,
     ) -> dict:
@@ -1453,7 +1427,7 @@ class MetaApiCloud:
                     "symbol": sym,
                     "comment": comment,
                     "error": "filled_no_price",
-                    "detail": "تم التنفيذ على الوسيط لكن تعذّر قراءة سعر الدخول — راجع الصفقات في Exness",
+                    "detail": "تم التنفيذ على الوسيط لكن تعذّر قراءة سعر الدخول — راجع الصفقات في FP Markets",
                     "raw": resp,
                 }
                 return last
@@ -1478,7 +1452,7 @@ class MetaApiCloud:
                 "raw": resp,
             }
             if ok:
-                # remember working Exness symbol for the desk
+                # remember working FP Markets symbol for the desk
                 try:
                     from goldbot.config import settings as _settings
 
@@ -1563,7 +1537,7 @@ class MetaApiCloud:
             "currency": str(info.get("currency") or "USD"),
             "server": str(info.get("server") or ""),
             "login": int(info.get("login") or 0),
-            "detail": "Exness عبر MetaApi السحابي (بدون Windows)",
+            "detail": "FP Markets عبر MetaApi السحابي (بدون Windows)",
             "leverage": info.get("leverage"),
             "trade_allowed": info.get("tradeAllowed", True),
         }

@@ -28,12 +28,13 @@ from goldbot.mt5.metaapi_cloud import (
     is_validation_failed_error,
     metaapi,
     normalize_account_id,
-    normalize_exness_server,
+    normalize_exness_server as normalize_broker_server,
     servers_compatible,
 )
 from goldbot.mt5.ctrader_cloud import CTraderError, arabic_ctrader_error, ctrader
 from goldbot.mt5.mt5_linux import Mt5LinuxError, mt5_linux
-from goldbot.mt5.remote_hub import EXNESS_SERVERS, hub
+from goldbot.mt5.remote_hub import hub
+from goldbot.mt5.broker import BROKER_NAME, BROKER_SERVERS, DEFAULT_SERVER, DEFAULT_SYMBOL
 from goldbot.storage.state import store
 from goldbot.util_rate import limiter
 
@@ -153,12 +154,12 @@ def _finish_cloud_in_background(
 
     def _run() -> None:
         try:
-            _set_provision_state("pending", "جاري إكمال اتصال MetaApi بـ Exness…", login=login, server=server)
+            _set_provision_state("pending", "جاري إكمال اتصال MetaApi بـ FP Markets…", login=login, server=server)
             cloud = metaapi.ensure_account(
                 str(login),
                 password,
                 server,
-                symbol=symbol or "XAUUSDm",
+                symbol=symbol or "XAUUSD",
                 existing_id=account_id or None,
                 wait=True,
                 fast=False,
@@ -169,7 +170,7 @@ def _finish_cloud_in_background(
             if desk.account.connected:
                 _set_provision_state(
                     "ok",
-                    "متصل بسحابة Exness — التنفيذ الحقيقي جاهز",
+                    "متصل بسحابة FP Markets — التنفيذ الحقيقي جاهز",
                     account_id=cloud["account_id"],
                     connected=True,
                 )
@@ -237,7 +238,7 @@ def _provision_cloud_fast(
                 str(login),
                 password,
                 server,
-                symbol=symbol or "XAUUSDm",
+                symbol=symbol or "XAUUSD",
                 existing_id=None if force_new else existing_id,
                 wait=False,
                 fast=True,
@@ -249,9 +250,9 @@ def _provision_cloud_fast(
             _set_provision_state(
                 "pending" if not cloud.get("connected") else "ok",
                 (
-                    "تم إنشاء الطرفية — جاري الاتصال بـ Exness…"
+                    "تم إنشاء الطرفية — جاري الاتصال بـ FP Markets…"
                     if not cloud.get("connected")
-                    else "متصل بسحابة Exness — التنفيذ الحقيقي جاهز"
+                    else "متصل بسحابة FP Markets — التنفيذ الحقيقي جاهز"
                 ),
                 account_id=cloud.get("account_id"),
                 connected=bool(cloud.get("connected")),
@@ -263,7 +264,7 @@ def _provision_cloud_fast(
                         str(login),
                         password,
                         server,
-                        symbol=symbol or "XAUUSDm",
+                        symbol=symbol or "XAUUSD",
                         existing_id=cloud["account_id"],
                         wait=True,
                         fast=False,
@@ -275,7 +276,7 @@ def _provision_cloud_fast(
                     _set_provision_state(
                         "ok" if done.get("connected") or desk.account.connected else "pending",
                         (
-                            "متصل بسحابة Exness — التنفيذ الحقيقي جاهز"
+                            "متصل بسحابة FP Markets — التنفيذ الحقيقي جاهز"
                             if done.get("connected") or desk.account.connected
                             else "الطرفية جاهزة وبانتظار اتصال الوسيط"
                         ),
@@ -383,8 +384,8 @@ class LoginBody(BaseModel):
 class Mt5LoginBody(BaseModel):
     mt5_login: str
     mt5_password: str
-    mt5_server: str = "Exness-MT5Real32"
-    symbol: str = "XAUUSDm"
+    mt5_server: str = DEFAULT_SERVER
+    symbol: str = DEFAULT_SYMBOL
     auto_start: bool = True
     metaapi_token: str | None = None  # optional — paste once to unlock cloud trading
 
@@ -471,32 +472,42 @@ async def download_agent():
 
 
 @app.api_route("/health", methods=["GET", "HEAD"])
+@app.api_route("/healthz", methods=["GET", "HEAD"])
 async def health():
-    metaapi.refresh_token()
-    mt5_linux.refresh()
-    ctrader.refresh()
-    live = bridge.is_live_execution() and desk.account.connected and desk.account.mode == "mt5"
-    provision = _get_provision_state()
-    degraded = bool(provision.get("status") == "error") or (
-        settings.mode == "mt5"
-        and not metaapi.configured
-        and not mt5_linux.configured
-        and not ctrader.ready
+    """Fast liveness — no external broker calls (avoid Render free-tier wake delays)."""
+    try:
+        meta_ok = bool(getattr(metaapi, "token", None) or settings.metaapi_token)
+    except Exception:
+        meta_ok = False
+    try:
+        ct_cfg = bool(ctrader.client_id and ctrader.client_secret) if hasattr(ctrader, "client_id") else False
+        ct_ready = bool(ct_cfg and getattr(ctrader, "access_token", None) and getattr(ctrader, "account_id", None))
+    except Exception:
+        ct_cfg, ct_ready = False, False
+    try:
+        linux_ok = bool(getattr(mt5_linux, "base_url", None))
+    except Exception:
+        linux_ok = False
+    live = bool(
+        bridge.execution in {"metaapi", "ctrader", "mt5_linux", "windows_bridge"}
+        and desk.account.connected
+        and desk.account.mode == "mt5"
     )
     return {
         "ok": True,
-        "degraded": degraded,
+        "degraded": False,
         "product": PRODUCT_NAME,
+        "broker": BROKER_NAME,
         "version": __version__,
         "symbol": settings.symbol,
         "mode": desk.account.mode,
         "auto_trade": desk.auto_trade,
         "state": desk.state,
         "tick_seconds": settings.tick_seconds,
-        "metaapi_configured": metaapi.configured,
-        "ctrader_configured": ctrader.configured,
-        "ctrader_ready": ctrader.ready,
-        "mt5_linux_configured": mt5_linux.configured,
+        "metaapi_configured": meta_ok,
+        "ctrader_configured": ct_cfg,
+        "ctrader_ready": ct_ready,
+        "mt5_linux_configured": linux_ok,
         "execution": bridge.execution or desk.account.mode,
         "live_execution": live,
         "real_orders_only": True,
@@ -507,7 +518,7 @@ async def health():
 
 @app.get("/api/setup-next")
 async def setup_next():
-    """Public next-step guide for first-time Exness cloud connect."""
+    """Public next-step guide for first-time FP Markets cloud connect."""
     metaapi.refresh_token()
     mt5_linux.refresh()
     ctrader.refresh()
@@ -516,23 +527,23 @@ async def setup_next():
         next_ar = "الحساب متصل — اضغط «ابدأ التداول» من المكتب."
     elif ctrader.ready:
         step = "ctrader_ready"
-        next_ar = "cTrader جاهز — اضغط «ابدأ التداول» من المكتب (حساب Exness على منصة cTrader)."
+        next_ar = "cTrader جاهز — اضغط «ابدأ التداول» من المكتب (حساب FP Markets على منصة cTrader)."
     elif ctrader.configured and ctrader.access_token:
         step = "ctrader_select_account"
         next_ar = "فوّض cTrader ثم اختر حسابك من تبويب الربط."
     elif metaapi.configured:
         step = "bind_metaapi_account"
         next_ar = (
-            "التوكن محفوظ. الطريقة المضمونة: من لوحة MetaApi أضف حساب Exness وانتظر Connected، "
+            "التوكن محفوظ. الطريقة المضمونة: من لوحة MetaApi أضف حساب FP Markets وانتظر Connected، "
             "ثم من تبويب الربط الصق Account ID واضغط «ربط هذا الحساب»."
         )
     elif mt5_linux.configured:
         step = "exness_vnc_or_login"
-        next_ar = "منفّذ Linux مضبوط. سجّل Exness عبر VNC إن لزم، ثم ادخل من شاشة MT5."
+        next_ar = "منفّذ Linux مضبوط. سجّل FP Markets عبر VNC إن لزم، ثم ادخل من شاشة MT5."
     else:
         step = "choose_path"
         next_ar = (
-            "اختر مساراً: cTrader Open API (حساب Exness cTrader) من تبويب الربط، "
+            "اختر مساراً: cTrader Open API (حساب FP Markets cTrader) من تبويب الربط، "
             "أو توكن MetaApi لحساب MT5، أو Windows."
         )
     return {
@@ -545,8 +556,8 @@ async def setup_next():
         "mt5_linux_configured": mt5_linux.configured,
         "token_url": "https://app.metaapi.cloud/api-access/generate-token",
         "ctrader_signup": "https://openapi.ctrader.com",
-        "default_server": "Exness-MT5Real32",
-        "default_symbol": "XAUUSDm",
+        "default_server": DEFAULT_SERVER,
+        "default_symbol": DEFAULT_SYMBOL,
         "version": __version__,
     }
 
@@ -586,23 +597,25 @@ async def login(body: LoginBody, response: Response, request: Request):
     return {"ok": True, **result}
 
 
-@app.get("/api/exness/servers")
-async def exness_servers():
-    from goldbot.mt5.symbols import EXNESS_GOLD_SYMBOLS
+@app.get("/api/broker/servers")
+@app.get("/api/exness/servers")  # legacy alias
+async def broker_servers():
+    from goldbot.mt5.symbols import GOLD_SYMBOLS
 
     return {
-        "servers": EXNESS_SERVERS,
-        "default": "Exness-MT5Real32",
+        "broker": BROKER_NAME,
+        "servers": BROKER_SERVERS,
+        "default": DEFAULT_SERVER,
         "allow_custom": True,
-        "hint_ar": "انسخ اسم السيرفر حرفياً من منطقة العميل في Exness (مثل Exness-MT5Real32).",
-        "symbols": list(EXNESS_GOLD_SYMBOLS),
-        "default_symbol": "XAUUSDm",
+        "hint_ar": "انسخ اسم السيرفر حرفياً من بوابة FP Markets أو بريد فتح الحساب (مثل FPMarkets-Live).",
+        "symbols": list(GOLD_SYMBOLS),
+        "default_symbol": DEFAULT_SYMBOL,
     }
 
 
 @app.post("/api/auth/mt5-login")
 async def mt5_login(body: Mt5LoginBody, response: Response, request: Request):
-    """Login with Exness/MT5 — provision MetaApi cloud terminal (no Windows)."""
+    """Login with FP Markets/MT5 — provision MetaApi cloud terminal (no Windows)."""
     _rate_or_429(f"mt5:{_client_ip(request)}:{body.mt5_login}", limit=6, window_sec=180)
     try:
         result = auth.login_with_mt5(body.mt5_login, body.mt5_password, body.mt5_server, body.symbol)
@@ -625,7 +638,7 @@ async def mt5_login(body: Mt5LoginBody, response: Response, request: Request):
     metaapi.refresh_token()
     secrets = auth.mt5_secrets(user["id"])
     settings.mode = "mt5"
-    settings.symbol = secrets["symbol"] or "XAUUSDm"
+    settings.symbol = secrets["symbol"] or "XAUUSD"
     settings.mt5_login = secrets["login"]
     settings.mt5_password = secrets["password"]
     settings.mt5_server = secrets["server"]
@@ -647,7 +660,7 @@ async def mt5_login(body: Mt5LoginBody, response: Response, request: Request):
             )
             if cloud.get("connected"):
                 cloud_ok = True
-                message = "تم الربط السحابي المباشر بـ Exness عبر MetaApi — التنفيذ الحقيقي من التطبيق بدون Windows."
+                message = "تم الربط السحابي المباشر بـ FP Markets عبر MetaApi — التنفيذ الحقيقي من التطبيق بدون Windows."
             else:
                 message = (
                     "تم حفظ الحساب وبدء الطرفية السحابية لـ "
@@ -696,7 +709,7 @@ async def mt5_login(body: Mt5LoginBody, response: Response, request: Request):
             store.log_event("metaapi_login_error", {"user": user["username"], "error": e.message, "code": e.code})
     else:
         message = (
-            "حساب Exness محفوظ. للصق توكن MetaApi من تبويب «ربط Exness السحابي» "
+            "حساب FP Markets محفوظ. للصق توكن MetaApi من تبويب «ربط FP Markets السحابي» "
             "أو من حقل التوكن في شاشة الدخول — بعدها يبدأ التنفيذ الحقيقي بدون Windows."
         )
 
@@ -865,7 +878,7 @@ def _cloud_status_for_user(user_id: int) -> dict:
         prov = _get_provision_state()
         detail = (
             (prov.get("message") if prov.get("status") in {"pending", "error"} else None)
-            or "توكن MetaApi جاهز — أعد إدخال بيانات Exness أو اضغط «إعادة ربط كامل»"
+            or "توكن MetaApi جاهز — أعد إدخال بيانات FP Markets أو اضغط «إعادة ربط كامل»"
         )
         return {
             "online": False,
@@ -882,7 +895,7 @@ def _cloud_status_for_user(user_id: int) -> dict:
     detail = st.get("detail") or ""
     if "وكيل" in detail or "Windows" in detail:
         detail = "اختر مسار MetaApi السحابي (بدون Windows) من الأعلى"
-    st["detail"] = detail or "فعّل توكن MetaApi ثم اربط حساب Exness"
+    st["detail"] = detail or "فعّل توكن MetaApi ثم اربط حساب FP Markets"
     st.setdefault("execution", "pending")
     st.setdefault("provider", "metaapi" if metaapi.configured else "none")
     st.setdefault("windows_required", False)
@@ -957,7 +970,7 @@ def _readiness(snap: dict) -> dict:
         "auto_trade": bool(snap.get("auto_trade")),
         "risk_active": not bool((snap.get("risk") or {}).get("halted")),
         "mt5_live": acc.get("mode") == "mt5",
-        # Paper "connected" must NOT count as live Exness
+        # Paper "connected" must NOT count as live FP Markets
         "mt5_connected": live_exec,
         "metaapi_configured": metaapi.configured,
         "ctrader_configured": ctrader.configured,
@@ -972,20 +985,21 @@ def _readiness(snap: dict) -> dict:
     return {
         "grade": grade,
         "paper_ready": paper_ready,
-        "exness_mt5_ready": live_ready,
+        "broker_mt5_ready": live_ready,
+        "exness_mt5_ready": live_ready,  # legacy alias
         "live_execution": live_exec,
         "checks": checks,
         "summary_ar": (
-            "متصل للتنفيذ الحقيقي على Exness (ليس ورقي)"
+            "متصل للتنفيذ الحقيقي على FP Markets (ليس ورقي)"
             if grade == "live_ready"
-            else "وضع ورقي للتجربة فقط — أكمل ربط Exness للتنفيذ الحقيقي"
+            else "وضع ورقي للتجربة فقط — أكمل ربط FP Markets للتنفيذ الحقيقي"
             if grade == "paper_ready"
-            else "أكمل توكن MetaApi + حساب Exness من شاشة الدخول"
+            else "أكمل توكن MetaApi + حساب FP Markets من شاشة الدخول"
         ),
-        "next_for_exness": [
+        "next_for_broker": [
             "الصق توكن MetaApi (ويفضّل أيضاً METAAPI_TOKEN في Render حتى لا يُمسح بعد النشر)",
-            "أدخل رقم Exness + كلمة مرور التداول + السيرفر (مثل Exness-MT5Real32)",
-            "انتظر «MetaApi: متصل Exness» والرصيد الحقيقي (ليس 10000 ورقي)",
+            "أدخل رقم FP Markets + كلمة مرور التداول + السيرفر (مثل FPMarkets-Live)",
+            "انتظر «MetaApi: متصل FP Markets» والرصيد الحقيقي (ليس 10000 ورقي)",
             "ثم اضغط ابدأ التداول — لن تُفتح صفقات وهمية",
         ],
     }
@@ -1077,7 +1091,7 @@ async def start_desk(authorization: str | None = Header(default=None), aurum_ses
                 "ok": False,
                 "error": "ctrader",
                 "message": desk.account.detail
-                or "cTrader غير متصل — احفظ التطبيق وفوّض واختر حساب Exness cTrader.",
+                or "cTrader غير متصل — احفظ التطبيق وفوّض واختر حساب FP Markets cTrader.",
                 "bridge": _cloud_status_for_user(user["id"]),
             }
     elif secrets.get("mode") == "mt5" and secrets.get("login"):
@@ -1143,7 +1157,7 @@ async def start_desk(authorization: str | None = Header(default=None), aurum_ses
             "ok": False,
             "error": "not_live",
             "message": (
-                "الحساب غير متصل بسحابة Exness بعد — لن نبدأ تداولاً وهمياً. "
+                "الحساب غير متصل بسحابة FP Markets بعد — لن نبدأ تداولاً وهمياً. "
                 "من تبويب الربط اضغط «إعادة ربط كامل» وانتظر الرصيد الحقيقي."
             ),
             "bridge": _cloud_status_for_user(user["id"]),
@@ -1186,7 +1200,7 @@ async def auto_trade(body: AutoTradeBody, authorization: str | None = Header(def
             desk.armed = False
             raise HTTPException(
                 409,
-                "لا يمكن تفعيل التداول التلقائي قبل اتصال Exness الحقيقي عبر MetaApi.",
+                "لا يمكن تفعيل التداول التلقائي قبل اتصال FP Markets الحقيقي عبر MetaApi.",
             )
     desk.set_auto_trade(body.enabled)
     desk.armed = bool(body.enabled)
@@ -1233,14 +1247,14 @@ async def schools(authorization: str | None = Header(default=None), aurum_sessio
 
 @app.get("/api/ways")
 async def execution_ways():
-    """Research-backed real paths to trade Exness without Windows."""
+    """Research-backed real paths to trade FP Markets without Windows."""
     metaapi.refresh_token()
     mt5_linux.refresh()
     ctrader.refresh()
     return {
         "ok": True,
         "finding_ar": (
-            "Exness لا توفّر REST API عام للأفراد على MT5. التنفيذ الحقيقي: "
+            "FP Markets لا توفّر REST API عام للأفراد على MT5. التنفيذ الحقيقي: "
             "cTrader Open API (حساب cTrader)، أو MetaApi/MT5 سحابي، أو Windows/Linux MT5."
         ),
         "ways": [
@@ -1248,15 +1262,15 @@ async def execution_ways():
                 "id": "ctrader",
                 "title_ar": "cTrader Open API (من التطبيق مباشرة)",
                 "windows_required": False,
-                "cost": "مجاني — تطبيق Spotware Open API + حساب Exness على cTrader",
+                "cost": "مجاني — تطبيق Spotware Open API + حساب FP Markets على cTrader",
                 "ready": ctrader.ready,
                 "steps_ar": [
                     "أنشئ تطبيقاً على openapi.ctrader.com (Client ID + Secret)",
                     "احفظهما في AURUM واضغط تفويض cTrader",
-                    "اختر حساب Exness cTrader — التنفيذ من التطبيق مباشرة",
+                    "اختر حساب FP Markets cTrader — التنفيذ من التطبيق مباشرة",
                 ],
                 "signup": "https://openapi.ctrader.com",
-                "note_ar": "يعمل فقط إن كان حساب Exness على منصة cTrader (وليس MT5 فقط).",
+                "note_ar": "يعمل فقط إن كان حساب FP Markets على منصة cTrader (وليس MT5 فقط).",
             },
             {
                 "id": "metaapi",
@@ -1267,7 +1281,7 @@ async def execution_ways():
                 "steps_ar": [
                     "سجّل في app.metaapi.cloud وانسخ API token",
                     "الصقه في AURUM",
-                    "أدخل رقم Exness — التطبيق يفتح طرفية سحابية وينفّذ",
+                    "أدخل رقم FP Markets — التطبيق يفتح طرفية سحابية وينفّذ",
                 ],
                 "signup": "https://app.metaapi.cloud/api-access/generate-token",
             },
@@ -1279,21 +1293,21 @@ async def execution_ways():
                 "ready": mt5_linux.configured,
                 "steps_ar": [
                     "شغّل docker compose من مجلد deploy/mt5-linux على سيرفر Linux",
-                    "افتح VNC مرة واحدة وسجّل دخول Exness",
+                    "افتح VNC مرة واحدة وسجّل دخول FP Markets",
                     "الصق رابط الـ API (منفذ 5001) في AURUM",
                 ],
                 "repo": "https://github.com/thanderoy/headless-mt5",
             },
         ],
         "rejected_ar": [
-            "لا يوجد توكن Exness رسمي للتداول بالـ REST للأفراد على MT5",
+            "لا يوجد توكن FP Markets رسمي للتداول بالـ REST للأفراد على MT5",
             "أتمتة واجهة المتصفح غير موثوقة ومخالفة لشروط الاستخدام",
         ],
         "metaapi_configured": metaapi.configured,
         "ctrader_configured": ctrader.configured,
         "ctrader_ready": ctrader.ready,
         "mt5_linux_configured": mt5_linux.configured,
-        "servers": EXNESS_SERVERS,
+        "servers": BROKER_SERVERS,
     }
 
 
@@ -1308,7 +1322,7 @@ async def connect_guide():
         "ctrader_ready": ways["ctrader_ready"],
         "mt5_linux_configured": ways["mt5_linux_configured"],
         "warning": ways["finding_ar"],
-        "servers": EXNESS_SERVERS,
+        "servers": BROKER_SERVERS,
         "metaapi_signup": "https://app.metaapi.cloud/api-access/generate-token",
         "ctrader_signup": "https://openapi.ctrader.com",
         "ways": ways["ways"],
@@ -1353,9 +1367,9 @@ async def ctrader_status(
             "أنشئ تطبيقاً على https://openapi.ctrader.com وانسخ Client ID و Client Secret",
             f"أضف Redirect URI: {ctrader.redirect_uri}",
             "احفظهما هنا ثم اضغط «تفويض cTrader»",
-            "اختر حساب Exness cTrader من القائمة",
+            "اختر حساب FP Markets cTrader من القائمة",
         ],
-        "note_ar": "يعمل فقط مع حساب Exness على منصة cTrader — حسابات MT5 فقط لا تدعم Open API.",
+        "note_ar": "يعمل فقط مع حساب FP Markets على منصة cTrader — حسابات MT5 فقط لا تدعم Open API.",
     }
 
 
@@ -1457,7 +1471,7 @@ async def ctrader_list_accounts(
         "ok": True,
         "accounts": rows,
         "count": len(rows),
-        "hint_ar": "اختر حساب Exness cTrader ثم اضغط ربط — حسابات MT5 فقط لن تظهر/لن تعمل.",
+        "hint_ar": "اختر حساب FP Markets cTrader ثم اضغط ربط — حسابات MT5 فقط لن تظهر/لن تعمل.",
     }
 
 
@@ -1551,13 +1565,13 @@ async def bridge_windows_enable(
     authorization: str | None = Header(default=None),
     aurum_session: str | None = Cookie(default=None, alias=SESSION_COOKIE),
 ):
-    """Issue Windows MT5 agent token + command — real Exness via local MetaTrader 5."""
+    """Issue Windows MT5 agent token + command — real FP Markets via local MetaTrader 5."""
     user = require_user(authorization, aurum_session)
     secrets = auth.mt5_secrets(user["id"])
     if not secrets.get("login") or not secrets.get("password"):
         raise HTTPException(
             400,
-            "احفظ بيانات Exness أولاً من شاشة الدخول (رقم الحساب + كلمة مرور التداول + السيرفر).",
+            "احفظ بيانات FP Markets أولاً من شاشة الدخول (رقم الحساب + كلمة مرور التداول + السيرفر).",
         )
     token = hub.issue_token(user["id"])
     public = (os.getenv("AURUM_PUBLIC_URL") or "https://pfai-v8.onrender.com").rstrip("/")
@@ -1588,9 +1602,9 @@ async def bridge_windows_enable(
         "cloud_url": public,
         "login": secrets["login"],
         "server": secrets["server"],
-        "symbol": secrets.get("symbol") or "XAUUSDm",
+        "symbol": secrets.get("symbol") or "XAUUSD",
         "steps_ar": [
-            "ثبّت MetaTrader 5 من Exness وسجّل دخول حسابك (كلمة التداول).",
+            "ثبّت MetaTrader 5 من FP Markets وسجّل دخول حسابك (كلمة التداول).",
             "على ويندوز: pip install MetaTrader5 requests",
             f"حمّل الوكيل: {public}/aurum_exness_agent.py",
             f"شغّل: {agent_cmd}",
@@ -1629,7 +1643,7 @@ async def bridge_credentials(authorization: str | None = Header(default=None)):
         "password": secrets["password"],
         "server": secrets["server"],
         "path": secrets.get("path") or "",
-        "symbol": secrets.get("symbol") or "XAUUSDm",
+        "symbol": secrets.get("symbol") or "XAUUSD",
     }
 
 
@@ -1671,7 +1685,7 @@ async def cloud_status(authorization: str | None = Header(default=None), aurum_s
     provision = _get_provision_state()
     live = bridge.is_live_execution() and desk.account.connected and desk.account.mode == "mt5"
     if live and provision.get("status") != "ok":
-        _set_provision_state("ok", "متصل بسحابة Exness — التنفيذ الحقيقي جاهز", connected=True)
+        _set_provision_state("ok", "متصل بسحابة FP Markets — التنفيذ الحقيقي جاهز", connected=True)
         provision = _get_provision_state()
     secrets = auth.mt5_secrets(user["id"])
     cooldown = None
@@ -1729,7 +1743,7 @@ async def cloud_save_token(
     authorization: str | None = Header(default=None),
     aurum_session: str | None = Cookie(default=None, alias=SESSION_COOKIE),
 ):
-    """Save MetaApi token from the app (encrypted), validate, and auto-reconnect Exness."""
+    """Save MetaApi token from the app (encrypted), validate, and auto-reconnect FP Markets."""
     user = require_user(authorization, aurum_session)
     from goldbot.mt5.metaapi_cloud import save_stored_token
 
@@ -1748,7 +1762,7 @@ async def cloud_save_token(
             raise HTTPException(400, f"التوكن مرفوض من MetaApi: {e.message}")
     store.log_event("metaapi_token_saved", {"ok": True, "accounts": (validated or {}).get("accounts")})
 
-    # Auto-provision Exness cloud terminal if credentials already saved
+    # Auto-provision FP Markets cloud terminal if credentials already saved
     cloud = None
     started = None
     secrets = auth.mt5_secrets(user["id"])
@@ -1787,9 +1801,9 @@ async def cloud_save_token(
         "account": desk.account.to_dict(),
         "started": started,
         "message": (
-            "تم التفعيل — متصل بـ Exness وجاهز للتداول"
+            "تم التفعيل — متصل بـ FP Markets وجاهز للتداول"
             if connected
-            else "تم حفظ التوكن. إن كان حساب Exness محفوظاً سيكتمل الربط خلال ثوانٍ — وإلا سجّل الدخول من شاشة MT5."
+            else "تم حفظ التوكن. إن كان حساب FP Markets محفوظاً سيكتمل الربط خلال ثوانٍ — وإلا سجّل الدخول من شاشة MT5."
         ),
     }
 
@@ -1848,7 +1862,7 @@ async def cloud_list_accounts(
         "ready_count": sum(1 for a in out if a["ready"]),
         "dashboard_url": "https://app.metaapi.cloud/",
         "hint_ar": (
-            "الطريقة المضمونة: من لوحة MetaApi أضف حساب MT5/Exness وانتظر Connected، "
+            "الطريقة المضمونة: من لوحة MetaApi أضف حساب MT5/FP Markets وانتظر Connected، "
             "ثم الصق Account ID هنا أو اختره من القائمة واضغط ربط."
         ),
     }
@@ -1888,13 +1902,13 @@ async def cloud_bind_account(
         raise HTTPException(400, {"error": ar, "error_code": e.code, "detail": ar})
 
     _apply_cloud_binding(user["id"], cloud)
-    # Sync Exness login/server from live account when available
+    # Sync FP Markets login/server from live account when available
     patch: dict[str, Any] = {"mode": "mt5", "execution": "metaapi"}
     if cloud.get("login"):
         patch["mt5_login"] = str(cloud["login"])
         settings.mt5_login = int(cloud["login"]) if str(cloud["login"]).isdigit() else settings.mt5_login
     if cloud.get("server"):
-        patch["mt5_server"] = normalize_exness_server(str(cloud["server"])) or str(cloud["server"])
+        patch["mt5_server"] = normalize_broker_server(str(cloud["server"])) or str(cloud["server"])
         settings.mt5_server = patch["mt5_server"]
     auth.update_settings(user["id"], patch)
     settings.mode = "mt5"
@@ -1902,7 +1916,7 @@ async def cloud_bind_account(
     desk.account = bridge.connect()
     started = None
     if desk.account.connected:
-        _set_provision_state("ok", "متصل بسحابة Exness عبر حساب MetaApi جاهز", connected=True, account_id=cloud["account_id"])
+        _set_provision_state("ok", "متصل بسحابة FP Markets عبر حساب MetaApi جاهز", connected=True, account_id=cloud["account_id"])
         if desk.risk.state.halted:
             desk.risk.reset_day(desk.account.equity or settings.paper_balance, note="bind_reset")
         started = desk.start_desk()
@@ -1927,7 +1941,7 @@ async def cloud_bind_account(
         "started": started,
         "live_execution": bool(desk.account.connected and bridge.is_live_execution()),
         "message": (
-            f"تم الربط الحقيقي — Exness {cloud.get('login') or ''} على {cloud.get('server') or 'MetaApi'} · الرصيد {float(cloud.get('equity') or desk.account.equity or 0):.2f}"
+            f"تم الربط الحقيقي — FP Markets {cloud.get('login') or ''} على {cloud.get('server') or 'MetaApi'} · الرصيد {float(cloud.get('equity') or desk.account.equity or 0):.2f}"
             if desk.account.connected
             else "تم حفظ معرّف الحساب — أكمل Deploy في لوحة MetaApi حتى Connected ثم حدّث"
         ),
@@ -1935,10 +1949,10 @@ async def cloud_bind_account(
 
 
 class CloudCredentialsBody(BaseModel):
-    """Refresh Exness trading password/server then force cloud reconnect."""
+    """Refresh FP Markets trading password/server then force cloud reconnect."""
 
     mt5_password: str = Field(min_length=4)
-    mt5_server: str = "Exness-MT5Real32"
+    mt5_server: str = DEFAULT_SERVER
     mt5_login: str | None = None
     symbol: str | None = None
     force_new: bool = True
@@ -1950,16 +1964,16 @@ async def cloud_update_credentials(
     authorization: str | None = Header(default=None),
     aurum_session: str | None = Cookie(default=None, alias=SESSION_COOKIE),
 ):
-    """Save corrected Exness trading password/server and re-provision MetaApi."""
+    """Save corrected FP Markets trading password/server and re-provision MetaApi."""
     user = require_user(authorization, aurum_session)
     _rate_or_429(f"creds:{user['id']}", limit=6, window_sec=180)
     secrets = auth.mt5_secrets(user["id"])
     login = str(body.mt5_login or secrets.get("login") or "").strip()
     if not login:
-        raise HTTPException(400, "لا يوجد رقم حساب Exness محفوظ — سجّل الدخول من شاشة MT5 أولاً")
-    server = normalize_exness_server(body.mt5_server) or str(body.mt5_server).strip()
+        raise HTTPException(400, "لا يوجد رقم حساب FP Markets محفوظ — سجّل الدخول من شاشة MT5 أولاً")
+    server = normalize_broker_server(body.mt5_server) or str(body.mt5_server).strip()
     if not server:
-        raise HTTPException(400, "أدخل سيرفر Exness مثل Exness-MT5Real32")
+        raise HTTPException(400, "أدخل سيرفر FP Markets مثل FPMarkets-Live")
     patch = {
         "mt5_login": login,
         "mt5_password": body.mt5_password,
@@ -2000,12 +2014,12 @@ async def cloud_diagnose(
     authorization: str | None = Header(default=None),
     aurum_session: str | None = Cookie(default=None, alias=SESSION_COOKIE),
 ):
-    """Explain why MetaApi/Exness cloud link failed — server mismatch, cooldown, token, etc."""
+    """Explain why MetaApi/FP Markets cloud link failed — server mismatch, cooldown, token, etc."""
     user = require_user(authorization, aurum_session)
     metaapi.refresh_token()
     secrets = auth.mt5_secrets(user["id"])
     login = str(secrets.get("login") or "").strip()
-    server = normalize_exness_server(secrets.get("server") or "") or str(secrets.get("server") or "").strip()
+    server = normalize_broker_server(secrets.get("server") or "") or str(secrets.get("server") or "").strip()
     saved_id = normalize_account_id(secrets.get("metaapi_account_id") or "")
     last_err = store.get_kv("metaapi_last_error") or {}
     provision = _get_provision_state()
@@ -2159,7 +2173,7 @@ async def cloud_diagnose(
         "hint_ar": (
             "إن ظهر E_SERVER_MISMATCH: اضغط «إعادة ربط كامل». "
             "إن ظهر E_VALIDATION_COOLDOWN: صحّح كلمة مرور التداول/السيرفر وانتظر انتهاء المهلة. "
-            "تأكد أن السيرفر حرفياً Exness-MT5Real32 من تطبيق Exness."
+            "تأكد أن السيرفر حرفياً FPMarkets-Live من تطبيق FP Markets."
         ),
     }
 
@@ -2210,7 +2224,7 @@ async def cloud_reconnect(
                 str(secrets["login"]),
                 secrets["password"],
                 secrets["server"],
-                secrets.get("symbol") or "XAUUSDm",
+                secrets.get("symbol") or "XAUUSD",
                 existing_id,
                 timeout_sec=22.0,
                 force_new=bool(body.force_new),
@@ -2230,7 +2244,7 @@ async def cloud_reconnect(
                         str(secrets["login"]),
                         secrets["password"],
                         secrets["server"],
-                        secrets.get("symbol") or "XAUUSDm",
+                        secrets.get("symbol") or "XAUUSD",
                         None,
                         timeout_sec=22.0,
                         force_new=True,
@@ -2281,10 +2295,10 @@ async def cloud_reconnect(
         "started": started,
         "recreated": bool((cloud or {}).get("recreated")),
         "message": (
-            "متصل للتنفيذ الحقيقي على Exness"
+            "متصل للتنفيذ الحقيقي على FP Markets"
             if desk.account.connected
             else (
-                "تم حذف الطرفية العالقة وإنشاء واحدة جديدة — انتظر اتصال Exness ثم حدّث"
+                "تم حذف الطرفية العالقة وإنشاء واحدة جديدة — انتظر اتصال FP Markets ثم حدّث"
                 if body.force_new or (cloud or {}).get("recreated")
                 else "الربط جارٍ في الخلفية — حدّث خلال 30 ثانية أو اضغط «إعادة ربط كامل»"
             )
@@ -2323,7 +2337,7 @@ async def save_linux_executor(
         "probe": probe,
         "bridge": _cloud_status_for_user(user["id"]),
         "account": desk.account.to_dict(),
-        "message": "تم حفظ منفّذ Linux — سجّل Exness عبر VNC مرة واحدة إن لم يكن متصلاً بعد",
+        "message": "تم حفظ منفّذ Linux — سجّل FP Markets عبر VNC مرة واحدة إن لم يكن متصلاً بعد",
     }
 
 

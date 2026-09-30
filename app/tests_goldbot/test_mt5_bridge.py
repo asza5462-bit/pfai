@@ -26,16 +26,16 @@ def test_windows_bridge_agent_protocol(tmp_path, monkeypatch):
     monkeypatch.setattr("goldbot.api.metaapi", MetaApiCloud(token=""))
 
     client = TestClient(app)
-    servers = client.get("/api/exness/servers")
+    servers = client.get("/api/broker/servers")
     assert servers.status_code == 200
-    assert "Exness-MT5Trial" in servers.json()["servers"]
+    assert "FPMarkets-Demo" in servers.json()["servers"]
 
     login = client.post(
         "/api/auth/mt5-login",
         json={
             "mt5_login": "55667788",
             "mt5_password": "TradePass1",
-            "mt5_server": "Exness-MT5Trial",
+            "mt5_server": "FPMarkets-Demo",
             "symbol": "XAUUSD",
             "auto_start": False,
         },
@@ -60,7 +60,7 @@ def test_windows_bridge_agent_protocol(tmp_path, monkeypatch):
                 "margin": 0,
                 "free_margin": 5000,
                 "currency": "USD",
-                "server": "Exness-MT5Trial",
+                "server": "FPMarkets-Demo",
                 "login": 55667788,
             },
         },
