@@ -908,7 +908,13 @@
       const client_secret = ($("ctraderClientSecret") && $("ctraderClientSecret").value || "").trim();
       const live = !($("ctraderLive") && $("ctraderLive").value === "0");
       if (!client_id || !client_secret) {
-        $("connectMsg").textContent = "أدخل Client ID و Client Secret من openapi.ctrader.com";
+        $("connectMsg").textContent = "أدخل Client ID و Client Secret من زر Credentials (ليس رقم التطبيق)";
+        $("connectMsg").classList.remove("ok");
+        return;
+      }
+      // Spotware Client IDs are long; a short numeric like 2147296 is usually the wrong field
+      if (/^\d{1,8}$/.test(client_id)) {
+        $("connectMsg").textContent = "هذا يبدو رقم التطبيق وليس Client ID — افتح Credentials وانسخ Client ID الطويل";
         $("connectMsg").classList.remove("ok");
         return;
       }
@@ -920,23 +926,31 @@
         });
         if ($("ctraderRedirectUri") && j.redirect_uri) $("ctraderRedirectUri").value = j.redirect_uri;
         setBridgeUI(j.bridge || {}, null, null, null, null, true);
-        $("connectMsg").textContent = j.message || "تم الحفظ — انسخ Redirect URI إلى Spotware ثم فوّض";
+        $("connectMsg").textContent = "تم الحفظ — الآن: فتح Playground → Get token → الصق Access Token بالأسفل";
         $("connectMsg").classList.add("ok");
         await refreshCtraderStatus();
+        if ($("ctraderAccessToken")) $("ctraderAccessToken").scrollIntoView({ behavior: "smooth", block: "center" });
       } catch (e) {
         $("connectMsg").textContent = e.message || "تعذّر الحفظ";
         $("connectMsg").classList.remove("ok");
       }
     };
   }
+  // Prefill absolute redirect URI (RTL inputs often show only the path end)
+  if ($("ctraderRedirectUri") && (!$("ctraderRedirectUri").value || $("ctraderRedirectUri").value.startsWith("/"))) {
+    $("ctraderRedirectUri").value = `${window.location.origin}/api/ctrader/oauth/callback`;
+  }
   if ($("btnOpenPlayground")) {
     $("btnOpenPlayground").onclick = () => {
       window.open("https://openapi.ctrader.com/apps", "_blank", "noopener");
       if ($("connectMsg")) {
-        $("connectMsg").textContent = "افتح Playground → Get token → الصق Access Token هنا";
+        $("connectMsg").textContent = "في Playground: Account info and trading → Get token → انسخ Access Token والصقه هنا";
         $("connectMsg").classList.add("ok");
       }
-      if ($("ctraderAccessToken")) $("ctraderAccessToken").focus();
+      if ($("ctraderAccessToken")) {
+        $("ctraderAccessToken").scrollIntoView({ behavior: "smooth", block: "center" });
+        $("ctraderAccessToken").focus();
+      }
     };
   }
   // OAuth redirect disabled — Spotware returns 404 on mobile for /oauth and /grantingaccess
