@@ -20,7 +20,7 @@
       <ol id="setupSteps" class="setup-steps">
         <li><strong>١</strong> أنشئ حساب تطبيق (أو سجّل الدخول)</li>
         <li><strong>٢</strong> افتح حساب <a href="https://portal.fpmarkets.com" target="_blank" rel="noopener">FP Markets</a> على منصة cTrader</li>
-        <li><strong>٣</strong> من تبويب الربط: Client ID/Secret → تفويض → اختر حساب FP Markets</li>
+        <li><strong>٣</strong> من تبويب الربط: Client ID/Secret → توكن Playground → اختر حساب FP Markets</li>
       </ol>
       <p id="setupNext" class="setup-next">الخطوة التالية: سجّل الدخول ثم اربط حساب FP Markets cTrader</p>
 
@@ -115,14 +115,14 @@
           <li>أنشئ تطبيقاً وانتظر حتى تصبح الحالة <strong>Active</strong>.</li>
           <li>انسخ Client ID و Client Secret والصقهما هنا ثم احفظ.</li>
         </ol>
-        <label>Client ID
-          <input id="ctraderClientId" type="text" placeholder="من Credentials في تطبيقك" autocomplete="off" />
+        <label>Client ID <span class="req">من زر Credentials — ليس رقم التطبيق القصير</span>
+          <input id="ctraderClientId" type="text" placeholder="مثال: 1605_… سلسلة طويلة" autocomplete="off" dir="ltr" />
         </label>
         <label>Client Secret
-          <input id="ctraderClientSecret" type="password" placeholder="Client Secret" autocomplete="off" />
+          <input id="ctraderClientSecret" type="password" placeholder="من Credentials أيضاً" autocomplete="off" dir="ltr" />
         </label>
-        <label class="auth-note">Redirect URI (اختياري للـ Playground — أضفه إن أردت لاحقاً)
-          <input id="ctraderRedirectUri" type="text" readonly value="" />
+        <label class="auth-note">Redirect URI (اختياري مع Playground)
+          <input id="ctraderRedirectUri" type="text" readonly value="https://pfai-v8.onrender.com/api/ctrader/oauth/callback" dir="ltr" />
         </label>
         <div class="cta" style="margin-top:0.35rem">
           <button type="button" id="btnCopyRedirect" class="ghost">نسخ Redirect URI</button>
@@ -175,6 +175,6 @@
     </main>
   </div>
 
-  <script src="/assets/desk.js"></script>
+  <script src="/assets/desk.js?v=3.9.8"></script>
 </body>
 </html>
