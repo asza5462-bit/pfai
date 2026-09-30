@@ -85,7 +85,7 @@ class TradingDesk:
                 "error": "not_live",
                 "message": (
                     "التداول الحقيقي غير متصل بعد — لن نفتح صفقات وهمية. "
-                    "أكمل ربط MetaApi/FP Markets حتى يظهر «متصل FP Markets» ثم اضغط ابدأ."
+                    "أكمل ربط cTrader حتى يظهر «cTrader: متصل» ثم اضغط ابدأ."
                 ),
             }
         self.armed = True

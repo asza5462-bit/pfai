@@ -101,11 +101,16 @@
   }
 
   function showTab(name) {
-    ["mt5FormLogin", "loginForm", "registerForm"].forEach((id) => $(id).classList.add("hidden"));
-    ["tabMt5", "tabLogin", "tabRegister"].forEach((id) => $(id).classList.remove("on"));
-    if (name === "mt5") { $("mt5FormLogin").classList.remove("hidden"); $("tabMt5").classList.add("on"); }
-    if (name === "login") { $("loginForm").classList.remove("hidden"); $("tabLogin").classList.add("on"); }
-    if (name === "register") { $("registerForm").classList.remove("hidden"); $("tabRegister").classList.add("on"); }
+    ["loginForm", "registerForm"].forEach((id) => { if ($(id)) $(id).classList.add("hidden"); });
+    ["tabLogin", "tabRegister"].forEach((id) => { if ($(id)) $(id).classList.remove("on"); });
+    if (name === "login" || name === "mt5") {
+      if ($("loginForm")) $("loginForm").classList.remove("hidden");
+      if ($("tabLogin")) $("tabLogin").classList.add("on");
+    }
+    if (name === "register") {
+      if ($("registerForm")) $("registerForm").classList.remove("hidden");
+      if ($("tabRegister")) $("tabRegister").classList.add("on");
+    }
   }
 
   async function loadServers() {
@@ -672,7 +677,7 @@
     user = null; bridgeToken = null;
     setGate(false);
     clearInterval(pulseTimer); clearInterval(refreshTimer);
-    showTab("mt5");
+    showTab("login");
   }
 
   async function enterLoggedIn(u, extra = {}) {
@@ -703,9 +708,8 @@
     }
   }
 
-  $("tabMt5").onclick = () => showTab("mt5");
-  $("tabLogin").onclick = () => showTab("login");
-  $("tabRegister").onclick = () => showTab("register");
+  if ($("tabLogin")) $("tabLogin").onclick = () => showTab("login");
+  if ($("tabRegister")) $("tabRegister").onclick = () => showTab("register");
 
   async function loadSetupNext() {
     try {
@@ -722,8 +726,11 @@
     $("mt5Server").addEventListener("input", () => { $("mt5Server").dataset.touched = "1"; });
   }
 
-  $("mt5FormLogin").onsubmit = async (e) => {
+  if ($("mt5FormLogin")) $("mt5FormLogin").onsubmit = async (e) => {
     e.preventDefault();
+    showAuth("مسار MetaTrader/MetaApi معطّل — سجّل الدخول واربط cTrader من تبويب الربط");
+    showTab("login");
+    return;
     const btn = $("mt5FormLogin").querySelector("button[type=submit]");
     const metaTok = ($("mt5MetaToken") && $("mt5MetaToken").value || "").trim();
     const setup = await loadSetupNext();
@@ -965,23 +972,26 @@
   }
 
   (async () => {
-    await loadServers();
     await loadWays();
     await loadSetupNext();
-    showTab("mt5");
+    showTab("login");
     try {
       const params = new URLSearchParams(window.location.search || "");
       const ct = params.get("ctrader");
       if (ct === "authorized") {
         document.querySelector('.tabs button[data-tab="connect"]')?.click();
-        $("connectMsg").textContent = "تم تفويض cTrader — اعرض الحسابات واختر واحداً";
-        $("connectMsg").classList.add("ok");
+        if ($("connectMsg")) {
+          $("connectMsg").textContent = "تم تفويض cTrader — اعرض الحسابات واختر واحداً";
+          $("connectMsg").classList.add("ok");
+        }
         try { await listCtraderAccounts(); } catch (_) {}
         history.replaceState({}, "", "/");
       } else if (ct === "error") {
         document.querySelector('.tabs button[data-tab="connect"]')?.click();
-        $("connectMsg").textContent = "فشل تفويض cTrader — تحقق من Redirect URI و Client Secret";
-        $("connectMsg").classList.remove("ok");
+        if ($("connectMsg")) {
+          $("connectMsg").textContent = "فشل تفويض cTrader — تحقق من Redirect URI و Client Secret";
+          $("connectMsg").classList.remove("ok");
+        }
         history.replaceState({}, "", "/");
       }
     } catch (_) {}
