@@ -11,9 +11,7 @@ from pathlib import Path
 from goldbot.config import settings
 from goldbot.mt5.broker import BROKER_SERVERS
 
-# Public list for UI/API (FP Markets). Legacy alias kept for imports.
-EXNESS_SERVERS = list(BROKER_SERVERS)
-BROKER_SERVERS_LIST = EXNESS_SERVERS
+BROKER_SERVERS_LIST = list(BROKER_SERVERS)
 
 
 class RemoteHub:

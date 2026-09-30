@@ -7,7 +7,7 @@ Connects to the AURUM cloud desk and executes real orders.
 
 Usage:
   pip install MetaTrader5 requests
-  python aurum_exness_agent.py --cloud https://pfai-v8.onrender.com --token YOUR_BRIDGE_TOKEN
+  python aurum_fpmarkets_agent.py --cloud https://pfai-v8.onrender.com --token YOUR_BRIDGE_TOKEN
 
 Keep MT5 open. Use Demo server first (FPMarkets-Demo*).
 """
@@ -29,7 +29,7 @@ def api(cloud: str, token: str, method: str, path: str, json_body=None):
     r = requests.request(
         method,
         url,
-        headers={"Authorization": f"Bearer {token}", "User-Agent": "AURUM-FPMarkets-Agent/3.1"},
+        headers={"Authorization": f"Bearer {token}", "User-Agent": "AURUM-FPMarkets-Agent/3.8"},
         json=json_body,
         timeout=30,
     )
@@ -202,7 +202,7 @@ def main():
                 "POST",
                 "/api/bridge/heartbeat",
                 {
-                    "info": {"agent": "aurum_exness_agent", "version": "3.1.0", "python": sys.version.split()[0]},
+                    "info": {"agent": "aurum_fpmarkets_agent", "version": "3.8.2", "python": sys.version.split()[0]},
                     "account": snap,
                 },
             )

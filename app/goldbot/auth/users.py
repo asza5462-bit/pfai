@@ -277,7 +277,7 @@ class UserAuth:
 
     def login_with_mt5(self, mt5_login: str, mt5_password: str, mt5_server: str, symbol: str = "XAUUSD") -> dict:
         """Primary FP Markets/MT5 login — creates account bound to trading number if needed."""
-        from goldbot.mt5.broker import normalize_broker_server
+        from goldbot.mt5.broker import resolve_fp_server
         from goldbot.mt5.symbols import normalize_symbol
 
         login = str(mt5_login or "").strip()
@@ -285,9 +285,9 @@ class UserAuth:
             raise AuthError("رقم حساب MT5/FP Markets غير صالح")
         if not mt5_password or len(mt5_password) < 4:
             raise AuthError("كلمة مرور MT5 مطلوبة")
-        server = normalize_broker_server(mt5_server) or (mt5_server or "").strip()
+        server = resolve_fp_server(mt5_server)
         if not server:
-            raise AuthError("اختر سيرفر FP Markets (مثل FPMarkets-Live)")
+            raise AuthError("اختر سيرفر FP Markets فقط (مثل FPMarkets-Live)")
 
         uid = self.find_by_mt5_login(login)
         if uid is not None:

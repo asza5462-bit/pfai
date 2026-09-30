@@ -28,13 +28,13 @@ from goldbot.mt5.metaapi_cloud import (
     is_validation_failed_error,
     metaapi,
     normalize_account_id,
-    normalize_exness_server as normalize_broker_server,
+    normalize_broker_server,
     servers_compatible,
 )
 from goldbot.mt5.ctrader_cloud import CTraderError, arabic_ctrader_error, ctrader
 from goldbot.mt5.mt5_linux import Mt5LinuxError, mt5_linux
 from goldbot.mt5.remote_hub import hub
-from goldbot.mt5.broker import BROKER_NAME, BROKER_SERVERS, DEFAULT_SERVER, DEFAULT_SYMBOL
+from goldbot.mt5.broker import BROKER_NAME, BROKER_SERVERS, DEFAULT_SERVER, DEFAULT_SYMBOL, resolve_fp_server
 from goldbot.storage.state import store
 from goldbot.util_rate import limiter
 
@@ -470,10 +470,10 @@ async def index():
     return FileResponse(STATIC / "index.html")
 
 
-@app.get("/aurum_exness_agent.py")
+@app.get("/aurum_fpmarkets_agent.py")
 async def download_agent():
-    path = STATIC / "aurum_exness_agent.py"
-    return FileResponse(path, filename="aurum_exness_agent.py", media_type="text/x-python")
+    path = STATIC / "aurum_fpmarkets_agent.py"
+    return FileResponse(path, filename="aurum_fpmarkets_agent.py", media_type="text/x-python")
 
 
 @app.api_route("/health", methods=["GET", "HEAD"])
@@ -543,7 +543,7 @@ async def setup_next():
             "ثم من تبويب الربط الصق Account ID واضغط «ربط هذا الحساب»."
         )
     elif mt5_linux.configured:
-        step = "exness_vnc_or_login"
+        step = "fpmarkets_vnc_or_login"
         next_ar = "منفّذ Linux مضبوط. سجّل FP Markets عبر VNC إن لزم، ثم ادخل من شاشة MT5."
     else:
         step = "choose_path"
@@ -603,7 +603,6 @@ async def login(body: LoginBody, response: Response, request: Request):
 
 
 @app.get("/api/broker/servers")
-@app.get("/api/exness/servers")  # legacy alias
 async def broker_servers():
     from goldbot.mt5.symbols import GOLD_SYMBOLS
 
@@ -991,7 +990,6 @@ def _readiness(snap: dict) -> dict:
         "grade": grade,
         "paper_ready": paper_ready,
         "broker_mt5_ready": live_ready,
-        "exness_mt5_ready": live_ready,  # legacy alias
         "live_execution": live_exec,
         "checks": checks,
         "summary_ar": (
@@ -1581,7 +1579,7 @@ async def bridge_windows_enable(
     token = hub.issue_token(user["id"])
     public = (os.getenv("AURUM_PUBLIC_URL") or "https://pfai-v8.onrender.com").rstrip("/")
     agent_cmd = (
-        f"python aurum_exness_agent.py --cloud {public} --token {token}"
+        f"python aurum_fpmarkets_agent.py --cloud {public} --token {token}"
     )
     auth.update_settings(
         user["id"],
@@ -1603,7 +1601,7 @@ async def bridge_windows_enable(
         "ok": True,
         "bridge_token": token,
         "agent_command": agent_cmd,
-        "agent_download": f"{public}/aurum_exness_agent.py",
+        "agent_download": f"{public}/aurum_fpmarkets_agent.py",
         "cloud_url": public,
         "login": secrets["login"],
         "server": secrets["server"],
@@ -1611,7 +1609,7 @@ async def bridge_windows_enable(
         "steps_ar": [
             "ثبّت MetaTrader 5 من FP Markets وسجّل دخول حسابك (كلمة التداول).",
             "على ويندوز: pip install MetaTrader5 requests",
-            f"حمّل الوكيل: {public}/aurum_exness_agent.py",
+            f"حمّل الوكيل: {public}/aurum_fpmarkets_agent.py",
             f"شغّل: {agent_cmd}",
             "اترك MT5 والوكيل مفتوحين — ثم اضغط «ابدأ التداول» من AURUM.",
         ],
@@ -1913,7 +1911,7 @@ async def cloud_bind_account(
         patch["mt5_login"] = str(cloud["login"])
         settings.mt5_login = int(cloud["login"]) if str(cloud["login"]).isdigit() else settings.mt5_login
     if cloud.get("server"):
-        patch["mt5_server"] = normalize_broker_server(str(cloud["server"])) or str(cloud["server"])
+        patch["mt5_server"] = resolve_fp_server(str(cloud.get("server") or "")) or DEFAULT_SERVER
         settings.mt5_server = patch["mt5_server"]
     auth.update_settings(user["id"], patch)
     settings.mode = "mt5"
@@ -1976,9 +1974,11 @@ async def cloud_update_credentials(
     login = str(body.mt5_login or secrets.get("login") or "").strip()
     if not login:
         raise HTTPException(400, "لا يوجد رقم حساب FP Markets محفوظ — سجّل الدخول من شاشة MT5 أولاً")
-    server = normalize_broker_server(body.mt5_server) or str(body.mt5_server).strip()
+    server = resolve_fp_server(body.mt5_server)
     if not server:
-        raise HTTPException(400, "أدخل سيرفر FP Markets مثل FPMarkets-Live")
+        raise HTTPException(400, "أدخل سيرفر FP Markets مثل FPMarkets-Live (ليس وسيطاً آخر)")
+    if not server:
+        raise HTTPException(400, "أدخل سيرفر FP Markets مثل FPMarkets-Live (ليس وسيطاً آخر)")
     patch = {
         "mt5_login": login,
         "mt5_password": body.mt5_password,
@@ -2024,7 +2024,7 @@ async def cloud_diagnose(
     metaapi.refresh_token()
     secrets = auth.mt5_secrets(user["id"])
     login = str(secrets.get("login") or "").strip()
-    server = normalize_broker_server(secrets.get("server") or "") or str(secrets.get("server") or "").strip()
+    server = resolve_fp_server(secrets.get("server") or "")
     saved_id = normalize_account_id(secrets.get("metaapi_account_id") or "")
     last_err = store.get_kv("metaapi_last_error") or {}
     provision = _get_provision_state()

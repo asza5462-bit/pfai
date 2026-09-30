@@ -43,4 +43,4 @@ AURUM_MODE=paper uvicorn goldbot.api:app --host 0.0.0.0 --port 8000
 
 ### Windows agent
 
-فعّل المسار من تبويب الربط وشغّل `aurum_exness_agent.py` مع MT5 مفتوح على سيرفر FP Markets.
+فعّل المسار من تبويب الربط وشغّل `aurum_fpmarkets_agent.py` مع MT5 مفتوح على سيرفر FP Markets.
