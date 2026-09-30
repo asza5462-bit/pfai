@@ -94,11 +94,16 @@ def _trendbar_ohlc(bar: dict) -> tuple[float, float, float, float]:
     low = low_raw / PRICE_SCALE
     return o, h, low, c
 
-# Official Spotware OAuth (legacy connect.spotware.com/apps/auth returns 404 after login)
-AUTH_URI = "https://id.ctrader.com/my/settings/openapi/grantingaccess/"
+# Spotware OAuth2 (v2). The id.ctrader.com/grantingaccess path 404s for some accounts
+# after login; oauth/v2/auth is the stable authorize endpoint.
+AUTH_URI = "https://connect.spotware.com/oauth/v2/auth"
 TOKEN_URI = "https://openapi.ctrader.com/apps/token"
+TOKEN_URI_V2 = "https://connect.spotware.com/oauth/v2/token"
+# Docs also document this grant page; kept as fallback for desktop browsers
+AUTH_URI_GRANT = "https://id.ctrader.com/my/settings/openapi/grantingaccess/"
 WS_LIVE = "wss://live.ctraderapi.com:5036"
 WS_DEMO = "wss://demo.ctraderapi.com:5036"
+PLAYGROUND_APPS = "https://openapi.ctrader.com/apps"
 
 
 class CTraderError(Exception):
@@ -715,7 +720,7 @@ class CTraderCloud:
         self.refresh()
         return {"ok": True, "configured": self.configured}
 
-    def auth_url(self, *, state: str | None = None) -> str:
+    def auth_url(self, *, state: str | None = None, style: str = "oauth_v2") -> str:
         self.refresh()
         if not self.configured:
             raise CTraderError("missing client id/secret", code="NO_APP")
@@ -727,28 +732,39 @@ class CTraderCloud:
         }
         if state:
             q["state"] = state
-        # Official path ends with '/' before query string
+        if style == "grant":
+            return f"{AUTH_URI_GRANT}?{urllib.parse.urlencode(q)}"
+        # OAuth2 authorize — works after cTID login (avoids grantingaccess 404)
+        q["response_type"] = "code"
         return f"{AUTH_URI}?{urllib.parse.urlencode(q)}"
 
     def exchange_code(self, code: str) -> dict:
         self.refresh()
         if not self.configured:
             raise CTraderError("missing client id/secret", code="NO_APP")
-        token = _http_json(
-            TOKEN_URI,
-            method="GET",
-            data={
-                "grant_type": "authorization_code",
-                "code": code.strip(),
-                "redirect_uri": self.redirect_uri,
-                "client_id": self.client_id,
-                "client_secret": self.client_secret,
-            },
-        )
-        if token.get("errorCode"):
+        payload = {
+            "grant_type": "authorization_code",
+            "code": code.strip(),
+            "redirect_uri": self.redirect_uri,
+            "client_id": self.client_id,
+            "client_secret": self.client_secret,
+        }
+        token: dict = {}
+        last_err: Exception | None = None
+        # Prefer official Open API token endpoint; fall back to OAuth v2 token
+        for method, url in (("GET", TOKEN_URI), ("POST", TOKEN_URI_V2), ("GET", TOKEN_URI_V2)):
+            try:
+                token = _http_json(url, method=method, data=payload)
+                break
+            except Exception as e:
+                last_err = e
+                token = {}
+        if not token and last_err:
+            raise last_err
+        if token.get("errorCode") or token.get("error"):
             raise CTraderError(
-                str(token.get("description") or token.get("errorCode")),
-                code=str(token.get("errorCode")),
+                str(token.get("description") or token.get("error_description") or token.get("errorCode") or token.get("error")),
+                code=str(token.get("errorCode") or token.get("error") or "E_TOKEN"),
                 details=token,
             )
         access = token.get("accessToken") or token.get("access_token")

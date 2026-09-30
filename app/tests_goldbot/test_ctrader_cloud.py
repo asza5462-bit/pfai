@@ -250,14 +250,15 @@ def test_oauth_start_requires_app(tmp_path, monkeypatch):
     assert "openapi.ctrader.com" in r.json()["detail"]
 
 
-def test_ctrader_auth_url_uses_id_ctrader(monkeypatch):
+def test_ctrader_auth_url_uses_oauth_v2(monkeypatch):
     saved = {"client_id": "client-1234", "client_secret": "secret-1234", "live": "1"}
     monkeypatch.setattr("goldbot.mt5.ctrader_cloud._load_kv", lambda: dict(saved))
     monkeypatch.setattr("goldbot.mt5.ctrader_cloud._save_kv", lambda patch: saved.update(patch) or saved)
     cloud = CTraderCloud()
     url = cloud.auth_url(state="abc")
-    assert url.startswith("https://id.ctrader.com/my/settings/openapi/grantingaccess/?")
+    assert url.startswith("https://connect.spotware.com/oauth/v2/auth?")
     assert "client_id=client-1234" in url
     assert "scope=trading" in url
-    assert "product=web" in url
-    assert "connect.spotware.com/apps/auth" not in url
+    assert "response_type=code" in url
+    grant = cloud.auth_url(state="abc", style="grant")
+    assert "id.ctrader.com" in grant and "grantingaccess" in grant
