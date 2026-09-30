@@ -3,6 +3,7 @@ MT5 / Exness bridge.
 
 - `paper` mode: works on Linux/Render with live gold quotes + simulated fills.
 - `mt5` + MetaApi: real Exness execution from cloud (no Windows).
+- `mt5` + cTrader Open API: real Exness/cTrader execution from the app (no Windows).
 - Legacy Windows agent hub remains as optional fallback.
 """
 from __future__ import annotations
@@ -57,7 +58,8 @@ class Bridge:
     remote_user_id: int | None = None
     metaapi_account_id: str = ""
     metaapi_region: str = ""
-    execution: str = ""  # metaapi | windows_bridge | local_mt5 | paper
+    ctrader_account_id: int | None = None
+    execution: str = ""  # ctrader | metaapi | windows_bridge | mt5_linux | local_mt5 | paper
     _mt5: Any = None
     _last_price: float = 0.0
     _seeded: bool = False
@@ -86,11 +88,70 @@ class Bridge:
         elif raw:
             log.warning("refusing to bind invalid metaapi account id %r", raw)
 
+    def bind_ctrader(self, account_id: int | str | None = None) -> None:
+        from goldbot.mt5.ctrader_cloud import ctrader
+
+        if account_id not in (None, "", 0, "0"):
+            try:
+                aid = int(account_id)
+            except (TypeError, ValueError):
+                log.warning("refusing invalid ctrader account id %r", account_id)
+                return
+            ctrader.select_account(aid)
+            self.ctrader_account_id = aid
+        else:
+            ctrader.refresh()
+            self.ctrader_account_id = ctrader.account_id
+        if self.ctrader_account_id and ctrader.ready:
+            self.mode = "mt5"
+            self.execution = "ctrader"
+
     def connect(self) -> AccountSnapshot:
-        # 1) MetaApi cloud — primary real path (skipped when user chose Windows agent)
+        # 0) cTrader Open API — in-app Exness/cTrader (no Windows; cTrader accounts only)
         if (
             self.mode == "mt5"
             and self.execution != "windows_bridge"
+            and settings.prefer_ctrader
+            and (self.execution == "ctrader" or self.ctrader_account_id)
+        ):
+            from goldbot.mt5.ctrader_cloud import ctrader
+
+            ctrader.refresh()
+            if ctrader.ready:
+                snap = ctrader.snapshot()
+                if snap.get("connected"):
+                    self.execution = "ctrader"
+                    self.ctrader_account_id = int(snap.get("account_id") or self.ctrader_account_id or 0) or None
+                    return AccountSnapshot(
+                        balance=float(snap["balance"]),
+                        equity=float(snap["equity"]),
+                        margin=float(snap["margin"]),
+                        free_margin=float(snap["free_margin"]),
+                        currency=str(snap.get("currency") or "USD"),
+                        mode="mt5",
+                        connected=True,
+                        server=str(snap.get("server") or "cTrader"),
+                        login=int(snap.get("login") or 0),
+                        detail=str(snap.get("detail") or "cTrader Open API"),
+                    )
+                if self.execution == "ctrader":
+                    return AccountSnapshot(
+                        balance=0.0,
+                        equity=0.0,
+                        margin=0.0,
+                        free_margin=0.0,
+                        currency="USD",
+                        mode="mt5",
+                        connected=False,
+                        server="cTrader",
+                        login=int(self.ctrader_account_id or 0),
+                        detail=str(snap.get("detail") or "بانتظار اتصال cTrader Open API"),
+                    )
+
+        # 1) MetaApi cloud — primary real path (skipped when user chose Windows agent)
+        if (
+            self.mode == "mt5"
+            and self.execution not in {"windows_bridge", "ctrader"}
             and self.metaapi_account_id
             and settings.prefer_metaapi
         ):
@@ -197,8 +258,8 @@ class Bridge:
                     detail="توكن MetaApi جاهز — جاري إنشاء الطرفية السحابية على Exness (بدون Windows)",
                 )
 
-        # 4) Windows MT5 agent — explicit choice or fallback when MetaApi/Linux not live
-        if self.mode == "mt5" and self.remote_user_id and self.execution not in {"metaapi", "mt5_linux"}:
+        # 4) Windows MT5 agent — explicit choice or fallback when MetaApi/Linux/cTrader not live
+        if self.mode == "mt5" and self.remote_user_id and self.execution not in {"metaapi", "mt5_linux", "ctrader"}:
             from goldbot.mt5.remote_hub import hub
 
             st = hub.status_for_user(self.remote_user_id)
@@ -579,7 +640,26 @@ class Bridge:
         return self._spot_gold_api() or (self._last_price or None)
 
     def tick(self) -> dict:
-        if self.mode == "mt5" and self.metaapi_account_id and settings.prefer_metaapi:
+        if self.mode == "mt5" and self.execution == "ctrader" and settings.prefer_ctrader:
+            from goldbot.mt5.ctrader_cloud import ctrader
+
+            if ctrader.ready:
+                try:
+                    px = ctrader.symbol_price(settings.symbol)
+                    bid = float(px.get("bid") or px.get("price") or 0)
+                    ask = float(px.get("ask") or (bid + 0.2 if bid else 0))
+                    if bid > 0:
+                        self._last_price = bid
+                        spread = (ask - bid) / 0.01 if ask >= bid else 20.0
+                        return {
+                            "bid": bid,
+                            "ask": ask,
+                            "spread_points": round(spread, 2),
+                            "source": "ctrader",
+                        }
+                except Exception as e:
+                    log.warning("ctrader tick fail: %s", e)
+        if self.mode == "mt5" and self.execution != "ctrader" and self.metaapi_account_id and settings.prefer_metaapi:
             from goldbot.mt5.metaapi_cloud import metaapi
 
             if metaapi.configured:
@@ -624,8 +704,41 @@ class Bridge:
         }
 
     def order_market(self, side: str, lot: float, sl: float, tp: float, comment: str = "AURUM") -> dict:
+        # cTrader Open API (in-app, no Windows) — when selected/ready
+        if self.mode == "mt5" and settings.prefer_ctrader and (self.execution == "ctrader" or self.ctrader_account_id):
+            from goldbot.mt5.ctrader_cloud import CTraderError, ctrader
+
+            if ctrader.ready:
+                try:
+                    result = ctrader.order_market(
+                        side,
+                        float(lot),
+                        float(sl),
+                        float(tp),
+                        symbol=settings.symbol,
+                        comment=comment,
+                    )
+                    result.setdefault("mode", "mt5")
+                    result["execution"] = "ctrader"
+                    if result.get("ok") or self.execution == "ctrader":
+                        return result
+                except CTraderError as e:
+                    log.warning("ctrader order failed: %s", e)
+                    if self.execution == "ctrader":
+                        return {
+                            "ok": False,
+                            "mode": "mt5",
+                            "execution": "ctrader",
+                            "side": side,
+                            "lot": lot,
+                            "sl": sl,
+                            "tp": tp,
+                            "error": e.code or "ctrader",
+                            "detail": str(e.message or e),
+                        }
+
         # Primary: MetaApi cloud (no Windows)
-        if self.mode == "mt5" and self.metaapi_account_id and settings.prefer_metaapi:
+        if self.mode == "mt5" and self.execution != "ctrader" and self.metaapi_account_id and settings.prefer_metaapi:
             from goldbot.mt5.metaapi_cloud import metaapi
 
             if metaapi.configured:
@@ -661,7 +774,7 @@ class Bridge:
                     return result
 
         # Fallback: queue to Windows MT5 agent
-        if self.mode == "mt5" and self.remote_user_id and self.execution not in {"metaapi", "mt5_linux"}:
+        if self.mode == "mt5" and self.remote_user_id and self.execution not in {"metaapi", "mt5_linux", "ctrader"}:
             from goldbot.mt5.remote_hub import hub
 
             enq = hub.enqueue(
@@ -700,7 +813,7 @@ class Bridge:
                 "tp": tp,
                 "error": "no_live_executor",
                 "detail": (
-                    "لا يوجد منفّذ حقيقي متصل (MetaApi/Linux). "
+                    "لا يوجد منفّذ حقيقي متصل (cTrader/MetaApi/Linux). "
                     "لن يُنفَّذ أمر ورقي وهمي. أعد الربط السحابي أولاً."
                 ),
             }
@@ -721,9 +834,14 @@ class Bridge:
         }
 
     def is_live_execution(self) -> bool:
-        """True only when a real broker path is bound (MetaApi/Linux/local MT5)."""
+        """True only when a real broker path is bound (cTrader/MetaApi/Linux/local MT5)."""
         if self.mode != "mt5":
             return False
+        if self.execution == "ctrader":
+            from goldbot.mt5.ctrader_cloud import ctrader
+
+            ctrader.refresh()
+            return bool(ctrader.ready)
         if self.execution == "metaapi" and self.metaapi_account_id:
             from goldbot.mt5.metaapi_cloud import is_metaapi_account_id, metaapi
 
@@ -759,6 +877,14 @@ class Bridge:
     ) -> dict:
         """Close a live position on the active executor. Never fakes paper closes for mt5 mode."""
         pid = position_id or ticket
+        if self.mode == "mt5" and self.execution == "ctrader":
+            from goldbot.mt5.ctrader_cloud import ctrader
+
+            if ctrader.ready and pid not in (None, "", 0, "0"):
+                result = ctrader.close_position(pid, volume=volume)
+                result.setdefault("execution", "ctrader")
+                return result
+            return {"ok": False, "error": "no_position_id", "execution": "ctrader"}
         if self.mode == "mt5" and self.metaapi_account_id and self.execution == "metaapi":
             from goldbot.mt5.metaapi_cloud import metaapi
 

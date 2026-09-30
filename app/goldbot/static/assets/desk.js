@@ -136,12 +136,14 @@
     }
   }
 
-  function setBridgeUI(bridge, token, agentCommand, metaConfigured, linuxConfigured) {
+  function setBridgeUI(bridge, token, agentCommand, metaConfigured, linuxConfigured, ctraderConfigured) {
     const online = !!(bridge && bridge.online);
     const provider = (bridge && bridge.provider) || (bridge && bridge.execution) || "";
     const label =
+      provider === "ctrader" ? "cTrader" :
       provider === "mt5_linux" ? "Linux MT5" :
-      provider === "metaapi" ? "MetaApi" : "التنفيذ";
+      provider === "metaapi" ? "MetaApi" :
+      provider === "windows_bridge" ? "Windows" : "التنفيذ";
     $("bridgePill").textContent = online ? `${label}: متصل Exness` : `${label}: غير متصل`;
     $("bridgePill").classList.toggle("on", online);
     if ($("bridgeStatusText")) {
@@ -164,6 +166,12 @@
         : "منفّذ Linux: غير مضبوط";
       $("linuxConfiguredLine").classList.toggle("ok", !!linuxConfigured);
     }
+    if ($("ctraderConfiguredLine") && ctraderConfigured != null) {
+      $("ctraderConfiguredLine").textContent = ctraderConfigured
+        ? "cTrader Open API: مفعّل"
+        : "cTrader Open API: غير مضبوط";
+      $("ctraderConfiguredLine").classList.toggle("ok", !!ctraderConfigured);
+    }
     if (token) bridgeToken = token;
     if (agentCommand && $("agentCmd")) $("agentCmd").value = agentCommand;
   }
@@ -172,6 +180,12 @@
     try {
       const j = await fetch("/api/ways").then((r) => r.json());
       if ($("waysFinding")) $("waysFinding").textContent = j.finding_ar || "";
+      if ($("ctraderConfiguredLine")) {
+        $("ctraderConfiguredLine").textContent = j.ctrader_ready
+          ? "cTrader Open API: جاهز للتنفيذ"
+          : (j.ctrader_configured ? "cTrader Open API: تطبيق محفوظ — أكمل التفويض" : "cTrader Open API: غير مضبوط");
+        $("ctraderConfiguredLine").classList.toggle("ok", !!(j.ctrader_ready || j.ctrader_configured));
+      }
       if ($("metaConfiguredLine")) {
         $("metaConfiguredLine").textContent = j.metaapi_configured ? "توكن MetaApi: محفوظ ومفعّل" : "توكن MetaApi: غير محفوظ";
         $("metaConfiguredLine").classList.toggle("ok", !!j.metaapi_configured);
@@ -181,6 +195,81 @@
         $("linuxConfiguredLine").classList.toggle("ok", !!j.mt5_linux_configured);
       }
     } catch (_) {}
+  }
+
+  async function refreshCtraderStatus() {
+    try {
+      const j = await api("/api/ctrader/status");
+      if ($("ctraderRedirectUri")) $("ctraderRedirectUri").value = j.redirect_uri || "";
+      if ($("ctraderStatusLine")) {
+        $("ctraderStatusLine").textContent = j.ready
+          ? `حالة cTrader: جاهز · حساب ${j.account_id || "—"}`
+          : (j.configured
+            ? (j.has_token ? "حالة cTrader: فوّض ثم اختر الحساب" : "حالة cTrader: احفظ التطبيق ثم فوّض")
+            : "حالة cTrader: أدخل Client ID/Secret");
+        $("ctraderStatusLine").classList.toggle("ok", !!j.ready);
+      }
+      if ($("ctraderConfiguredLine")) {
+        $("ctraderConfiguredLine").textContent = j.ready
+          ? "cTrader Open API: جاهز للتنفيذ"
+          : (j.configured ? "cTrader Open API: تطبيق محفوظ — أكمل التفويض" : "cTrader Open API: غير مضبوط");
+        $("ctraderConfiguredLine").classList.toggle("ok", !!(j.ready || j.configured));
+      }
+      if (j.bridge) setBridgeUI(j.bridge, null, null, null, null, j.ready || j.configured);
+      return j;
+    } catch (_) {
+      return null;
+    }
+  }
+
+  async function bindCtraderAccount(accountId, live) {
+    $("connectMsg").textContent = "جاري ربط حساب cTrader…";
+    $("connectMsg").classList.remove("ok");
+    try {
+      const j = await api("/api/ctrader/bind", {
+        method: "POST",
+        body: JSON.stringify({ account_id: Number(accountId), live: live == null ? null : !!live }),
+      });
+      setBridgeUI(j.bridge || {}, null, null, null, null, true);
+      if (j.account && j.account.equity != null) {
+        $("equity").textContent = Number(j.account.equity || 0).toFixed(2);
+      }
+      $("connectMsg").textContent = j.message || "تم ربط cTrader";
+      $("connectMsg").classList.toggle("ok", !!(j.live_execution || (j.account && j.account.connected)));
+      await refreshCtraderStatus();
+    } catch (e) {
+      $("connectMsg").textContent = e.message || "تعذّر ربط cTrader";
+      $("connectMsg").classList.remove("ok");
+    }
+  }
+
+  async function listCtraderAccounts() {
+    const list = $("ctraderAccountsList");
+    if (list) list.innerHTML = "<li>جاري التحميل…</li>";
+    try {
+      const j = await api("/api/ctrader/accounts");
+      if (!list) return;
+      list.innerHTML = "";
+      const rows = j.accounts || [];
+      if (!rows.length) {
+        list.innerHTML = "<li>لا حسابات — تأكد أن حساب Exness على منصة cTrader وأن التفويض اكتمل</li>";
+        return;
+      }
+      rows.forEach((a) => {
+        const li = document.createElement("li");
+        const title = `${a.brokerTitle || "cTrader"} · ${a.traderLogin || a.ctidTraderAccountId}${a.isLive ? " · Live" : " · Demo"}`;
+        li.innerHTML = `<strong>${title}</strong> <span>${a.depositCurrency || ""} · ${a.ctidTraderAccountId}</span>`;
+        const btn = document.createElement("button");
+        btn.type = "button";
+        btn.className = "tiny";
+        btn.textContent = "ربط هذا الحساب";
+        btn.onclick = () => bindCtraderAccount(a.ctidTraderAccountId, a.isLive);
+        li.appendChild(btn);
+        list.appendChild(li);
+      });
+    } catch (e) {
+      if (list) list.innerHTML = `<li>${e.message || "تعذّر جلب الحسابات"}</li>`;
+    }
   }
 
   function renderTrades(list, el) {
@@ -270,15 +359,23 @@
   async function refreshCloudStatusOnly() {
     try {
       const j = await api("/api/cloud/status");
-      setBridgeUI(j.bridge || j.cloud, null, null, j.metaapi_configured, j.mt5_linux_configured);
+      setBridgeUI(
+        j.bridge || j.cloud,
+        null,
+        null,
+        j.metaapi_configured,
+        j.mt5_linux_configured,
+        j.ctrader_ready || j.ctrader_configured
+      );
       if (j.account) {
         $("equity").textContent = Number(j.account.equity || 0).toFixed(2);
       }
       applyProvisionUI(j);
+      await refreshCtraderStatus();
       return j;
     } catch (_) {
       const j = await api("/api/bridge/status");
-      setBridgeUI(j.bridge || j.cloud, null, null, j.metaapi_configured, j.mt5_linux_configured);
+      setBridgeUI(j.bridge || j.cloud, null, null, j.metaapi_configured, j.mt5_linux_configured, null);
       return j;
     }
   }
@@ -781,6 +878,54 @@
     await api("/api/risk/reset", { method: "POST" });
     await $("btnScan").onclick();
   };
+  if ($("btnSaveCtraderApp")) {
+    $("btnSaveCtraderApp").onclick = async () => {
+      const client_id = ($("ctraderClientId") && $("ctraderClientId").value || "").trim();
+      const client_secret = ($("ctraderClientSecret") && $("ctraderClientSecret").value || "").trim();
+      const live = !($("ctraderLive") && $("ctraderLive").value === "0");
+      if (!client_id || !client_secret) {
+        $("connectMsg").textContent = "أدخل Client ID و Client Secret من openapi.ctrader.com";
+        $("connectMsg").classList.remove("ok");
+        return;
+      }
+      $("connectMsg").textContent = "جاري حفظ تطبيق cTrader…";
+      try {
+        const j = await api("/api/ctrader/app", {
+          method: "POST",
+          body: JSON.stringify({ client_id, client_secret, live }),
+        });
+        if ($("ctraderRedirectUri") && j.redirect_uri) $("ctraderRedirectUri").value = j.redirect_uri;
+        setBridgeUI(j.bridge || {}, null, null, null, null, true);
+        $("connectMsg").textContent = j.message || "تم الحفظ — انسخ Redirect URI إلى Spotware ثم فوّض";
+        $("connectMsg").classList.add("ok");
+        await refreshCtraderStatus();
+      } catch (e) {
+        $("connectMsg").textContent = e.message || "تعذّر الحفظ";
+        $("connectMsg").classList.remove("ok");
+      }
+    };
+  }
+  if ($("btnCtraderAuth")) {
+    $("btnCtraderAuth").onclick = async () => {
+      $("connectMsg").textContent = "جاري فتح تفويض cTrader…";
+      try {
+        const j = await api("/api/ctrader/oauth/start");
+        if (j.auth_url) {
+          window.location.href = j.auth_url;
+          return;
+        }
+        $("connectMsg").textContent = "تعذّر الحصول على رابط التفويض";
+        $("connectMsg").classList.remove("ok");
+      } catch (e) {
+        $("connectMsg").textContent = e.message || "احفظ Client ID/Secret أولاً";
+        $("connectMsg").classList.remove("ok");
+      }
+    };
+  }
+  if ($("btnListCtraderAccounts")) {
+    $("btnListCtraderAccounts").onclick = () => listCtraderAccounts();
+  }
+
   if ($("btnEnableWindows")) {
     $("btnEnableWindows").onclick = async () => {
       $("connectMsg").textContent = "جاري تفعيل مسار Windows…";
@@ -824,6 +969,22 @@
     await loadWays();
     await loadSetupNext();
     showTab("mt5");
+    try {
+      const params = new URLSearchParams(window.location.search || "");
+      const ct = params.get("ctrader");
+      if (ct === "authorized") {
+        document.querySelector('.tabs button[data-tab="connect"]')?.click();
+        $("connectMsg").textContent = "تم تفويض cTrader — اعرض الحسابات واختر واحداً";
+        $("connectMsg").classList.add("ok");
+        try { await listCtraderAccounts(); } catch (_) {}
+        history.replaceState({}, "", "/");
+      } else if (ct === "error") {
+        document.querySelector('.tabs button[data-tab="connect"]')?.click();
+        $("connectMsg").textContent = "فشل تفويض cTrader — تحقق من Redirect URI و Client Secret";
+        $("connectMsg").classList.remove("ok");
+        history.replaceState({}, "", "/");
+      }
+    } catch (_) {}
     try {
       const st = await api("/api/auth/status");
       if (st.authenticated && st.user) await enterLoggedIn(st.user);

@@ -18,11 +18,11 @@
       <div class="brand-lock">AURUM</div>
       <p class="auth-tag">Exness مباشر من التطبيق · بدون Windows</p>
       <ol id="setupSteps" class="setup-steps">
-        <li><strong>١</strong> توكن من <a href="https://app.metaapi.cloud/api-access/generate-token" target="_blank" rel="noopener">MetaApi</a> + الصقه هنا</li>
-        <li><strong>٢</strong> الأضمن: من <a href="https://app.metaapi.cloud/" target="_blank" rel="noopener">لوحة MetaApi</a> أضف حساب Exness وانتظر <code>Connected</code></li>
-        <li><strong>٣</strong> بعد الدخول اربط <code>Account ID</code> من تبويب الربط</li>
+        <li><strong>١</strong> الأفضل لحساب cTrader: من تبويب الربط → cTrader Open API</li>
+        <li><strong>٢</strong> لحساب MT5: توكن من <a href="https://app.metaapi.cloud/api-access/generate-token" target="_blank" rel="noopener">MetaApi</a> + الصقه هنا</li>
+        <li><strong>٣</strong> أو مسار Windows من تبويب الربط إن لزم</li>
       </ol>
-      <p id="setupNext" class="setup-next">الخطوة التالية: احصل على توكن MetaApi</p>
+      <p id="setupNext" class="setup-next">الخطوة التالية: اختر cTrader أو MetaApi من تبويب الربط</p>
 
       <div class="auth-tabs">
         <button type="button" id="tabMt5" class="on">دخول Exness/MT5</button>
@@ -99,7 +99,7 @@
 
     <main id="tab-trade" class="panel">
       <section class="hero compact">
-        <p class="eyebrow">Exness · MetaApi Cloud · نبض سريع · إدارة ذكية</p>
+        <p class="eyebrow">Exness · cTrader / MetaApi · نبض سريع · إدارة ذكية</p>
         <h1 id="headline">بانتظار الارتباط</h1>
         <p class="sub" id="narrative">أدخل حساب Exness — الربط والتنفيذ من التطبيق مباشرة.</p>
         <div class="cta">
@@ -124,7 +124,7 @@
           <article><h2>السيولة / المؤسسات</h2><pre id="inst"></pre></article>
           <article><h2>آخر الصفقات</h2><ul id="trades"></ul></article>
         </div>
-        <p class="disclaimer">التنفيذ الحقيقي على Exness يتم عبر طرفية MetaApi السحابية من هذا التطبيق — بدون Windows.</p>
+        <p class="disclaimer">التنفيذ الحقيقي على Exness عبر cTrader Open API أو MetaApi من هذا التطبيق — بدون Windows.</p>
       </section>
     </main>
 
@@ -133,10 +133,41 @@
         <h1>طرق التنفيذ الحقيقي بدون Windows</h1>
         <p id="bridgeStatusText">حالة التنفيذ: —</p>
         <p id="waysFinding" class="auth-note">جاري تحميل الطرق المتاحة…</p>
+        <p id="ctraderConfiguredLine" class="auth-note">cTrader Open API: —</p>
         <p id="metaConfiguredLine" class="auth-note">توكن MetaApi: —</p>
         <p id="linuxConfiguredLine" class="auth-note">منفّذ Linux: —</p>
 
-        <h2>الطريقة المضمونة — ربط حساب جاهز من لوحة MetaApi</h2>
+        <h2>cTrader Open API — من التطبيق مباشرة</h2>
+        <p class="auth-note">لحسابات Exness على منصة <strong>cTrader</strong> فقط (ليس MT5). بدون Windows وبدون MetaApi.</p>
+        <ol class="steps">
+          <li>أنشئ تطبيقاً على <a href="https://openapi.ctrader.com" target="_blank" rel="noopener">openapi.ctrader.com</a>.</li>
+          <li>أضف Redirect URI الظاهر بالأسفل حرفياً في إعدادات التطبيق.</li>
+          <li>الصق Client ID و Secret ثم احفظ → تفويض → اختر الحساب.</li>
+        </ol>
+        <label>Client ID
+          <input id="ctraderClientId" type="text" placeholder="من openapi.ctrader.com" autocomplete="off" />
+        </label>
+        <label>Client Secret
+          <input id="ctraderClientSecret" type="password" placeholder="Client Secret" autocomplete="off" />
+        </label>
+        <label class="auth-note">Redirect URI (انسخه إلى تطبيق Spotware)
+          <input id="ctraderRedirectUri" type="text" readonly value="" />
+        </label>
+        <label>بيئة الحساب
+          <select id="ctraderLive">
+            <option value="1" selected>Live</option>
+            <option value="0">Demo</option>
+          </select>
+        </label>
+        <div class="cta" style="margin-top:0.5rem">
+          <button type="button" id="btnSaveCtraderApp" class="primary">حفظ تطبيق cTrader</button>
+          <button type="button" id="btnCtraderAuth" class="ghost">تفويض cTrader</button>
+          <button type="button" id="btnListCtraderAccounts" class="ghost">عرض حساباتي</button>
+        </div>
+        <ul id="ctraderAccountsList" class="trades" style="margin-top:0.75rem"></ul>
+        <p id="ctraderStatusLine" class="auth-note">حالة cTrader: —</p>
+
+        <h2>مسار MetaApi — حسابات MT5</h2>
         <ol class="steps">
           <li>افتح <a href="https://app.metaapi.cloud/" target="_blank" rel="noopener">لوحة MetaApi</a> بنفس التوكن.</li>
           <li>Add account → MT5 → أدخل Exness (كلمة <strong>Master/Trading</strong> + السيرفر حرفياً).</li>
