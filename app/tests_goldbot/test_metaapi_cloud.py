@@ -16,6 +16,8 @@ class FakeMetaHttp:
     def __init__(self):
         self.accounts = {}
         self.created = False
+        self.migrated = False
+        self.create_calls = 0
 
     def __call__(self, method, url, body=None, **kwargs):
         method = method.upper()
@@ -44,6 +46,15 @@ class FakeMetaHttp:
             if acc_id in self.accounts:
                 return self.accounts[acc_id]
         if method == "POST" and url.endswith("/users/current/accounts"):
+            # Simulate MetaApi "login already exists" when an account is present
+            login = str((body or {}).get("login") or "")
+            for acc in self.accounts.values():
+                if str(acc.get("login")) == login:
+                    raise MetaApiError(
+                        "Account with this login already exists",
+                        code="E_ACCOUNT_EXISTS",
+                        status=400,
+                    )
             acc_id = FAKE_ACCOUNT_ID
             self.accounts[acc_id] = {
                 "id": acc_id,
@@ -54,8 +65,19 @@ class FakeMetaHttp:
                 "region": "new-york",
             }
             self.created = True
+            self.create_calls += 1
             return {"id": acc_id, "state": "DEPLOYED"}
         if method == "POST" and url.endswith("/deploy"):
+            acc_id = url.split("/accounts/")[1].split("/")[0]
+            if acc_id in self.accounts:
+                self.accounts[acc_id]["state"] = "DEPLOYED"
+                self.accounts[acc_id]["connectionStatus"] = "CONNECTED"
+            return {"ok": True}
+        if method == "POST" and url.endswith("/undeploy"):
+            acc_id = url.split("/accounts/")[1].split("/")[0]
+            if acc_id in self.accounts:
+                self.accounts[acc_id]["state"] = "UNDEPLOYED"
+                self.accounts[acc_id]["connectionStatus"] = "DISCONNECTED"
             return {"ok": True}
         if method == "POST" and url.endswith("/trade"):
             return {
@@ -67,6 +89,17 @@ class FakeMetaHttp:
             }
         if method == "PUT" and url.endswith("/password"):
             return {"ok": True}
+        if method == "PUT" and "/users/current/accounts/" in url and not url.endswith("/password"):
+            acc_id = url.rstrip("/").split("/")[-1]
+            if acc_id not in self.accounts:
+                raise MetaApiError("not found", code="NotFoundError", status=404)
+            if body and body.get("server"):
+                self.accounts[acc_id]["server"] = body["server"]
+                self.migrated = True
+            if body and body.get("name"):
+                self.accounts[acc_id]["name"] = body["name"]
+            self.accounts[acc_id]["state"] = "UNDEPLOYED"
+            return dict(self.accounts[acc_id])
         raise MetaApiError(f"unexpected {method} {url}", code="TEST")
 
 
@@ -233,3 +266,138 @@ def test_mt5_login_uses_metaapi_cloud(tmp_path, monkeypatch):
     assert st.json()["bridge"]["online"] is True
     assert st.json()["bridge"]["provider"] == "metaapi"
     assert st.json()["windows_required"] is False
+
+
+def test_find_account_by_login_rejects_cross_server():
+    fake = FakeMetaHttp()
+    fake.accounts[FAKE_ACCOUNT_ID] = {
+        "id": FAKE_ACCOUNT_ID,
+        "login": "55667788",
+        "server": "Exness-MT5Trial15",
+        "state": "DEPLOYED",
+        "connectionStatus": "CONNECTED",
+        "region": "new-york",
+    }
+    client = MetaApiCloud(token="test-token", region="new-york", http=fake)
+    assert client.find_account_by_login("55667788", "Exness-MT5Real32") is None
+    assert client.find_account_by_login("55667788", "Exness-MT5Trial15")["id"] == FAKE_ACCOUNT_ID
+    assert client.find_account_by_login("55667788")["server"] == "Exness-MT5Trial15"
+
+
+def test_ensure_account_migrates_trial_to_real32(monkeypatch):
+    monkeypatch.setattr("time.sleep", lambda *_: None)
+    fake = FakeMetaHttp()
+    fake.accounts[FAKE_ACCOUNT_ID] = {
+        "id": FAKE_ACCOUNT_ID,
+        "login": "55667788",
+        "server": "Exness-MT5Trial15",
+        "state": "DEPLOYED",
+        "connectionStatus": "DISCONNECTED",
+        "region": "new-york",
+    }
+    client = MetaApiCloud(token="test-token", region="new-york", http=fake)
+    out = client.ensure_account(
+        "55667788",
+        "TradePass1",
+        "Exness-MT5Real32",
+        wait=True,
+        fast=False,
+    )
+    assert out["ok"] is True
+    assert out["migrated"] is True
+    assert out["connected"] is True
+    assert fake.migrated is True
+    assert fake.create_calls == 0
+    assert fake.accounts[FAKE_ACCOUNT_ID]["server"] == "Exness-MT5Real32"
+
+
+def test_ensure_account_migrates_existing_id_wrong_server(monkeypatch):
+    monkeypatch.setattr("time.sleep", lambda *_: None)
+    fake = FakeMetaHttp()
+    fake.accounts[FAKE_ACCOUNT_ID] = {
+        "id": FAKE_ACCOUNT_ID,
+        "login": "55667788",
+        "server": "Exness-MT5Trial15",
+        "state": "DEPLOYED",
+        "connectionStatus": "CONNECTED",
+        "region": "new-york",
+    }
+    client = MetaApiCloud(token="test-token", region="new-york", http=fake)
+    out = client.ensure_account(
+        "55667788",
+        "TradePass1",
+        "Exness-MT5Real32",
+        existing_id=FAKE_ACCOUNT_ID,
+        wait=True,
+    )
+    assert out["ok"] is True
+    assert out["migrated"] is True
+    assert fake.accounts[FAKE_ACCOUNT_ID]["server"] == "Exness-MT5Real32"
+
+
+def test_cloud_diagnose_server_mismatch(tmp_path, monkeypatch):
+    monkeypatch.setenv("AURUM_COOKIE_SECURE", "0")
+    monkeypatch.setenv("METAAPI_TOKEN", "unit-test-token")
+    monkeypatch.setenv("AURUM_PREFER_METAAPI", "1")
+    monkeypatch.setattr("time.sleep", lambda *_: None)
+
+    from goldbot.config import settings
+    from goldbot.storage.state import DeskStore
+
+    settings.metaapi_token = "unit-test-token"
+    settings.prefer_metaapi = True
+
+    fake = FakeMetaHttp()
+    fake.accounts[FAKE_ACCOUNT_ID] = {
+        "id": FAKE_ACCOUNT_ID,
+        "login": "55667788",
+        "server": "Exness-MT5Trial15",
+        "state": "DEPLOYED",
+        "connectionStatus": "DISCONNECTED",
+        "region": "new-york",
+    }
+    cloud = MetaApiCloud(token="unit-test-token", region="new-york", http=fake)
+    monkeypatch.setattr("goldbot.api.metaapi", cloud)
+    monkeypatch.setattr("goldbot.mt5.metaapi_cloud.metaapi", cloud)
+
+    users = UserAuth(tmp_path / "users.sqlite3")
+    store = DeskStore(tmp_path / "desk.sqlite3")
+    monkeypatch.setattr("goldbot.api.auth", users)
+    monkeypatch.setattr("goldbot.api.store", store)
+    monkeypatch.setattr("goldbot.storage.state.store", store)
+    monkeypatch.setattr("goldbot.auth.users.auth", users)
+
+    bridge.metaapi_account_id = ""
+    bridge.metaapi_region = ""
+    bridge.execution = ""
+    bridge.remote_user_id = None
+    bridge.mode = "paper"
+
+    client = TestClient(app)
+    # Register then save MT5 secrets pointing at Real32 while MetaApi still has Trial
+    reg = client.post(
+        "/api/auth/register",
+        json={"username": "diag1", "password": "password12", "password_confirm": "password12"},
+    )
+    assert reg.status_code == 200
+    uid = reg.json()["user"]["id"]
+    users.update_settings(
+        uid,
+        {
+            "mt5_login": "55667788",
+            "mt5_password": "TradePass1",
+            "mt5_server": "Exness-MT5Real32",
+            "metaapi_account_id": FAKE_ACCOUNT_ID,
+            "mode": "mt5",
+        },
+    )
+    # update_settings may not accept password plaintext the same way — use login_with_mt5 path
+    users.login_with_mt5("55667788", "TradePass1", "Exness-MT5Real32", "XAUUSDm")
+
+    diag = client.get("/api/cloud/diagnose")
+    assert diag.status_code == 200, diag.text
+    body = diag.json()
+    assert body["ok"] is True
+    assert body["requested_server"] == "Exness-MT5Real32"
+    assert any(i.get("code") == "E_SERVER_MISMATCH" for i in body.get("issues") or [])
+    assert body["error_code"] == "E_SERVER_MISMATCH"

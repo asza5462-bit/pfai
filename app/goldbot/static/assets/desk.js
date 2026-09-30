@@ -71,10 +71,19 @@
     let j = {};
     try { j = text ? JSON.parse(text) : {}; } catch { j = { error: text }; }
     if (!r.ok) {
-      const detail = typeof j.detail === "string" ? j.detail : (j.detail && j.detail.msg) || j.error || j.message;
+      let detail = typeof j.detail === "string" ? j.detail : null;
+      if (!detail && j.detail && typeof j.detail === "object") {
+        detail = j.detail.detail || j.detail.error || j.detail.msg || j.detail.message;
+      }
+      detail = detail || j.error || j.message;
+      const code = (j.detail && j.detail.error_code) || j.error_code || (j.detail && j.detail.code) || j.code;
       const err = new Error(detail || `HTTP ${r.status}`);
       err.status = r.status;
       err.body = j;
+      err.error_code = code || null;
+      if (code && detail && !String(detail).includes(String(code))) {
+        err.message = `${detail} [${code}]`;
+      }
       throw err;
     }
     return j;
@@ -246,8 +255,9 @@
       return;
     }
     if (prov.status === "error" || (j && j.last_error && j.last_error.error && prov.status !== "pending")) {
+      const code = prov.code || (j.last_error && j.last_error.code) || "";
       const err = prov.message || (j.last_error && j.last_error.error) || "فشل الربط السحابي";
-      $("connectMsg").textContent = err;
+      $("connectMsg").textContent = code ? `${err} [${code}]` : err;
       $("connectMsg").classList.remove("ok");
       return;
     }
@@ -328,6 +338,15 @@
         }
         if (!(st && st.live_execution)) {
           await refreshBridge(false);
+          try {
+            const diag = await api("/api/cloud/diagnose");
+            if (diag && !diag.live_execution && diag.message && $("connectMsg")) {
+              const code = diag.error_code ? ` [${diag.error_code}]` : "";
+              if (!$("connectMsg").classList.contains("ok")) {
+                $("connectMsg").textContent = `${diag.message}${code}`;
+              }
+            }
+          } catch (_) {}
         }
       } catch (e) {
         $("connectMsg").textContent = e.message || "تعذّر التحديث";
@@ -508,7 +527,12 @@
       });
       const live = !!(j.account && j.account.connected) || !!(j.live_execution) || !!(j.cloud_ok);
       const softFail = !live && j.cloud && j.cloud.ok === false;
-      showAuth(j.message || (live ? "تم الربط السحابي" : "الحساب محفوظ — بانتظار اتصال Exness"), live && !softFail);
+      const code = j.error_code || (j.cloud && (j.cloud.error_code || j.cloud.code));
+      let authMsg = j.message || (live ? "تم الربط السحابي" : "الحساب محفوظ — بانتظار اتصال Exness");
+      if (softFail && code && authMsg && !String(authMsg).includes(String(code))) {
+        authMsg = `${authMsg} [${code}]`;
+      }
+      showAuth(authMsg, live && !softFail);
       await enterLoggedIn(j.user, j);
       if (!live) {
         document.querySelector('.tabs button[data-tab="connect"]')?.click();

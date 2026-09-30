@@ -83,6 +83,17 @@ def normalize_exness_server(server: str | None) -> str:
     return s.replace("-", "") if " " in str(server or "") else s
 
 
+def servers_compatible(a: str | None, b: str | None) -> bool:
+    """True when two Exness server strings refer to the same terminal host."""
+    na = normalize_exness_server(a) or str(a or "").strip()
+    nb = normalize_exness_server(b) or str(b or "").strip()
+    if not na or not nb:
+        return False
+    if na.lower() == nb.lower():
+        return True
+    return na.lower().replace("-", "") == nb.lower().replace("-", "")
+
+
 def _suggested_servers_from_error(details: Any) -> list[str]:
     """Pull MetaApi E_SRV_NOT_FOUND suggested server names."""
     out: list[str] = []
@@ -152,6 +163,11 @@ def arabic_metaapi_error(exc: MetaApiError | Exception) -> str:
         return (
             "الطرفية السحابية أُنشئت لكن لم تتصل بـ Exness. "
             "غالباً كلمة مرور التداول أو السيرفر (مثل Exness-MT5Real32) غير صحيحة — صحّحها ثم «إعادة ربط كامل»."
+        )
+    if code == "E_SERVER_MISMATCH":
+        return (
+            "حساب MetaApi ما زال مربوطاً بسيرفر قديم (مثل Trial) بينما طلبت Real. "
+            "اضغط «إعادة ربط كامل» ليُحدَّث السيرفر إلى Exness-MT5Real32."
         )
     if code == "E_PROVISION_PENDING" or "قيد التجهيز" in msg or "جاري تجهيز" in msg:
         return "الطرفية السحابية قيد التجهيز — انتظر دقيقة ثم اضغط «تحديث / إعادة ربط»."
@@ -311,13 +327,23 @@ class MetaApiCloud:
                 code = details.get("code") or details.get("error")
             elif isinstance(details, str):
                 code = details
-            raise MetaApiError(
+            err = MetaApiError(
                 payload.get("message") or payload.get("error") or f"MetaApi HTTP {e.code}",
                 code=str(code) if code else payload.get("error"),
                 status=int(e.code),
                 details=payload,
             )
+            log.error(
+                "MetaApi HTTP %s %s → %s code=%s msg=%s",
+                method.upper(),
+                url.split("?")[0][-80:],
+                e.code,
+                err.code,
+                (err.message or "")[:220],
+            )
+            raise err
         except urllib.error.URLError as e:
+            log.error("MetaApi network error %s %s: %s", method.upper(), url.split("?")[0][-80:], e.reason)
             raise MetaApiError(f"MetaApi network error: {e.reason}", code="NETWORK", status=502) from e
 
     def _client_url(self, path: str, region: str | None = None) -> str:
@@ -356,23 +382,9 @@ class MetaApiCloud:
             )
         return data
 
-    def find_account_by_login(self, login: str, server: str | None = None) -> dict | None:
+    def find_accounts_by_login(self, login: str) -> list[dict]:
         login_s = str(login).strip()
-        server_s = (server or "").strip().lower()
-        for acc in self.list_accounts():
-            if not isinstance(acc, dict):
-                continue
-            acc_id = normalize_account_id(str(acc.get("id") or acc.get("accountId") or ""))
-            if not acc_id:
-                continue
-            if str(acc.get("login") or "").strip() != login_s:
-                continue
-            if server_s and str(acc.get("server") or "").strip().lower() != server_s:
-                continue
-            acc = dict(acc)
-            acc["id"] = acc_id
-            return acc
-        # Fallback: match login only (server name variants)
+        out: list[dict] = []
         for acc in self.list_accounts():
             if not isinstance(acc, dict):
                 continue
@@ -381,10 +393,102 @@ class MetaApiCloud:
             acc_id = normalize_account_id(str(acc.get("id") or acc.get("accountId") or ""))
             if not acc_id:
                 continue
+            row = dict(acc)
+            row["id"] = acc_id
+            out.append(row)
+        return out
+
+    def find_account_by_login(self, login: str, server: str | None = None) -> dict | None:
+        """Find MetaApi account for login.
+
+        Prefer exact/normalized server match. Do NOT silently reuse a Trial account
+        when the user switched to Real32 (that caused false «تعذّر الربط»).
+        """
+        login_s = str(login).strip()
+        matches = self.find_accounts_by_login(login_s)
+        if not matches:
+            return None
+        if server:
+            for acc in matches:
+                if servers_compatible(str(acc.get("server") or ""), server):
+                    return acc
+            # Different server for same login — return None so caller can migrate/update
+            return None
+        return matches[0]
+
+    def update_account_server_password(
+        self,
+        account_id: str,
+        *,
+        password: str,
+        server: str,
+        name: str | None = None,
+    ) -> dict:
+        """Point an existing MetaApi terminal at a new Exness server + trading password."""
+        aid = normalize_account_id(account_id)
+        if not aid:
+            raise MetaApiError(f"معرّف حساب MetaApi غير صالح: {account_id!r}", code="E_BAD_ACCOUNT_ID")
+        server_n = normalize_exness_server(server) or str(server).strip()
+        body: dict[str, Any] = {
+            "password": str(password),
+            "server": server_n,
+            "name": name or f"AURUM-{server_n}",
+        }
+        # Undeploy first so MetaApi accepts server change on a live terminal
+        try:
+            self.undeploy(aid)
+            time.sleep(1.5)
+        except Exception as e:
+            log.info("undeploy before server update: %s", e)
+        data = self._http(
+            "PUT",
+            self._prov_url(f"/users/current/accounts/{aid}"),
+            body,
+            transaction=True,
+            timeout=60,
+        )
+        return data if isinstance(data, dict) else {"ok": True}
+
+    def migrate_account_server(
+        self,
+        account: dict,
+        *,
+        login: str,
+        password: str,
+        server: str,
+        deploy_wait: float = 45.0,
+    ) -> dict:
+        """Move an existing MetaApi terminal from Trial/old server → requested server."""
+        aid = normalize_account_id(str(account.get("id") or ""))
+        if not aid:
+            raise MetaApiError("لا يوجد معرّف للحساب عند ترحيل السيرفر", code="E_BAD_ACCOUNT_ID")
+        old = str(account.get("server") or "")
+        server_n = normalize_exness_server(server) or str(server).strip()
+        log.warning(
+            "metaapi migrate login=%s account=%s server %s → %s",
+            login,
+            aid,
+            old,
+            server_n,
+        )
+        self.update_account_server_password(
+            aid,
+            password=password,
+            server=server_n,
+            name=f"AURUM-{login}-{server_n}",
+        )
+        acc = self.redeploy(aid, wait=deploy_wait)
+        # Prefer fresh read
+        try:
+            acc = self.get_account(aid)
+        except Exception:
+            pass
+        if not servers_compatible(str(acc.get("server") or ""), server_n):
+            # Some MetaApi responses omit server until deploy settles — patch locally
             acc = dict(acc)
-            acc["id"] = acc_id
-            return acc
-        return None
+            acc["server"] = server_n
+            acc["id"] = aid
+        return acc
 
     def create_account(
         self,
@@ -658,6 +762,8 @@ class MetaApiCloud:
             pass
 
         acc = None
+        migrated = False
+        deploy_budget = deploy_wait if deploy_wait is not None else (10.0 if fast else 75.0)
         existing = "" if force_new else (normalize_account_id(existing_id) if is_metaapi_account_id(existing_id) else "")
         if existing_id and not force_new and not existing:
             log.warning("ignoring invalid metaapi_account_id=%r", existing_id)
@@ -667,19 +773,76 @@ class MetaApiCloud:
             except MetaApiError as e:
                 log.warning("stale metaapi account %s: %s — will recreate", existing, e.message)
                 acc = None
+            if acc and not servers_compatible(str(acc.get("server") or ""), server):
+                try:
+                    acc = self.migrate_account_server(
+                        acc,
+                        login=login,
+                        password=password,
+                        server=server,
+                        deploy_wait=min(60.0, deploy_budget + 15),
+                    )
+                    migrated = True
+                except MetaApiError as e:
+                    log.error(
+                        "existing-id server migrate failed %s→%s: %s — drop stale binding",
+                        acc.get("server"),
+                        server,
+                        e.message,
+                    )
+                    acc = None
         if not acc and not force_new:
             acc = self.find_account_by_login(login, server)
+        if not acc and not force_new:
+            # Same login exists on a DIFFERENT server (Trial→Real32) — migrate, don't create
+            siblings = self.find_accounts_by_login(login)
+            if siblings:
+                candidate = siblings[0]
+                try:
+                    acc = self.migrate_account_server(
+                        candidate,
+                        login=login,
+                        password=password,
+                        server=server,
+                        deploy_wait=min(60.0, deploy_budget + 15),
+                    )
+                    migrated = True
+                except MetaApiError as e:
+                    log.error(
+                        "sibling server migrate failed login=%s from=%s to=%s: %s",
+                        login,
+                        candidate.get("server"),
+                        server,
+                        e.message,
+                    )
+                    # Fall through to create — may hit "account already exists"
         if not acc:
             try:
                 created = self.create_account(login, password, server, symbol=symbol, fast=fast)
-            except MetaApiError:
+            except MetaApiError as create_err:
                 # Duplicate login / force_new race: reuse existing terminal + refresh password
                 found = self.find_account_by_login(login, server)
                 if found and is_metaapi_account_id(str(found.get("id") or "")):
                     acc = found
                     created = None
                 else:
-                    raise
+                    siblings = self.find_accounts_by_login(login)
+                    if siblings and is_metaapi_account_id(str(siblings[0].get("id") or "")):
+                        try:
+                            acc = self.migrate_account_server(
+                                siblings[0],
+                                login=login,
+                                password=password,
+                                server=server,
+                                deploy_wait=min(60.0, deploy_budget + 15),
+                            )
+                            migrated = True
+                            created = None
+                        except MetaApiError as e:
+                            log.error("post-create migrate failed: %s", e.message)
+                            raise create_err from e
+                    else:
+                        raise
             if not acc:
                 account_id = normalize_account_id(str(created["id"]))
                 if not account_id:
@@ -704,15 +867,17 @@ class MetaApiCloud:
         # Prefer region from the account itself (critical for client API)
         if acc.get("region"):
             self.region = str(acc["region"]).strip()
-        try:
-            self._http(
-                "PUT",
-                self._prov_url(f"/users/current/accounts/{account_id}/password"),
-                {"password": password},
-                transaction=True,
-            )
-        except MetaApiError as e:
-            log.info("password update skipped: %s", e.message)
+        # Password already set during migrate; still refresh on normal reuse
+        if not migrated:
+            try:
+                self._http(
+                    "PUT",
+                    self._prov_url(f"/users/current/accounts/{account_id}/password"),
+                    {"password": password},
+                    transaction=True,
+                )
+            except MetaApiError as e:
+                log.info("password update skipped: %s", e.message)
 
         deploy_budget = deploy_wait if deploy_wait is not None else (10.0 if fast else 75.0)
         try:
@@ -788,7 +953,8 @@ class MetaApiCloud:
             "login": acc.get("login") or login,
             "server": acc.get("server") or server,
             "raw": acc,
-            "healed": bool(existing_id and existing_id != account_id),
+            "healed": bool(existing_id and existing_id != account_id) or migrated,
+            "migrated": migrated,
             "pending": not connected,
         }
 

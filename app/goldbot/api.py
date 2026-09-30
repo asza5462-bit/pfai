@@ -26,6 +26,8 @@ from goldbot.mt5.metaapi_cloud import (
     is_validation_cooldown_error,
     metaapi,
     normalize_account_id,
+    normalize_exness_server,
+    servers_compatible,
 )
 from goldbot.mt5.mt5_linux import Mt5LinuxError, mt5_linux
 from goldbot.mt5.remote_hub import EXNESS_SERVERS, hub
@@ -566,12 +568,35 @@ async def mt5_login(body: Mt5LoginBody, response: Response):
                 cloud = {"ok": True, "configured": True, "pending": True, "code": e.code}
                 message = e.message
             else:
-                cloud = {"ok": False, "configured": True, "error": e.message, "code": e.code, "details": e.details}
                 message = arabic_metaapi_error(e)
+                log.error(
+                    "metaapi login failed user=%s login=%s server=%s code=%s msg=%s",
+                    user["username"],
+                    secrets["login"],
+                    secrets["server"],
+                    e.code,
+                    e.message,
+                )
+                cloud = {
+                    "ok": False,
+                    "configured": True,
+                    "error": e.message,
+                    "error_code": e.code,
+                    "code": e.code,
+                    "details": e.details,
+                }
                 store.set_kv(
                     "metaapi_last_error",
-                    {"error": e.message, "code": e.code, "ts": time.time(), "server": secrets["server"]},
+                    {
+                        "error": message,
+                        "raw": e.message,
+                        "code": e.code,
+                        "ts": time.time(),
+                        "server": secrets["server"],
+                        "login": secrets["login"],
+                    },
                 )
+                _set_provision_state("error", message, code=e.code, login=secrets["login"], server=secrets["server"])
             store.log_event("metaapi_login_error", {"user": user["username"], "error": e.message, "code": e.code})
     else:
         message = (
@@ -614,6 +639,7 @@ async def mt5_login(body: Mt5LoginBody, response: Response):
         "started": started,
         "execution": bridge.execution or ("metaapi" if bridge.metaapi_account_id else "pending"),
         "message": message,
+        "error_code": cloud.get("error_code") or cloud.get("code"),
         "provision": _get_provision_state(),
     }
 
@@ -1247,6 +1273,175 @@ class CloudReconnectBody(BaseModel):
     force_new: bool = False  # drop saved MetaApi account id and recreate
 
 
+@app.get("/api/cloud/diagnose")
+async def cloud_diagnose(
+    authorization: str | None = Header(default=None),
+    aurum_session: str | None = Cookie(default=None, alias=SESSION_COOKIE),
+):
+    """Explain why MetaApi/Exness cloud link failed — server mismatch, cooldown, token, etc."""
+    user = require_user(authorization, aurum_session)
+    metaapi.refresh_token()
+    secrets = auth.mt5_secrets(user["id"])
+    login = str(secrets.get("login") or "").strip()
+    server = normalize_exness_server(secrets.get("server") or "") or str(secrets.get("server") or "").strip()
+    saved_id = normalize_account_id(secrets.get("metaapi_account_id") or "")
+    last_err = store.get_kv("metaapi_last_error") or {}
+    provision = _get_provision_state()
+    issues: list[dict] = []
+    accounts_summary: list[dict] = []
+    saved_account = None
+    token_ok = False
+    token_accounts = 0
+
+    if not metaapi.configured:
+        issues.append(
+            {
+                "code": "NO_TOKEN",
+                "severity": True,
+                "message": "توكن MetaApi غير مضبوط — الصقه من تبويب الربط أو شاشة الدخول.",
+            }
+        )
+    else:
+        try:
+            validated = metaapi.validate_token()
+            token_ok = True
+            token_accounts = int(validated.get("accounts") or 0)
+        except MetaApiError as e:
+            issues.append(
+                {
+                    "code": e.code or "BAD_TOKEN",
+                    "severity": True,
+                    "message": arabic_metaapi_error(e),
+                }
+            )
+
+    if login and metaapi.configured and token_ok:
+        try:
+            for acc in metaapi.find_accounts_by_login(login):
+                row = {
+                    "id": acc.get("id"),
+                    "server": acc.get("server"),
+                    "state": acc.get("state"),
+                    "connectionStatus": acc.get("connectionStatus"),
+                    "matches_requested_server": servers_compatible(str(acc.get("server") or ""), server) if server else None,
+                }
+                accounts_summary.append(row)
+            if saved_id:
+                try:
+                    saved_account = metaapi.get_account(saved_id)
+                except MetaApiError as e:
+                    issues.append(
+                        {
+                            "code": e.code or "E_BAD_ACCOUNT_ID",
+                            "severity": True,
+                            "message": f"معرّف الطرفية المحفوظ تالف/محذوف: {arabic_metaapi_error(e)}",
+                        }
+                    )
+                    saved_account = None
+            if server and accounts_summary and not any(a.get("matches_requested_server") for a in accounts_summary):
+                old = ", ".join(sorted({str(a.get("server") or "?") for a in accounts_summary}))
+                issues.append(
+                    {
+                        "code": "E_SERVER_MISMATCH",
+                        "severity": True,
+                        "message": (
+                            f"طرفية MetaApi لنفس الحساب ما زالت على سيرفر مختلف ({old}) "
+                            f"بينما المطلوب {server}. اضغط «إعادة ربط كامل» لترحيل السيرفر."
+                        ),
+                        "metaapi_servers": old,
+                        "requested_server": server,
+                    }
+                )
+            if saved_account and server and not servers_compatible(str(saved_account.get("server") or ""), server):
+                issues.append(
+                    {
+                        "code": "E_SERVER_MISMATCH",
+                        "severity": True,
+                        "message": (
+                            f"الطرفية المحفوظة على {saved_account.get('server')} "
+                            f"وليست {server} — سيتم ترحيلها عند إعادة الربط."
+                        ),
+                    }
+                )
+        except MetaApiError as e:
+            log.error("diagnose list accounts failed: %s", e.message)
+            issues.append({"code": e.code or "E_DIAGNOSE", "severity": True, "message": arabic_metaapi_error(e)})
+
+    cooldown = None
+    try:
+        if login and server:
+            cool = store.get_kv(f"metaapi_cooldown:{login}:{server.lower()}") or {}
+            until = float((cool or {}).get("until") or 0)
+            if until > time.time():
+                mins = max(1, int((until - time.time()) / 60))
+                cooldown = {"until": until, "minutes_left": mins, "login": login, "server": server}
+                issues.append(
+                    {
+                        "code": "E_VALIDATION_COOLDOWN",
+                        "severity": True,
+                        "message": f"MetaApi يمنع التحقق مؤقتاً — انتظر حوالي {mins} دقيقة.",
+                    }
+                )
+    except Exception:
+        pass
+
+    if isinstance(last_err, dict) and last_err.get("error"):
+        issues.append(
+            {
+                "code": last_err.get("code") or "LAST_ERROR",
+                "severity": False,
+                "message": str(last_err.get("error")),
+                "ts": last_err.get("ts"),
+            }
+        )
+    if provision.get("status") == "error" and provision.get("message"):
+        issues.append(
+            {
+                "code": provision.get("code") or "PROVISION_ERROR",
+                "severity": True,
+                "message": str(provision.get("message")),
+            }
+        )
+
+    # Deduplicate by code+message
+    seen: set[str] = set()
+    uniq: list[dict] = []
+    for it in issues:
+        key = f"{it.get('code')}|{it.get('message')}"
+        if key in seen:
+            continue
+        seen.add(key)
+        uniq.append(it)
+
+    primary = next((i for i in uniq if i.get("severity")), uniq[0] if uniq else None)
+    live = bridge.is_live_execution() and desk.account.connected and desk.account.mode == "mt5"
+    return {
+        "ok": True,
+        "version": __version__,
+        "metaapi_configured": metaapi.configured,
+        "token_ok": token_ok,
+        "token_accounts": token_accounts,
+        "login": login or None,
+        "requested_server": server or None,
+        "saved_account_id": saved_id or None,
+        "saved_account_server": (saved_account or {}).get("server") if saved_account else None,
+        "metaapi_accounts_for_login": accounts_summary,
+        "live_execution": live,
+        "provision": provision,
+        "cooldown": cooldown,
+        "last_error": last_err if isinstance(last_err, dict) else {},
+        "issues": uniq,
+        "error_code": (primary or {}).get("code"),
+        "message": (primary or {}).get("message")
+        or ("متصل وجاهز" if live else "لا مشكلة ظاهرة — جرّب «إعادة ربط كامل» إن استمر الفشل"),
+        "hint_ar": (
+            "إن ظهر E_SERVER_MISMATCH: اضغط «إعادة ربط كامل». "
+            "إن ظهر E_VALIDATION_COOLDOWN: صحّح كلمة مرور التداول/السيرفر وانتظر انتهاء المهلة. "
+            "تأكد أن السيرفر حرفياً Exness-MT5Real32 من تطبيق Exness."
+        ),
+    }
+
+
 @app.post("/api/cloud/reset")
 async def cloud_reset(authorization: str | None = Header(default=None), aurum_session: str | None = Cookie(default=None, alias=SESSION_COOKIE)):
     """Clear corrupt MetaApi account id and force a fresh cloud terminal."""
@@ -1317,11 +1512,28 @@ async def cloud_reconnect(
                     if e2.code == "E_PROVISION_PENDING":
                         cloud = {"ok": True, "pending": True, "code": e2.code}
                     elif not mt5_linux.configured:
-                        raise HTTPException(400, arabic_metaapi_error(e2))
+                        ar = arabic_metaapi_error(e2)
+                        log.error("metaapi reconnect retry failed code=%s msg=%s", e2.code, e2.message)
+                        store.set_kv(
+                            "metaapi_last_error",
+                            {"error": ar, "raw": e2.message, "code": e2.code, "ts": time.time()},
+                        )
+                        _set_provision_state("error", ar, code=e2.code)
+                        raise HTTPException(
+                            400,
+                            {"error": ar, "error_code": e2.code, "detail": ar},
+                        )
             elif e.code == "E_PROVISION_PENDING":
                 cloud = {"ok": True, "pending": True, "code": e.code}
             elif not mt5_linux.configured:
-                raise HTTPException(400, arabic_metaapi_error(e))
+                ar = arabic_metaapi_error(e)
+                log.error("metaapi reconnect failed code=%s msg=%s", e.code, e.message)
+                store.set_kv(
+                    "metaapi_last_error",
+                    {"error": ar, "raw": e.message, "code": e.code, "ts": time.time()},
+                )
+                _set_provision_state("error", ar, code=e.code)
+                raise HTTPException(400, {"error": ar, "error_code": e.code, "detail": ar})
             store.log_event("metaapi_reconnect_error", {"error": e.message, "code": e.code})
 
     desk.account = bridge.connect()
