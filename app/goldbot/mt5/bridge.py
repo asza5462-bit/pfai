@@ -87,8 +87,13 @@ class Bridge:
             log.warning("refusing to bind invalid metaapi account id %r", raw)
 
     def connect(self) -> AccountSnapshot:
-        # 1) MetaApi cloud — primary real path (no Windows)
-        if self.mode == "mt5" and self.metaapi_account_id and settings.prefer_metaapi:
+        # 1) MetaApi cloud — primary real path (skipped when user chose Windows agent)
+        if (
+            self.mode == "mt5"
+            and self.execution != "windows_bridge"
+            and self.metaapi_account_id
+            and settings.prefer_metaapi
+        ):
             from goldbot.mt5.metaapi_cloud import metaapi
 
             if metaapi.configured:
@@ -192,29 +197,9 @@ class Bridge:
                     detail="توكن MetaApi جاهز — جاري إنشاء الطرفية السحابية على Exness (بدون Windows)",
                 )
 
-        # 4) Legacy Windows agent hub (only when MetaApi/Linux are not the active path)
+        # 4) Windows MT5 agent — explicit choice or fallback when MetaApi/Linux not live
         if self.mode == "mt5" and self.remote_user_id and self.execution not in {"metaapi", "mt5_linux"}:
-            from goldbot.mt5.metaapi_cloud import metaapi
             from goldbot.mt5.remote_hub import hub
-
-            # Skip Windows fallback while MetaApi is the preferred real path
-            if settings.prefer_metaapi and metaapi.configured:
-                return AccountSnapshot(
-                    balance=0.0,
-                    equity=0.0,
-                    margin=0.0,
-                    free_margin=0.0,
-                    currency="USD",
-                    mode="mt5",
-                    connected=False,
-                    server=settings.mt5_server or "Exness",
-                    login=int(settings.mt5_login or 0),
-                    detail=(
-                        "حساب MetaApi قيد الربط — بدون Windows"
-                        if self.metaapi_account_id
-                        else "اضغط «إعادة ربط كامل» لإكمال الطرفية السحابية على Exness"
-                    ),
-                )
 
             st = hub.status_for_user(self.remote_user_id)
             acc = st.get("account") or {}

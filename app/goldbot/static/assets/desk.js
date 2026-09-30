@@ -781,11 +781,43 @@
     await api("/api/risk/reset", { method: "POST" });
     await $("btnScan").onclick();
   };
-  $("btnCopyAgent").onclick = async () => {
-    const t = $("agentCmd").value;
-    try { await navigator.clipboard.writeText(t); $("connectMsg").textContent = "تم النسخ"; $("connectMsg").classList.add("ok"); }
-    catch { $("connectMsg").textContent = "انسخ يدوياً من الصندوق"; }
-  };
+  if ($("btnEnableWindows")) {
+    $("btnEnableWindows").onclick = async () => {
+      $("connectMsg").textContent = "جاري تفعيل مسار Windows…";
+      $("connectMsg").classList.remove("ok");
+      try {
+        const j = await api("/api/bridge/windows-enable", { method: "POST", body: "{}" });
+        if ($("agentCmd")) $("agentCmd").value = j.agent_command || "";
+        if ($("agentDownloadLink") && j.agent_download) $("agentDownloadLink").href = j.agent_download;
+        setBridgeUI(j.bridge || {}, j.bridge_token, j.agent_command, null, null);
+        $("connectMsg").textContent = j.message || "تم تفعيل Windows — انسخ الأمر وشغّله";
+        $("connectMsg").classList.add("ok");
+        try {
+          if (j.agent_command) await navigator.clipboard.writeText(j.agent_command);
+        } catch (_) {}
+      } catch (e) {
+        $("connectMsg").textContent = e.message || "تعذّر تفعيل Windows";
+        $("connectMsg").classList.remove("ok");
+      }
+    };
+  }
+  if ($("btnCopyAgent")) {
+    $("btnCopyAgent").onclick = async () => {
+      const t = ($("agentCmd") && $("agentCmd").value) || "";
+      if (!t) {
+        $("connectMsg").textContent = "فعّل مسار Windows أولاً ليظهر الأمر";
+        $("connectMsg").classList.remove("ok");
+        return;
+      }
+      try {
+        await navigator.clipboard.writeText(t);
+        $("connectMsg").textContent = "تم نسخ أمر الوكيل";
+        $("connectMsg").classList.add("ok");
+      } catch {
+        $("connectMsg").textContent = "انسخ يدوياً من الصندوق";
+      }
+    };
+  }
 
   (async () => {
     await loadServers();

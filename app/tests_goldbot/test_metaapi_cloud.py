@@ -307,6 +307,46 @@ def test_arabic_validation_failed_message():
     assert "Exness-MT5Real32" in ar
 
 
+def test_windows_bridge_enable(tmp_path, monkeypatch):
+    monkeypatch.setenv("AURUM_COOKIE_SECURE", "0")
+    monkeypatch.setenv("AURUM_PUBLIC_URL", "https://pfai-v8.onrender.com")
+    from goldbot.storage.state import DeskStore
+
+    users = UserAuth(tmp_path / "users.sqlite3")
+    store = DeskStore(tmp_path / "desk.sqlite3")
+    monkeypatch.setattr("goldbot.api.auth", users)
+    monkeypatch.setattr("goldbot.api.store", store)
+    monkeypatch.setattr("goldbot.storage.state.store", store)
+    monkeypatch.setattr("goldbot.auth.users.auth", users)
+    client = TestClient(app)
+    reg = client.post(
+        "/api/auth/register",
+        json={"username": "win1", "password": "password12", "password_confirm": "password12"},
+    )
+    assert reg.status_code == 200
+    uid = reg.json()["user"]["id"]
+    users.login_with_mt5("55667788", "TradePass1", "Exness-MT5Real32", "XAUUSDm")
+    # ensure session still valid after login_with_mt5 created another session — re-login app
+    client.post("/api/auth/login", json={"username": "win1", "password": "password12"})
+    # attach mt5 secrets to registered user
+    users.update_settings(
+        uid,
+        {
+            "mt5_login": "55667788",
+            "mt5_password": "TradePass1",
+            "mt5_server": "Exness-MT5Real32",
+            "mode": "mt5",
+        },
+    )
+    en = client.post("/api/bridge/windows-enable")
+    assert en.status_code == 200, en.text
+    body = en.json()
+    assert body["ok"] is True
+    assert "aurum_exness_agent.py" in body["agent_command"]
+    assert body["bridge_token"]
+    assert "Windows" in (body["message"] or "") or "ويندوز" in (body["message"] or "").lower() or body["ok"]
+
+
 def test_prepare_bound_account_ready(monkeypatch):
     monkeypatch.setattr("time.sleep", lambda *_: None)
     fake = FakeMetaHttp()

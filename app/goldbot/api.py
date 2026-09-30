@@ -720,6 +720,25 @@ async def mt5_login(body: Mt5LoginBody, response: Response, request: Request):
 
 def _cloud_status_for_user(user_id: int) -> dict:
     secrets = auth.mt5_secrets(user_id)
+    exec_pref = str(secrets.get("execution") or bridge.execution or "").strip()
+    # Windows agent path takes priority when user explicitly enabled it
+    if exec_pref == "windows_bridge":
+        bridge.bind_remote_user(user_id)
+        bridge.execution = "windows_bridge"
+        bridge.mode = "mt5"
+        st = hub.status_for_user(user_id)
+        st = dict(st)
+        online = bool(st.get("online"))
+        return {
+            "online": online,
+            "execution": "windows_bridge",
+            "provider": "windows_bridge",
+            "account": st.get("account") or {},
+            "detail": st.get("detail")
+            or ("متصل عبر Windows MT5" if online else "شغّل وكيل Windows مع MetaTrader 5 مفتوح"),
+            "windows_required": True,
+            "bridge_token_issued": bool(st.get("bridge_token_issued") or hub.token_for_user(user_id)),
+        }
     raw_id = secrets.get("metaapi_account_id") or bridge.metaapi_account_id
     account_id = normalize_account_id(raw_id) if is_metaapi_account_id(raw_id) else ""
     if raw_id and not account_id:
@@ -1193,9 +1212,74 @@ def _bridge_auth(authorization: str | None) -> dict:
     return row
 
 
+@app.post("/api/bridge/windows-enable")
+async def bridge_windows_enable(
+    authorization: str | None = Header(default=None),
+    aurum_session: str | None = Cookie(default=None, alias=SESSION_COOKIE),
+):
+    """Issue Windows MT5 agent token + command — real Exness via local MetaTrader 5."""
+    user = require_user(authorization, aurum_session)
+    secrets = auth.mt5_secrets(user["id"])
+    if not secrets.get("login") or not secrets.get("password"):
+        raise HTTPException(
+            400,
+            "احفظ بيانات Exness أولاً من شاشة الدخول (رقم الحساب + كلمة مرور التداول + السيرفر).",
+        )
+    token = hub.issue_token(user["id"])
+    public = (os.getenv("AURUM_PUBLIC_URL") or "https://pfai-v8.onrender.com").rstrip("/")
+    agent_cmd = (
+        f"python aurum_exness_agent.py --cloud {public} --token {token}"
+    )
+    auth.update_settings(
+        user["id"],
+        {
+            "mode": "mt5",
+            "execution": "windows_bridge",
+            # Keep metaapi id but prefer Windows until user binds MetaApi again
+        },
+    )
+    settings.mode = "mt5"
+    settings.mt5_login = secrets["login"]
+    settings.mt5_password = secrets["password"]
+    settings.mt5_server = secrets["server"]
+    bridge.bind_remote_user(user["id"])
+    bridge.execution = "windows_bridge"
+    bridge.mode = "mt5"
+    store.log_event("windows_bridge_enabled", {"user": user["username"], "login": secrets["login"]})
+    return {
+        "ok": True,
+        "bridge_token": token,
+        "agent_command": agent_cmd,
+        "agent_download": f"{public}/aurum_exness_agent.py",
+        "cloud_url": public,
+        "login": secrets["login"],
+        "server": secrets["server"],
+        "symbol": secrets.get("symbol") or "XAUUSDm",
+        "steps_ar": [
+            "ثبّت MetaTrader 5 من Exness وسجّل دخول حسابك (كلمة التداول).",
+            "على ويندوز: pip install MetaTrader5 requests",
+            f"حمّل الوكيل: {public}/aurum_exness_agent.py",
+            f"شغّل: {agent_cmd}",
+            "اترك MT5 والوكيل مفتوحين — ثم اضغط «ابدأ التداول» من AURUM.",
+        ],
+        "message": "تم تفعيل مسار Windows. انسخ الأمر وشغّله على جهازك مع MT5 مفتوح.",
+        "bridge": _cloud_status_for_user(user["id"]),
+    }
+
+
 @app.post("/api/bridge/heartbeat")
 async def bridge_heartbeat(body: BridgeHeartbeatBody, authorization: str | None = Header(default=None)):
     row = _bridge_auth(authorization)
+    # When Windows agent heartbeats, prefer that execution path
+    try:
+        uid = int(row["user_id"])
+        bridge.bind_remote_user(uid)
+        bridge.execution = "windows_bridge"
+        bridge.mode = "mt5"
+        auth.update_settings(uid, {"execution": "windows_bridge", "mode": "mt5"})
+        desk.account = bridge.connect()
+    except Exception:
+        pass
     return hub.heartbeat(row["bridge_token"], info=body.info, account=body.account)
 
 
