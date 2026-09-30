@@ -1337,12 +1337,16 @@ async def ctrader_status(
         "account": desk.account.to_dict() if desk.account else {},
         "steps_ar": [
             f"افتح حساب {BROKER_NAME} على منصة cTrader من {BROKER_CLIENT_AREA}",
-            "أنشئ تطبيقاً على https://openapi.ctrader.com وانسخ Client ID و Client Secret",
-            f"أضف Redirect URI: {ctrader.redirect_uri}",
-            "احفظهما هنا ثم اضغط «تفويض cTrader» وسجّل دخول حساب FP Markets",
-            "اختر حساب FP Markets cTrader من القائمة (حسابات وسطاء آخرين مرفوضة)",
+            "أنشئ تطبيقاً على https://openapi.ctrader.com/apps وانتظر حتى يصبح Active",
+            f"أضف Redirect URI حرفياً: {ctrader.redirect_uri}",
+            "احفظ Client ID/Secret هنا ثم اضغط «تفويض cTrader» (يفتح id.ctrader.com)",
+            "Allow access ثم اختر حساب FP Markets cTrader من القائمة",
         ],
-        "note_ar": f"AURUM مربوط بوسيط {BROKER_NAME} فقط عبر cTrader Open API — حسابات MT5 أو وسطاء آخرين غير مدعومة.",
+        "note_ar": (
+            f"AURUM مربوط بوسيط {BROKER_NAME} فقط عبر cTrader Open API. "
+            "إن ظهرت 404 على connect.spotware.com حدّث الصفحة وأعد التفويض — الرابط الرسمي الآن id.ctrader.com."
+        ),
+        "auth_host": "id.ctrader.com",
     }
 
 
