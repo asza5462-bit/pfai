@@ -134,7 +134,12 @@ def _apply_cloud_binding(user_id: int, cloud: dict) -> None:
             "mode": "mt5",
         },
     )
+    settings.mode = "mt5"
+    if cloud.get("region"):
+        settings.metaapi_region = str(cloud.get("region") or settings.metaapi_region)
     bridge.bind_metaapi(cloud["account_id"], cloud.get("region"))
+    bridge.mode = "mt5"
+    bridge.execution = "metaapi"
 
 
 def _finish_cloud_in_background(

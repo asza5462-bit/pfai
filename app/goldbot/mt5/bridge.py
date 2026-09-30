@@ -377,6 +377,12 @@ class Bridge:
             return []
         if self.mode == "mt5" and self._mt5 is not None:
             return self._fetch_mt5(symbol, timeframe, count)
+        # Live mt5 mode: never mix Yahoo/synth into broker signals (cTrader/Windows/Linux)
+        if self.mode == "mt5":
+            if self._candle_cache and time.time() - self._candle_cache_ts < 120:
+                return self._candle_cache[-count:] if len(self._candle_cache) > count else list(self._candle_cache)
+            log.warning("live mt5 candles unavailable — refusing paper/Yahoo fallback")
+            return []
         return self._fetch_paper(count)
 
     def _fetch_metaapi(self, symbol: str, timeframe: str, count: int) -> list[Candle]:
@@ -460,7 +466,9 @@ class Bridge:
         rates = self._mt5.copy_rates_from_pos(symbol, self._tf_mt5(timeframe), 0, count)
         if rates is None:
             log.warning("mt5 rates empty: %s", self._mt5.last_error())
-            return self._fetch_paper(count)
+            if self._candle_cache and time.time() - self._candle_cache_ts < 120:
+                return self._candle_cache[-count:] if len(self._candle_cache) > count else list(self._candle_cache)
+            return []
         out = []
         for r in rates:
             out.append(
@@ -718,7 +726,7 @@ class Bridge:
                         symbol=settings.symbol,
                         comment=comment,
                     )
-                    result.setdefault("mode", "mt5")
+                    result["mode"] = "mt5"
                     result["execution"] = "ctrader"
                     if result.get("ok") or self.execution == "ctrader":
                         return result
@@ -770,6 +778,8 @@ class Bridge:
                 result = mt5_linux.order_market(
                     side, float(lot), float(sl), float(tp), symbol=settings.symbol, comment=comment
                 )
+                result["mode"] = "mt5"
+                result["execution"] = "mt5_linux"
                 if result.get("ok") or self.execution == "mt5_linux":
                     return result
 
@@ -863,7 +873,9 @@ class Bridge:
             mt5_linux.refresh()
             return bool(mt5_linux.configured)
         if self.execution == "windows_bridge" and self.remote_user_id:
-            return True
+            from goldbot.mt5.remote_hub import hub
+
+            return bool(hub.is_online(self.remote_user_id))
         if self._mt5 is not None:
             return True
         return False
@@ -883,29 +895,58 @@ class Bridge:
             if ctrader.ready and pid not in (None, "", 0, "0"):
                 result = ctrader.close_position(pid, volume=volume)
                 result.setdefault("execution", "ctrader")
+                result.setdefault("mode", "mt5")
                 return result
-            return {"ok": False, "error": "no_position_id", "execution": "ctrader"}
+            return {"ok": False, "error": "no_position_id", "execution": "ctrader", "mode": "mt5"}
         if self.mode == "mt5" and self.metaapi_account_id and self.execution == "metaapi":
             from goldbot.mt5.metaapi_cloud import metaapi
 
             if metaapi.configured and pid not in (None, "", 0, "0"):
-                return metaapi.close_position(
+                result = metaapi.close_position(
                     self.metaapi_account_id,
                     pid,
                     region=self.metaapi_region or None,
                     volume=volume,
                 )
-            return {"ok": False, "error": "no_position_id", "execution": "metaapi"}
+                result.setdefault("execution", "metaapi")
+                result.setdefault("mode", "mt5")
+                return result
+            return {"ok": False, "error": "no_position_id", "execution": "metaapi", "mode": "mt5"}
         if self.mode == "mt5" and self.execution == "mt5_linux":
             from goldbot.mt5.mt5_linux import mt5_linux
 
             mt5_linux.refresh()
             if mt5_linux.configured and hasattr(mt5_linux, "close_position"):
-                return mt5_linux.close_position(pid)
-            return {"ok": False, "error": "linux_close_unsupported", "execution": "mt5_linux"}
+                result = mt5_linux.close_position(pid)
+                result.setdefault("execution", "mt5_linux")
+                result.setdefault("mode", "mt5")
+                return result
+            return {"ok": False, "error": "linux_close_unsupported", "execution": "mt5_linux", "mode": "mt5"}
+        if self.mode == "mt5" and self.execution == "windows_bridge" and self.remote_user_id:
+            from goldbot.mt5.remote_hub import hub
+
+            if pid in (None, "", 0, "0"):
+                return {"ok": False, "error": "no_position_id", "execution": "windows_bridge", "mode": "mt5"}
+            enq = hub.enqueue(
+                self.remote_user_id,
+                "close_position",
+                {"position_id": pid, "ticket": ticket, "volume": volume},
+            )
+            if not enq.get("ok"):
+                return {
+                    "ok": False,
+                    "error": enq.get("error"),
+                    "detail": enq.get("detail"),
+                    "execution": "windows_bridge",
+                    "mode": "mt5",
+                }
+            result = hub.wait_result(int(enq["command_id"]), timeout=15.0)
+            result.setdefault("execution", "windows_bridge")
+            result.setdefault("mode", "mt5")
+            return result
         if self.mode == "paper":
             return {"ok": True, "mode": "paper", "execution": "paper"}
-        return {"ok": False, "error": "no_live_executor", "execution": self.execution or "none"}
+        return {"ok": False, "error": "no_live_executor", "execution": self.execution or "none", "mode": self.mode}
 
     def modify_position_sl_tp(self, position_id: str | int, sl: float | None = None, tp: float | None = None) -> dict:
         if self.mode == "mt5" and self.metaapi_account_id and self.execution == "metaapi":

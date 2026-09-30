@@ -190,6 +190,10 @@ class TradingDesk:
         action = sig.get("action")
         if action not in {"buy", "sell"}:
             return False
+        # Never place live-looking entries unless a real broker path is connected
+        if settings.mode == "mt5" and not (bridge.is_live_execution() and self.account.connected):
+            store.log_event("entry_skip", {"reason": "not_live", "action": action})
+            return False
         if settings.require_pulse_confirm and not fast_pulse.confirms(action, pulse):
             return False
         # anti-chase: price already ran away from planned entry

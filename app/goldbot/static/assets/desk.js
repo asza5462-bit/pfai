@@ -293,7 +293,7 @@
     $("readyPill").textContent = ready.summary_ar || ready.grade || "—";
     $("readyPill").classList.toggle("on", !!(ready.broker_mt5_ready || ready.exness_mt5_ready));
     $("statePill").textContent = data.state || "—";
-    const live = !!(ready.live_execution || ready.broker_mt5_ready || ready.exness_mt5_ready || (acc.mode === "mt5" && acc.connected && acc.server && acc.server !== "AURUM-PAPER"));
+    const live = !!(ready.live_execution || ready.broker_mt5_ready || ready.exness_mt5_ready);
     $("modePill").textContent = live ? `FP Markets حي · ${acc.server || "MT5"}` : (acc.mode === "paper" ? "ورقي (تجربة)" : (acc.mode || "—"));
     $("modePill").classList.toggle("on", live);
     $("symbolPill").textContent = data.symbol || "XAUUSD";
