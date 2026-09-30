@@ -356,6 +356,80 @@
     };
   }
 
+  async function loadMetaAccounts() {
+    const list = $("metaAccountsList");
+    if (!list) return;
+    list.innerHTML = "<li>جاري التحميل…</li>";
+    try {
+      const j = await api("/api/cloud/accounts");
+      const rows = j.accounts || [];
+      if (!rows.length) {
+        list.innerHTML = "<li>لا حسابات بعد — أضف حساب MT5 من لوحة MetaApi وانتظر Connected</li>";
+        return;
+      }
+      list.innerHTML = "";
+      rows.forEach((a) => {
+        const li = document.createElement("li");
+        const ready = !!a.ready;
+        li.innerHTML = `<strong class="${ready ? "ok" : ""}">${ready ? "Connected" : (a.connectionStatus || a.state || "—")}</strong> · ${a.login || "—"} · ${a.server || "—"}<span>${a.id}</span>`;
+        const btn = document.createElement("button");
+        btn.type = "button";
+        btn.className = ready ? "primary" : "ghost";
+        btn.textContent = ready ? "ربط" : "تجربة الربط";
+        btn.style.marginTop = "0.35rem";
+        btn.onclick = () => bindMetaAccount(a.id, a.region);
+        li.appendChild(btn);
+        list.appendChild(li);
+      });
+      if ($("connectMsg") && j.hint_ar) {
+        $("connectMsg").textContent = `${j.ready_count || 0} جاهز من ${j.count} — ${j.hint_ar}`;
+        $("connectMsg").classList.toggle("ok", (j.ready_count || 0) > 0);
+      }
+    } catch (e) {
+      list.innerHTML = `<li>${e.message || "تعذّر جلب الحسابات"}</li>`;
+    }
+  }
+
+  async function bindMetaAccount(accountId, region) {
+    const id = (accountId || ($("cloudAccountId") && $("cloudAccountId").value) || "").trim();
+    if (id.length < 8) {
+      $("connectMsg").textContent = "الصق Account ID من لوحة MetaApi أولاً";
+      $("connectMsg").classList.remove("ok");
+      return;
+    }
+    if ($("cloudAccountId")) $("cloudAccountId").value = id;
+    $("connectMsg").textContent = "جاري ربط الحساب الجاهز من MetaApi…";
+    $("connectMsg").classList.remove("ok");
+    try {
+      const j = await api("/api/cloud/bind", {
+        method: "POST",
+        body: JSON.stringify({ account_id: id, region: region || null }),
+      });
+      setBridgeUI(j.bridge || j.cloud, null, null, true);
+      if (j.account) {
+        $("equity").textContent = Number(j.account.equity || 0).toFixed(2);
+        $("modePill").textContent = j.account.mode || "mt5";
+      }
+      const live = !!(j.live_execution || (j.account && j.account.connected));
+      $("connectMsg").textContent = j.message || (live ? "تم الربط الحقيقي" : "تم الحفظ");
+      $("connectMsg").classList.toggle("ok", live);
+      if ($("cloudAccountLine")) {
+        $("cloudAccountLine").textContent = `معرّف الحساب: ${(j.cloud && j.cloud.account_id) || id}`;
+      }
+      if (live && j.started && j.started.scan) render(j.started.scan);
+    } catch (e) {
+      $("connectMsg").textContent = e.message || "تعذّر ربط الحساب";
+      $("connectMsg").classList.remove("ok");
+    }
+  }
+
+  if ($("btnBindAccount")) {
+    $("btnBindAccount").onclick = () => bindMetaAccount();
+  }
+  if ($("btnListAccounts")) {
+    $("btnListAccounts").onclick = () => loadMetaAccounts();
+  }
+
   if ($("btnSaveExnessCreds")) {
     $("btnSaveExnessCreds").onclick = async () => {
       const pass = ($("cloudMt5Pass") && $("cloudMt5Pass").value || "").trim();
@@ -670,6 +744,9 @@
       ["trade", "connect", "history"].forEach((name) => {
         $(`tab-${name}`).classList.toggle("hidden", btn.dataset.tab !== name);
       });
+      if (btn.dataset.tab === "connect") {
+        loadMetaAccounts().catch(() => {});
+      }
     };
   });
 

@@ -307,6 +307,74 @@ def test_arabic_validation_failed_message():
     assert "Exness-MT5Real32" in ar
 
 
+def test_prepare_bound_account_ready(monkeypatch):
+    monkeypatch.setattr("time.sleep", lambda *_: None)
+    fake = FakeMetaHttp()
+    fake.accounts[FAKE_ACCOUNT_ID] = {
+        "id": FAKE_ACCOUNT_ID,
+        "login": "55667788",
+        "server": "Exness-MT5Real32",
+        "state": "DEPLOYED",
+        "connectionStatus": "CONNECTED",
+        "region": "new-york",
+    }
+    client = MetaApiCloud(token="test-token", region="new-york", http=fake)
+    out = client.prepare_bound_account(FAKE_ACCOUNT_ID, wait=True)
+    assert out["ok"] is True
+    assert out["bound"] is True
+    assert out["connected"] is True
+    assert out["account_id"] == FAKE_ACCOUNT_ID
+    assert int(out["login"]) == 55667788
+
+
+def test_cloud_bind_endpoint(tmp_path, monkeypatch):
+    monkeypatch.setenv("AURUM_COOKIE_SECURE", "0")
+    monkeypatch.setenv("METAAPI_TOKEN", "unit-test-token")
+    monkeypatch.setattr("time.sleep", lambda *_: None)
+    from goldbot.config import settings
+    from goldbot.storage.state import DeskStore
+
+    settings.metaapi_token = "unit-test-token"
+    settings.prefer_metaapi = True
+    fake = FakeMetaHttp()
+    fake.accounts[FAKE_ACCOUNT_ID] = {
+        "id": FAKE_ACCOUNT_ID,
+        "login": "55667788",
+        "server": "Exness-MT5Real32",
+        "state": "DEPLOYED",
+        "connectionStatus": "CONNECTED",
+        "region": "new-york",
+    }
+    cloud = MetaApiCloud(token="unit-test-token", region="new-york", http=fake)
+    monkeypatch.setattr("goldbot.api.metaapi", cloud)
+    monkeypatch.setattr("goldbot.mt5.metaapi_cloud.metaapi", cloud)
+    users = UserAuth(tmp_path / "users.sqlite3")
+    store = DeskStore(tmp_path / "desk.sqlite3")
+    monkeypatch.setattr("goldbot.api.auth", users)
+    monkeypatch.setattr("goldbot.api.store", store)
+    monkeypatch.setattr("goldbot.storage.state.store", store)
+    monkeypatch.setattr("goldbot.auth.users.auth", users)
+    bridge.metaapi_account_id = ""
+    bridge.execution = ""
+    bridge.mode = "paper"
+    client = TestClient(app)
+    reg = client.post(
+        "/api/auth/register",
+        json={"username": "binder1", "password": "password12", "password_confirm": "password12"},
+    )
+    assert reg.status_code == 200
+    listed = client.get("/api/cloud/accounts")
+    assert listed.status_code == 200
+    assert listed.json()["ready_count"] >= 1
+    bound = client.post("/api/cloud/bind", json={"account_id": FAKE_ACCOUNT_ID})
+    assert bound.status_code == 200, bound.text
+    body = bound.json()
+    assert body["ok"] is True
+    assert body["bound"] is True
+    assert body["live_execution"] is True
+    assert body["cloud"]["account_id"] == FAKE_ACCOUNT_ID
+
+
 def test_force_new_deletes_stuck_account_then_recreates(monkeypatch):
     monkeypatch.setattr("time.sleep", lambda *_: None)
     fake = FakeMetaHttp()

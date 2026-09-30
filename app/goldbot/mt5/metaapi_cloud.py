@@ -756,6 +756,92 @@ class MetaApiCloud:
                 return {"ok": True, "deleted": False, "missing": True, "id": aid}
             raise
 
+    def prepare_bound_account(
+        self,
+        account_id: str,
+        *,
+        wait: bool = True,
+        wait_timeout: float = 45.0,
+        deploy_wait: float = 40.0,
+    ) -> dict:
+        """Attach to an EXISTING MetaApi terminal (created in MetaApi UI) — most reliable path.
+
+        Does not create/validate broker credentials via Provisioning create API.
+        Requires the account to already exist under the current token.
+        """
+        if not self.configured:
+            raise MetaApiError("لا يوجد METAAPI_TOKEN", code="NO_TOKEN", status=503)
+        aid = normalize_account_id(account_id)
+        if not aid:
+            raise MetaApiError("معرّف حساب MetaApi غير صالح", code="E_BAD_ACCOUNT_ID", status=400)
+        try:
+            acc = self.get_account(aid)
+        except MetaApiError as e:
+            raise MetaApiError(
+                "الحساب غير موجود تحت هذا التوكن — انسخ Account ID من لوحة MetaApi لنفس التوكن.",
+                code=e.code or "NotFoundError",
+                status=404,
+                details=e.details,
+            ) from e
+        if acc.get("region"):
+            self.region = str(acc["region"]).strip()
+        state = str(acc.get("state") or "").upper()
+        status = str(acc.get("connectionStatus") or "").upper()
+        if state != "DEPLOYED" or status in {"DISCONNECTED", "DEPLOYING", ""}:
+            try:
+                acc = self.redeploy(aid, wait=deploy_wait)
+            except Exception as e:
+                log.warning("bind redeploy: %s", e)
+                try:
+                    acc = self.ensure_deployed(aid, max_wait=deploy_wait)
+                except Exception:
+                    pass
+        connected = False
+        if wait:
+            try:
+                acc = self.wait_connected(aid, timeout=wait_timeout)
+            except MetaApiError as e:
+                # Surface credential problems clearly; otherwise continue to snapshot check
+                if is_validation_failed_error(e):
+                    raise MetaApiError(
+                        e.message,
+                        code="E_VALIDATION_FAILED",
+                        status=400,
+                        details=e.details,
+                    ) from e
+                acc = self.get_account(aid)
+            status = str(acc.get("connectionStatus") or "").upper()
+            connected = status == "CONNECTED"
+        # Final truth: can we read account-information?
+        snap = self.snapshot(aid, region=self.region)
+        if snap.get("connected"):
+            connected = True
+        if not connected and not snap.get("connected"):
+            detail = self._connection_error_text(acc) or snap.get("detail") or "الحساب غير متصل بعد"
+            if is_validation_failed_error(detail):
+                raise MetaApiError(str(detail), code="E_VALIDATION_FAILED", status=400, details=acc)
+            raise MetaApiError(
+                "الحساب موجود لكن غير متصل بـ Exness بعد. من لوحة MetaApi اضغط Deploy/Repair "
+                "حتى تصبح الحالة Connected، ثم اربط المعرّف هنا.",
+                code="E_NOT_CONNECTED",
+                status=400,
+                details=acc,
+            )
+        return {
+            "ok": True,
+            "account_id": aid,
+            "region": str(acc.get("region") or self.region),
+            "state": acc.get("state"),
+            "connection_status": acc.get("connectionStatus") or "CONNECTED",
+            "connected": True,
+            "login": snap.get("login") or acc.get("login"),
+            "server": snap.get("server") or acc.get("server"),
+            "balance": snap.get("balance"),
+            "equity": snap.get("equity"),
+            "bound": True,
+            "raw": acc,
+        }
+
     def purge_accounts_for_login(self, login: str, *, also_ids: list[str] | None = None) -> list[str]:
         """Delete every MetaApi terminal bound to this Exness login (+ optional ids)."""
         login_s = str(login).strip()

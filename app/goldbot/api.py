@@ -52,6 +52,9 @@ def _client_ip(request: Request | None) -> str:
 
 
 def _rate_or_429(key: str, *, limit: int = 8, window_sec: float = 60.0) -> None:
+    # Disable under pytest / explicit opt-out so unit tests don't collide on shared limiter
+    if os.getenv("PYTEST_CURRENT_TEST") or os.getenv("AURUM_DISABLE_RATE_LIMIT") == "1":
+        return
     ok, retry = limiter.allow(key, limit=limit, window_sec=window_sec)
     if not ok:
         raise HTTPException(
@@ -502,8 +505,11 @@ async def setup_next():
         step = "ready"
         next_ar = "الحساب متصل — اضغط «ابدأ التداول» من المكتب."
     elif metaapi.configured:
-        step = "exness_login"
-        next_ar = "التوكن محفوظ. أدخل رقم Exness + كلمة مرور التداول + السيرفر (مثل Exness-MT5Real32) ثم ارتباط."
+        step = "bind_metaapi_account"
+        next_ar = (
+            "التوكن محفوظ. الطريقة المضمونة: من لوحة MetaApi أضف حساب Exness وانتظر Connected، "
+            "ثم من تبويب الربط الصق Account ID واضغط «ربط هذا الحساب»."
+        )
     elif mt5_linux.configured:
         step = "exness_vnc_or_login"
         next_ar = "منفّذ Linux مضبوط. سجّل Exness عبر VNC إن لزم، ثم ادخل من شاشة MT5."
@@ -1367,6 +1373,142 @@ async def cloud_save_token(
 
 class CloudReconnectBody(BaseModel):
     force_new: bool = False  # drop saved MetaApi account id and recreate
+
+
+class CloudBindBody(BaseModel):
+    """Bind an already-CONNECTED MetaApi account (created in MetaApi dashboard)."""
+
+    account_id: str = Field(min_length=8)
+    region: str | None = None
+
+
+@app.get("/api/cloud/accounts")
+async def cloud_list_accounts(
+    authorization: str | None = Header(default=None),
+    aurum_session: str | None = Cookie(default=None, alias=SESSION_COOKIE),
+):
+    """List MetaApi terminals under the saved token — for the guaranteed bind path."""
+    require_user(authorization, aurum_session)
+    metaapi.refresh_token()
+    if not metaapi.configured:
+        raise HTTPException(503, "الصق توكن MetaApi أولاً")
+    try:
+        rows = metaapi.list_accounts()
+    except MetaApiError as e:
+        raise HTTPException(400, arabic_metaapi_error(e))
+    out = []
+    for acc in rows:
+        if not isinstance(acc, dict):
+            continue
+        aid = normalize_account_id(str(acc.get("id") or acc.get("accountId") or ""))
+        if not aid:
+            continue
+        status = str(acc.get("connectionStatus") or "").upper()
+        state = str(acc.get("state") or "").upper()
+        out.append(
+            {
+                "id": aid,
+                "login": acc.get("login"),
+                "server": acc.get("server"),
+                "name": acc.get("name"),
+                "region": acc.get("region") or settings.metaapi_region,
+                "state": state,
+                "connectionStatus": status,
+                "ready": state == "DEPLOYED" and status == "CONNECTED",
+            }
+        )
+    out.sort(key=lambda r: (not r["ready"], str(r.get("login") or "")))
+    return {
+        "ok": True,
+        "accounts": out,
+        "count": len(out),
+        "ready_count": sum(1 for a in out if a["ready"]),
+        "dashboard_url": "https://app.metaapi.cloud/",
+        "hint_ar": (
+            "الطريقة المضمونة: من لوحة MetaApi أضف حساب MT5/Exness وانتظر Connected، "
+            "ثم الصق Account ID هنا أو اختره من القائمة واضغط ربط."
+        ),
+    }
+
+
+@app.post("/api/cloud/bind")
+async def cloud_bind_account(
+    body: CloudBindBody,
+    authorization: str | None = Header(default=None),
+    aurum_session: str | None = Cookie(default=None, alias=SESSION_COOKIE),
+):
+    """Guaranteed path: bind a MetaApi account that is already working in their dashboard."""
+    user = require_user(authorization, aurum_session)
+    _rate_or_429(f"bind:{user['id']}", limit=8, window_sec=120)
+    metaapi.refresh_token()
+    if not metaapi.configured:
+        raise HTTPException(503, "الصق توكن MetaApi أولاً")
+    if body.region:
+        settings.metaapi_region = body.region.strip()
+        metaapi.region = settings.metaapi_region
+    try:
+        cloud = await asyncio.to_thread(
+            metaapi.prepare_bound_account,
+            body.account_id,
+            wait=True,
+            wait_timeout=50.0,
+            deploy_wait=35.0,
+        )
+    except MetaApiError as e:
+        ar = arabic_metaapi_error(e)
+        log.error("cloud bind failed code=%s msg=%s", e.code, e.message)
+        store.set_kv(
+            "metaapi_last_error",
+            {"error": ar, "raw": e.message, "code": e.code, "ts": time.time()},
+        )
+        _set_provision_state("error", ar, code=e.code)
+        raise HTTPException(400, {"error": ar, "error_code": e.code, "detail": ar})
+
+    _apply_cloud_binding(user["id"], cloud)
+    # Sync Exness login/server from live account when available
+    patch: dict[str, Any] = {"mode": "mt5", "execution": "metaapi"}
+    if cloud.get("login"):
+        patch["mt5_login"] = str(cloud["login"])
+        settings.mt5_login = int(cloud["login"]) if str(cloud["login"]).isdigit() else settings.mt5_login
+    if cloud.get("server"):
+        patch["mt5_server"] = normalize_exness_server(str(cloud["server"])) or str(cloud["server"])
+        settings.mt5_server = patch["mt5_server"]
+    auth.update_settings(user["id"], patch)
+    settings.mode = "mt5"
+    bridge.bind_remote_user(user["id"])
+    desk.account = bridge.connect()
+    started = None
+    if desk.account.connected:
+        _set_provision_state("ok", "متصل بسحابة Exness عبر حساب MetaApi جاهز", connected=True, account_id=cloud["account_id"])
+        if desk.risk.state.halted:
+            desk.risk.reset_day(desk.account.equity or settings.paper_balance, note="bind_reset")
+        started = desk.start_desk()
+    else:
+        _set_provision_state("pending", "الحساب مربوط — بانتظار اكتمال اتصال الوسيط", account_id=cloud["account_id"])
+    store.log_event(
+        "metaapi_bound",
+        {
+            "account_id": cloud["account_id"],
+            "login": cloud.get("login"),
+            "server": cloud.get("server"),
+            "connected": desk.account.connected,
+        },
+    )
+    return {
+        "ok": True,
+        "bound": True,
+        "cloud": cloud,
+        "bridge": _cloud_status_for_user(user["id"]),
+        "account": desk.account.to_dict(),
+        "user": auth.public_user(user["id"]),
+        "started": started,
+        "live_execution": bool(desk.account.connected and bridge.is_live_execution()),
+        "message": (
+            f"تم الربط الحقيقي — Exness {cloud.get('login') or ''} على {cloud.get('server') or 'MetaApi'} · الرصيد {float(cloud.get('equity') or desk.account.equity or 0):.2f}"
+            if desk.account.connected
+            else "تم حفظ معرّف الحساب — أكمل Deploy في لوحة MetaApi حتى Connected ثم حدّث"
+        ),
+    }
 
 
 class CloudCredentialsBody(BaseModel):

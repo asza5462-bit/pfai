@@ -18,9 +18,9 @@
       <div class="brand-lock">AURUM</div>
       <p class="auth-tag">Exness مباشر من التطبيق · بدون Windows</p>
       <ol id="setupSteps" class="setup-steps">
-        <li><strong>١</strong> افتح <a href="https://app.metaapi.cloud/api-access/generate-token" target="_blank" rel="noopener">توليد توكن MetaApi</a> وانسخه</li>
-        <li><strong>٢</strong> الصق التوكن بالأسفل + بيانات Exness (السيرفر مثل <code>Exness-MT5Real32</code>)</li>
-        <li><strong>٣</strong> اضغط «ارتباط سحابي» وانتظر «متصل»</li>
+        <li><strong>١</strong> توكن من <a href="https://app.metaapi.cloud/api-access/generate-token" target="_blank" rel="noopener">MetaApi</a> + الصقه هنا</li>
+        <li><strong>٢</strong> الأضمن: من <a href="https://app.metaapi.cloud/" target="_blank" rel="noopener">لوحة MetaApi</a> أضف حساب Exness وانتظر <code>Connected</code></li>
+        <li><strong>٣</strong> بعد الدخول اربط <code>Account ID</code> من تبويب الربط</li>
       </ol>
       <p id="setupNext" class="setup-next">الخطوة التالية: احصل على توكن MetaApi</p>
 
@@ -136,19 +136,28 @@
         <p id="metaConfiguredLine" class="auth-note">توكن MetaApi: —</p>
         <p id="linuxConfiguredLine" class="auth-note">منفّذ Linux: —</p>
 
-        <h2>المسار 1 — MetaApi سحابي</h2>
+        <h2>الطريقة المضمونة — ربط حساب جاهز من لوحة MetaApi</h2>
         <ol class="steps">
-          <li>احصل على توكن مجاني من <a href="https://app.metaapi.cloud/api-access/generate-token" target="_blank" rel="noopener">توليد التوكن</a>.</li>
-          <li>الصقه بالأسفل واحفظه.</li>
-          <li>أدخل حساب Exness من شاشة الدخول.</li>
+          <li>افتح <a href="https://app.metaapi.cloud/" target="_blank" rel="noopener">لوحة MetaApi</a> بنفس التوكن.</li>
+          <li>Add account → MT5 → أدخل Exness (كلمة <strong>Master/Trading</strong> + السيرفر حرفياً).</li>
+          <li>انتظر حتى تصبح الحالة <strong>Connected</strong> (أخضر) داخل MetaApi.</li>
+          <li>انسخ Account ID والصقه بالأسفل، أو اختره من القائمة ثم «ربط هذا الحساب».</li>
         </ol>
         <label>توكن MetaApi
           <input id="cloudMetaToken" type="password" placeholder="الصق التوكن هنا" autocomplete="off" />
         </label>
         <button type="button" id="btnSaveMetaToken" class="primary">حفظ توكن MetaApi</button>
+        <label>معرّف حساب MetaApi (Account ID)
+          <input id="cloudAccountId" type="text" placeholder="مثال: b68bf70c-c3c1-40d5-b4c5-f3855561d3b7" autocomplete="off" />
+        </label>
+        <div class="cta" style="margin-top:0.5rem">
+          <button type="button" id="btnBindAccount" class="primary">ربط هذا الحساب</button>
+          <button type="button" id="btnListAccounts" class="ghost">عرض حساباتي في MetaApi</button>
+        </div>
+        <ul id="metaAccountsList" class="trades" style="margin-top:0.75rem"></ul>
 
-        <h2>تصحيح بيانات Exness (عند Validation failed)</h2>
-        <p class="auth-note">إن ظهر رفض التحقق: أدخل <strong>كلمة مرور التداول Master</strong> (ليس Investor) والسيرفر حرفياً ثم احفظ — يُحذف الحساب السحابي العالق ويُنشأ من جديد.</p>
+        <h2>مسار بديل — تصحيح كلمة المرور ثم إنشاء تلقائي</h2>
+        <p class="auth-note">إن فشل الإنشاء التلقائي سابقاً: صحّح كلمة مرور التداول ثم احفظ. الأضمن يبقى الربط من لوحة MetaApi أعلاه.</p>
         <label>كلمة مرور التداول
           <input id="cloudMt5Pass" type="password" placeholder="كلمة مرور التداول من Exness" autocomplete="off" />
         </label>
@@ -157,7 +166,7 @@
         </label>
         <button type="button" id="btnSaveExnessCreds" class="primary">حفظ وتصحيح الربط</button>
 
-        <h2>المسار 2 — MT5 على Linux Docker</h2>
+        <h2>مسار 3 — MT5 على Linux Docker</h2>
         <ol class="steps">
           <li>على أي سيرفر Linux: شغّل <code>deploy/mt5-linux</code> عبر Docker Compose.</li>
           <li>افتح المنفذ 3000 وسجّل Exness مرة واحدة عبر VNC.</li>
