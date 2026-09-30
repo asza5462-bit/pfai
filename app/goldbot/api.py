@@ -355,26 +355,34 @@ async def lifespan(_: FastAPI):
     except Exception:
         pass
     desk.armed = False
+    # Re-bind cTrader on boot when OAuth+account already saved (survives redeploy if disk persists)
+    try:
+        if settings.prefer_ctrader and ctrader.ready:
+            bridge.bind_ctrader(ctrader.account_id)
+            bridge.mode = "mt5"
+            settings.mode = "mt5"
+            desk.account = bridge.connect()
+            log.info(
+                "cTrader rebound on boot account=%s connected=%s",
+                ctrader.account_id,
+                getattr(desk.account, "connected", False),
+            )
+    except Exception as e:
+        log.warning("ctrader boot rebind skipped: %s", e)
     if auth.using_default_secret:
         log.warning(
             "AURUM_AUTH_SECRET is default — set a strong secret in Render env before production use"
-        )
-    if not metaapi.configured:
-        log.warning(
-            "METAAPI_TOKEN missing — set it in Render Environment so cloud link survives redeploys "
-            "(ephemeral disk wipes SQLite-stored tokens)"
         )
     if str(settings.data_dir).startswith("/tmp") or "ephemeral" in str(settings.data_dir).lower():
         log.warning("AURUM_DATA_DIR looks ephemeral: %s", settings.data_dir)
     desk.start_background()
     log.info(
-        "AURUM desk online v%s mode=%s symbol=%s metaapi=%s ctrader=%s mt5_linux=%s data=%s",
+        "AURUM desk online v%s mode=%s symbol=%s primary=ctrader ctrader=%s ready=%s data=%s",
         __version__,
         settings.mode,
         settings.symbol,
-        metaapi.configured,
         ctrader.configured,
-        mt5_linux.configured,
+        ctrader.ready,
         settings.data_dir,
     )
     yield
@@ -1101,7 +1109,12 @@ async def start_desk(authorization: str | None = Header(default=None), aurum_ses
                 or "cTrader غير متصل — احفظ التطبيق وفوّض واختر حساب FP Markets cTrader.",
                 "bridge": _cloud_status_for_user(user["id"]),
             }
-    elif secrets.get("mode") == "mt5" and secrets.get("login"):
+    elif settings.prefer_ctrader and ctrader.ready:
+        # Prefer cTrader even if old MT5 secrets linger
+        settings.mode = "mt5"
+        bridge.bind_ctrader(ctrader.account_id)
+        desk.account = await asyncio.to_thread(bridge.connect)
+    elif secrets.get("mode") == "mt5" and secrets.get("login") and settings.prefer_metaapi:
         settings.mode = "mt5"
         settings.mt5_login = secrets["login"]
         settings.mt5_password = secrets["password"]
@@ -1116,7 +1129,6 @@ async def start_desk(authorization: str | None = Header(default=None), aurum_ses
         if raw_cloud_id:
             bridge.bind_metaapi(raw_cloud_id, secrets.get("metaapi_region"))
         desk.account = bridge.connect()
-        # Auto-heal: stale MetaApi id cleared by connect → fast re-provision
         if not desk.account.connected and metaapi.configured and secrets.get("password"):
             try:
                 cloud = await _provision_cloud_async(
@@ -1158,14 +1170,14 @@ async def start_desk(authorization: str | None = Header(default=None), aurum_ses
             "message": "التداول متوقف لحد الخسارة اليومي. اضغط «إعادة تعيين المخاطر» للمتابعة.",
             "risk": desk.risk.state.to_dict(),
         }
-    # Hard gate: MT5 users cannot arm until MetaApi/Linux is truly connected
+    # Hard gate: live users cannot arm until cTrader/FP Markets is truly connected
     if settings.mode == "mt5" and not (bridge.is_live_execution() and desk.account.connected):
         return {
             "ok": False,
             "error": "not_live",
             "message": (
-                "الحساب غير متصل بسحابة FP Markets بعد — لن نبدأ تداولاً وهمياً. "
-                "من تبويب الربط اضغط «إعادة ربط كامل» وانتظر الرصيد الحقيقي."
+                "حساب FP Markets عبر cTrader غير متصل بعد — لن نبدأ تداولاً وهمياً. "
+                "من تبويب الربط: احفظ التطبيق → تفويض → اختر الحساب ثم أعد «ابدأ التداول»."
             ),
             "bridge": _cloud_status_for_user(user["id"]),
             "account": desk.account.to_dict(),
@@ -1207,7 +1219,7 @@ async def auto_trade(body: AutoTradeBody, authorization: str | None = Header(def
             desk.armed = False
             raise HTTPException(
                 409,
-                "لا يمكن تفعيل التداول التلقائي قبل اتصال FP Markets الحقيقي عبر MetaApi.",
+                "لا يمكن تفعيل التداول التلقائي قبل اتصال FP Markets الحقيقي عبر cTrader.",
             )
     desk.set_auto_trade(body.enabled)
     desk.armed = bool(body.enabled)

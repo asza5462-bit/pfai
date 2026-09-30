@@ -35,8 +35,11 @@ PT_TRADER_RES = 2122
 PT_RECONCILE_REQ = 2124
 PT_RECONCILE_RES = 2125
 PT_EXECUTION_EVENT = 2126
-PT_SPOT_EVENT = 2120
 PT_SUBSCRIBE_SPOTS_REQ = 2127
+PT_SUBSCRIBE_SPOTS_RES = 2128
+PT_SPOT_EVENT = 2131  # ProtoOASpotEvent (legacy docs sometimes cited 2120)
+PT_GET_TRENDBARS_REQ = 2137
+PT_GET_TRENDBARS_RES = 2138
 PT_ERROR_RES = 2142
 PT_GET_ACCOUNTS_REQ = 2149
 PT_GET_ACCOUNTS_RES = 2150
@@ -45,6 +48,51 @@ PT_HEARTBEAT = 51
 ORDER_TYPE_MARKET = 1
 TRADE_SIDE_BUY = 1
 TRADE_SIDE_SELL = 2
+EXEC_TYPE_FILLED = 2
+EXEC_TYPE_PARTIAL_FILL = 9
+
+# ProtoOATrendbarPeriod
+PERIOD_MAP = {
+    "M1": 1,
+    "M2": 2,
+    "M3": 3,
+    "M4": 4,
+    "M5": 5,
+    "M10": 6,
+    "M15": 7,
+    "M30": 8,
+    "H1": 9,
+    "H4": 10,
+    "H12": 11,
+    "D1": 12,
+    "W1": 13,
+    "MN1": 14,
+}
+
+PRICE_SCALE = 100_000.0
+
+
+def _decode_price(raw: Any) -> float:
+    """Decode Spotware absolute/delta prices (often 1/100000 units)."""
+    try:
+        x = float(raw or 0)
+    except (TypeError, ValueError):
+        return 0.0
+    if x == 0:
+        return 0.0
+    # Encoded absolute prices for gold/FX are huge integers
+    if abs(x) >= 50_000:
+        return x / PRICE_SCALE
+    return x
+
+
+def _trendbar_ohlc(bar: dict) -> tuple[float, float, float, float]:
+    low_raw = float(bar.get("low") or 0)
+    o = (low_raw + float(bar.get("deltaOpen") or 0)) / PRICE_SCALE
+    h = (low_raw + float(bar.get("deltaHigh") or 0)) / PRICE_SCALE
+    c = (low_raw + float(bar.get("deltaClose") or 0)) / PRICE_SCALE
+    low = low_raw / PRICE_SCALE
+    return o, h, low, c
 
 AUTH_URI = "https://connect.spotware.com/apps/auth"
 TOKEN_URI = "https://connect.spotware.com/apps/token"
@@ -210,11 +258,17 @@ class CTraderSession:
                 except Exception:
                     pass
                 continue
-            if ptype == PT_SPOT_EVENT:
+            if ptype in {PT_SPOT_EVENT, 2120}:  # 2120 = legacy mislabel tolerance
                 payload = msg.get("payload") or {}
                 sid = int(payload.get("symbolId") or 0)
                 if sid:
-                    self._last_spots[sid] = payload
+                    # Normalize bid/ask to human prices for the desk
+                    norm = dict(payload)
+                    if "bid" in payload:
+                        norm["bid"] = _decode_price(payload.get("bid"))
+                    if "ask" in payload:
+                        norm["ask"] = _decode_price(payload.get("ask"))
+                    self._last_spots[sid] = norm
                 continue
             mid = str(msg.get("clientMsgId") or "")
             with self._lock:
@@ -343,12 +397,111 @@ class CTraderSession:
             self._rpc(
                 PT_SUBSCRIBE_SPOTS_REQ,
                 {"ctidTraderAccountId": self.account_id, "symbolId": [int(symbol_id)]},
-                expect=set(),  # response type varies; ignore strict expect
+                expect=set(),
                 timeout=5,
             )
         except CTraderError:
             # best-effort — spots may still arrive
             pass
+
+    def _volume_from_lot(self, sym: dict, lot: float) -> int:
+        """Spotware volume = lots * symbol.lotSize (lotSize in 0.01 units)."""
+        lot_size = int(sym.get("lotSize") or 0)
+        if lot_size > 0:
+            return max(1, int(round(float(lot) * lot_size)))
+        # Conservative fallback: 1.00 lot → 100 units → volume 10000 (common FX)
+        return max(1, int(round(float(lot) * 10_000)))
+
+    def trendbars(self, symbol: str, timeframe: str = "M15", count: int = 200) -> list[dict]:
+        if not self._account_ok:
+            raise CTraderError("account not authorized", code="NO_ACCOUNT")
+        sym = self.resolve_symbol(symbol)
+        symbol_id = int(sym.get("symbolId") or 0)
+        period = PERIOD_MAP.get(str(timeframe or "M15").upper(), 7)
+        to_ts = int(time.time() * 1000)
+        payload = self._rpc(
+            PT_GET_TRENDBARS_REQ,
+            {
+                "ctidTraderAccountId": self.account_id,
+                "symbolId": symbol_id,
+                "period": period,
+                "count": int(max(10, min(count, 500))),
+                "toTimestamp": to_ts,
+            },
+            expect={PT_GET_TRENDBARS_RES},
+            timeout=25,
+        )
+        out: list[dict] = []
+        for bar in payload.get("trendbar") or []:
+            if not isinstance(bar, dict):
+                continue
+            mins = int(bar.get("utcTimestampInMinutes") or 0)
+            if mins <= 0:
+                continue
+            o, h, low, c = _trendbar_ohlc(bar)
+            if h <= 0 or low <= 0:
+                continue
+            out.append(
+                {
+                    "time": mins * 60,
+                    "open": o,
+                    "high": h,
+                    "low": low,
+                    "close": c,
+                    "volume": float(bar.get("volume") or 0),
+                }
+            )
+        out.sort(key=lambda x: x["time"])
+        return out
+
+    def amend_position_sl_tp(self, position_id: int | str, sl: float | None = None, tp: float | None = None) -> dict:
+        if not self._account_ok:
+            raise CTraderError("account not authorized", code="NO_ACCOUNT")
+        payload: dict[str, Any] = {
+            "ctidTraderAccountId": self.account_id,
+            "positionId": int(position_id),
+        }
+        if sl is not None and float(sl) > 0:
+            payload["stopLoss"] = float(sl)
+        if tp is not None and float(tp) > 0:
+            payload["takeProfit"] = float(tp)
+        if "stopLoss" not in payload and "takeProfit" not in payload:
+            return {"ok": False, "error": "no_sl_tp", "execution": "ctrader"}
+        try:
+            body = self._rpc(
+                PT_AMEND_POSITION_SLTP_REQ,
+                payload,
+                expect={PT_EXECUTION_EVENT, PT_RECONCILE_RES},
+                timeout=15,
+            )
+            return {"ok": True, "raw": body, "execution": "ctrader"}
+        except CTraderError as e:
+            return {"ok": False, "error": e.message, "code": e.code, "execution": "ctrader"}
+
+    def open_positions(self) -> list[dict]:
+        body = self.reconcile() or {}
+        rows = body.get("position") or body.get("positions") or []
+        out = []
+        for p in rows:
+            if not isinstance(p, dict):
+                continue
+            pid = p.get("positionId") or p.get("id")
+            if pid in (None, "", 0):
+                continue
+            out.append(
+                {
+                    "positionId": str(pid),
+                    "id": str(pid),
+                    "ticket": str(pid),
+                    "volume": p.get("volume"),
+                    "tradeSide": p.get("tradeSide"),
+                    "price": _decode_price(p.get("price") or p.get("entryPrice")),
+                    "stopLoss": p.get("stopLoss"),
+                    "takeProfit": p.get("takeProfit"),
+                    "raw": p,
+                }
+            )
+        return out
 
     def order_market(
         self,
@@ -364,9 +517,7 @@ class CTraderSession:
             raise CTraderError("account not authorized", code="NO_ACCOUNT")
         sym = self.resolve_symbol(symbol)
         symbol_id = int(sym.get("symbolId") or 0)
-        # cTrader volume is in 0.01 units; map MT-style lots → units (1.00 lot ≈ 100 units common for gold CFDs)
-        units = max(0.01, float(lot) * 100.0)
-        volume = max(1, int(round(units * 100)))
+        volume = self._volume_from_lot(sym, lot)
         payload: dict[str, Any] = {
             "ctidTraderAccountId": self.account_id,
             "symbolId": symbol_id,
@@ -375,33 +526,22 @@ class CTraderSession:
             "volume": volume,
             "comment": (comment or "AURUM")[:50],
         }
-        # Relative SL/TP in 1/100000 price units
-        if sl and float(sl) > 0:
-            # Will set after fill via amend when absolute needed — use relative from mark if spot known
-            spot = self._last_spots.get(symbol_id) or {}
-            bid = float(spot.get("bid") or 0)
-            ask = float(spot.get("ask") or 0)
-            mark = ask if side.lower() == "buy" else bid
-            if mark > 0:
-                dist = abs(mark - float(sl))
-                payload["relativeStopLoss"] = int(round(dist * 100_000))
-        if tp and float(tp) > 0:
-            spot = self._last_spots.get(symbol_id) or {}
-            bid = float(spot.get("bid") or 0)
-            ask = float(spot.get("ask") or 0)
-            mark = ask if side.lower() == "buy" else bid
-            if mark > 0:
-                dist = abs(float(tp) - mark)
-                payload["relativeTakeProfit"] = int(round(dist * 100_000))
+        # Relative SL/TP in 1/100000 price units (best-effort; absolute amend after fill)
+        spot = self._last_spots.get(symbol_id) or {}
+        bid = float(spot.get("bid") or 0)
+        ask = float(spot.get("ask") or 0)
+        mark = ask if side.lower() == "buy" else bid
+        if sl and float(sl) > 0 and mark > 0:
+            payload["relativeStopLoss"] = int(round(abs(mark - float(sl)) * PRICE_SCALE))
+        if tp and float(tp) > 0 and mark > 0:
+            payload["relativeTakeProfit"] = int(round(abs(float(tp) - mark) * PRICE_SCALE))
 
-        # NEW_ORDER often answers via EXECUTION_EVENT; accept either
         mid = secrets.token_hex(8)
         event = threading.Event()
         with self._lock:
             self._pending[mid] = {"event": event, "response": None}
         assert self._ws
         self._ws.send(json.dumps({"clientMsgId": mid, "payloadType": PT_NEW_ORDER_REQ, "payload": payload}))
-        # Wait for execution event or error in inbox/pending
         deadline = time.time() + 25
         msg = None
         while time.time() < deadline:
@@ -425,20 +565,41 @@ class CTraderSession:
             err = msg.get("payload") or {}
             raise CTraderError(str(err.get("description") or err), code=str(err.get("errorCode") or "E_ORDER"))
         body = msg.get("payload") or {}
+        exec_type = int(body.get("executionType") or 0)
         pos = body.get("position") or {}
         order = body.get("order") or {}
         deal = body.get("deal") or {}
         pos_id = pos.get("positionId") or order.get("positionId") or deal.get("positionId")
-        fill = float(
+        fill = _decode_price(
             deal.get("executionPrice")
             or deal.get("closePrice")
             or pos.get("price")
-            or order.get("limitPrice")
+            or pos.get("entryPrice")
             or 0
         )
+        # Reject cancelled/expired/rejected; require position + fill price
+        rejected = exec_type in {3, 4, 5, 6}
+        filled_ok = (not rejected) and bool(pos_id) and fill > 0 and (
+            exec_type in {EXEC_TYPE_FILLED, EXEC_TYPE_PARTIAL_FILL, 0, 1}
+        )
+        if not filled_ok:
+            return {
+                "ok": False,
+                "mode": "mt5",
+                "execution": "ctrader",
+                "error": "not_filled",
+                "execution_type": exec_type,
+                "raw": body,
+            }
+        # Absolute SL/TP on broker after fill (protective)
+        if pos_id and ((sl and float(sl) > 0) or (tp and float(tp) > 0)):
+            try:
+                self.amend_position_sl_tp(pos_id, sl=float(sl) if sl else None, tp=float(tp) if tp else None)
+            except Exception as e:
+                log.warning("ctrader post-fill SL/TP amend failed: %s", e)
         return {
             "ok": True,
-            "mode": "mt5",  # desk/smart_exits treat this as live broker (execution=ctrader)
+            "mode": "mt5",
             "execution": "ctrader",
             "side": side.lower(),
             "lot": float(lot),
@@ -450,6 +611,7 @@ class CTraderSession:
             "position_id": str(pos_id) if pos_id else None,
             "order_id": order.get("orderId"),
             "symbol": sym.get("symbolName") or symbol,
+            "volume": volume,
             "raw": body,
         }
 
@@ -461,15 +623,22 @@ class CTraderSession:
             "positionId": int(position_id),
         }
         if volume is not None:
-            units = max(0.01, float(volume) * 100.0)
-            payload["volume"] = max(1, int(round(units * 100)))
+            # Best-effort: use first symbol lotSize if loaded, else FX-style fallback
+            lot_size = 0
+            for s in self._symbols.values():
+                lot_size = int(s.get("lotSize") or 0)
+                if lot_size:
+                    break
+            if lot_size > 0:
+                payload["volume"] = max(1, int(round(float(volume) * lot_size)))
+            else:
+                payload["volume"] = max(1, int(round(float(volume) * 10_000)))
         try:
             body = self._rpc(PT_CLOSE_POSITION_REQ, payload, expect={PT_EXECUTION_EVENT, PT_RECONCILE_RES})
-            return {"ok": True, "raw": body}
+            return {"ok": True, "raw": body, "execution": "ctrader"}
         except CTraderError as e:
             if "not found" in (e.message or "").lower():
-                return {"ok": True, "already_closed": True}
-            # Close often returns via async execution event
+                return {"ok": True, "already_closed": True, "execution": "ctrader"}
             deadline = time.time() + 12
             while time.time() < deadline:
                 with self._lock:
@@ -478,10 +647,10 @@ class CTraderSession:
                             msg = self._inbox.pop(i)
                             if int(msg.get("payloadType") or 0) == PT_ERROR_RES:
                                 err = msg.get("payload") or {}
-                                return {"ok": False, "error": err.get("description") or str(err)}
-                            return {"ok": True, "raw": msg.get("payload")}
+                                return {"ok": False, "error": err.get("description") or str(err), "execution": "ctrader"}
+                            return {"ok": True, "raw": msg.get("payload"), "execution": "ctrader"}
                 time.sleep(0.05)
-            return {"ok": False, "error": e.message, "code": e.code}
+            return {"ok": False, "error": e.message, "code": e.code, "execution": "ctrader"}
 
 
 class CTraderCloud:
@@ -748,6 +917,27 @@ class CTraderCloud:
         sess = self.open_session()
         try:
             return sess.close_position(position_id, volume=volume)
+        finally:
+            sess.close()
+
+    def candles(self, symbol: str = "XAUUSD", timeframe: str = "M15", count: int = 200) -> list[dict]:
+        sess = self.open_session()
+        try:
+            return sess.trendbars(symbol, timeframe=timeframe, count=count)
+        finally:
+            sess.close()
+
+    def amend_position_sl_tp(self, position_id: str | int, sl: float | None = None, tp: float | None = None) -> dict:
+        sess = self.open_session()
+        try:
+            return sess.amend_position_sl_tp(position_id, sl=sl, tp=tp)
+        finally:
+            sess.close()
+
+    def open_positions(self) -> list[dict]:
+        sess = self.open_session()
+        try:
+            return sess.open_positions()
         finally:
             sess.close()
 
