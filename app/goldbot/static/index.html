@@ -16,13 +16,13 @@
   <section id="authGate" class="auth-gate">
     <div class="auth-card wide">
       <div class="brand-lock">AURUM</div>
-      <p class="auth-tag">FP Markets عبر cTrader Open API · من التطبيق مباشرة</p>
+      <p class="auth-tag">مربوط بوسيط FP Markets · cTrader Open API</p>
       <ol id="setupSteps" class="setup-steps">
         <li><strong>١</strong> أنشئ حساب تطبيق (أو سجّل الدخول)</li>
-        <li><strong>٢</strong> من تبويب الربط: Client ID/Secret من <a href="https://openapi.ctrader.com" target="_blank" rel="noopener">openapi.ctrader.com</a></li>
-        <li><strong>٣</strong> فوّض cTrader واختر حساب FP Markets ثم ابدأ التداول</li>
+        <li><strong>٢</strong> افتح حساب <a href="https://portal.fpmarkets.com" target="_blank" rel="noopener">FP Markets</a> على منصة cTrader</li>
+        <li><strong>٣</strong> من تبويب الربط: Client ID/Secret → تفويض → اختر حساب FP Markets</li>
       </ol>
-      <p id="setupNext" class="setup-next">الخطوة التالية: سجّل الدخول ثم اربط cTrader</p>
+      <p id="setupNext" class="setup-next">الخطوة التالية: سجّل الدخول ثم اربط حساب FP Markets cTrader</p>
 
       <div class="auth-tabs">
         <button type="button" id="tabLogin" class="on">دخول التطبيق</button>
@@ -100,18 +100,18 @@
 
     <main id="tab-connect" class="panel hidden">
       <section class="connect-box">
-        <h1>ربط FP Markets عبر cTrader</h1>
+        <h1>ربط وسيط FP Markets عبر cTrader</h1>
         <p id="bridgeStatusText">حالة التنفيذ: —</p>
         <p id="waysFinding" class="auth-note">جاري التحميل…</p>
-        <p id="ctraderConfiguredLine" class="auth-note">cTrader Open API: —</p>
-        <p id="ctraderStatusLine" class="auth-note">حالة cTrader: —</p>
+        <p id="ctraderConfiguredLine" class="auth-note">cTrader / FP Markets: —</p>
+        <p id="ctraderStatusLine" class="auth-note">حالة الربط: —</p>
 
-        <h2>الخطوات</h2>
-        <p class="auth-note">يلزم حساب FP Markets على منصة <strong>cTrader</strong> (ليس MetaTrader).</p>
+        <h2>الوسيط: FP Markets فقط</h2>
+        <p class="auth-note">AURUM مقفول على <strong>FP Markets</strong> عبر منصة <strong>cTrader</strong>. حسابات وسطاء آخرين تُرفض عند الربط.</p>
         <ol class="steps">
+          <li>افتح حساب cTrader من <a href="https://portal.fpmarkets.com" target="_blank" rel="noopener">بوابة FP Markets</a>.</li>
           <li>أنشئ تطبيقاً على <a href="https://openapi.ctrader.com" target="_blank" rel="noopener">openapi.ctrader.com</a>.</li>
-          <li>أضف Redirect URI الظاهر بالأسفل حرفياً في إعدادات التطبيق.</li>
-          <li>الصق Client ID و Secret → احفظ → تفويض → اختر الحساب.</li>
+          <li>أضف Redirect URI بالأسفل → الصق Client ID/Secret → تفويض بحساب FP Markets → اختر الحساب.</li>
         </ol>
         <label>Client ID
           <input id="ctraderClientId" type="text" placeholder="من openapi.ctrader.com" autocomplete="off" />

@@ -70,16 +70,21 @@ def arabic_ctrader_error(exc: CTraderError | Exception) -> str:
             "https://openapi.ctrader.com ثم أعد المحاولة."
         )
     if code == "NO_TOKEN" or "access token" in low or "unauthorized" in low:
-        return "يلزم تفويض cTrader — اضغط «تفويض cTrader» وأكمل تسجيل الدخول."
+        return "يلزم تفويض cTrader — اضغط «تفويض cTrader» وأكمل تسجيل الدخول بحساب FP Markets."
     if code == "NO_ACCOUNT" or "account" in low and "select" in low:
-        return "اختر حساب cTrader من القائمة بعد التفويض."
+        return "اختر حساب FP Markets cTrader من القائمة بعد التفويض."
+    if code == "WRONG_BROKER" or "not fp markets" in low or "wrong broker" in low:
+        return (
+            "هذا الحساب ليس لدى وسيط FP Markets. "
+            "AURUM مربوط بـ FP Markets فقط — افتح حساب cTrader من بوابة FP Markets ثم أعد التفويض."
+        )
     if "mt5" in low or "not a ctrader" in low:
-        return "هذا الحساب MT5 فقط — cTrader Open API يحتاج حساب FP Markets على منصة cTrader."
+        return "هذا الحساب MT5 فقط — يلزم حساب FP Markets على منصة cTrader."
     if "timeout" in low or code == "TIMEOUT":
         return "انتهت مهلة الاتصال بـ cTrader — أعد المحاولة."
     if "websocket" in low or code == "NETWORK":
         return "تعذّر فتح اتصال cTrader WebSocket — تحقق من الشبكة/الخطة."
-    return f"تعذّر ربط cTrader: {msg}"
+    return f"تعذّر ربط cTrader / FP Markets: {msg}"
 
 
 def _env(key: str, default: str = "") -> str:
@@ -267,6 +272,8 @@ class CTraderSession:
         return payload
 
     def list_accounts(self) -> list[dict]:
+        from goldbot.mt5.broker import BROKER_NAME, is_fp_markets_ctrader_broker
+
         payload = self._rpc(
             PT_GET_ACCOUNTS_REQ,
             {"accessToken": self.access_token},
@@ -277,12 +284,16 @@ class CTraderSession:
         for r in rows:
             if not isinstance(r, dict):
                 continue
+            title = str(r.get("brokerTitle") or r.get("brokerName") or r.get("broker") or "")
+            fp = is_fp_markets_ctrader_broker(title)
             out.append(
                 {
                     "ctidTraderAccountId": int(r.get("ctidTraderAccountId") or r.get("accountId") or 0),
                     "isLive": bool(r.get("isLive", self.live)),
                     "traderLogin": r.get("traderLogin") or r.get("login"),
-                    "brokerTitle": r.get("brokerTitle") or r.get("brokerName") or "",
+                    "brokerTitle": title or BROKER_NAME,
+                    "broker": BROKER_NAME if fp else (title or "unknown"),
+                    "is_fp_markets": fp,
                     "depositCurrency": r.get("depositCurrency") or r.get("currency") or "USD",
                 }
             )
@@ -575,12 +586,48 @@ class CTraderCloud:
         return {"ok": True}
 
     def select_account(self, account_id: int, *, live: bool | None = None) -> dict:
-        patch = {"account_id": str(int(account_id))}
-        if live is not None:
-            patch["live"] = "1" if live else "0"
+        """Bind only an FP Markets cTrader account — reject other brokers."""
+        from goldbot.mt5.broker import BROKER_NAME, DEFAULT_CTRADER_SERVER, is_fp_markets_ctrader_broker
+
+        aid = int(account_id)
+        rows = self.list_accounts(fp_markets_only=False)
+        match = next((a for a in rows if int(a.get("ctidTraderAccountId") or 0) == aid), None)
+        if not match:
+            raise CTraderError("account not found after OAuth", code="NO_ACCOUNT")
+        title = str(match.get("brokerTitle") or "")
+        # Allow empty title only when Spotware omits it (rare); require FP marker when present
+        if title and not (is_fp_markets_ctrader_broker(title) or match.get("is_fp_markets")):
+            raise CTraderError(
+                f"not FP Markets broker: {title}",
+                code="WRONG_BROKER",
+                details={"brokerTitle": title, "account_id": aid},
+            )
+        if not title:
+            # Spotware sometimes omits brokerTitle — still stamp FP Markets as product broker
+            match["is_fp_markets"] = True
+        if live is None:
+            live = bool(match.get("isLive", self.live))
+        server = f"{DEFAULT_CTRADER_SERVER}-{'Live' if live else 'Demo'}"
+        patch = {
+            "account_id": str(aid),
+            "live": "1" if live else "0",
+            "broker": BROKER_NAME,
+            "broker_title": title or BROKER_NAME,
+            "server": server,
+            "trader_login": str(match.get("traderLogin") or ""),
+        }
         _save_kv(patch)
         self.refresh()
-        return {"ok": True, "account_id": self.account_id, "ready": self.ready}
+        return {
+            "ok": True,
+            "account_id": self.account_id,
+            "ready": self.ready,
+            "broker": BROKER_NAME,
+            "broker_title": title or BROKER_NAME,
+            "server": server,
+            "trader_login": match.get("traderLogin"),
+            "is_fp_markets": True,
+        }
 
     def open_session(self) -> CTraderSession:
         self.refresh()
@@ -609,15 +656,29 @@ class CTraderCloud:
                 raise
         return sess
 
-    def list_accounts(self) -> list[dict]:
+    def list_accounts(self, *, fp_markets_only: bool = True) -> list[dict]:
         sess = self.open_session()
         try:
-            # list works after app auth; account auth optional
-            return sess.list_accounts()
+            rows = sess.list_accounts()
         finally:
             sess.close()
+        if not fp_markets_only:
+            return rows
+        fp = [a for a in rows if a.get("is_fp_markets")]
+        # If Spotware omits brokerTitle on all rows, keep them but mark for UI warning
+        if not fp and rows and all(not str(a.get("brokerTitle") or "").strip() for a in rows):
+            for a in rows:
+                a["is_fp_markets"] = True
+                a["broker"] = "FP Markets"
+                a["broker_assumed"] = True
+            return rows
+        return fp
 
     def snapshot(self) -> dict:
+        from goldbot.mt5.broker import BROKER_ID, BROKER_NAME, BROKER_PLATFORM, DEFAULT_CTRADER_SERVER
+
+        kv = _load_kv()
+        server = str(kv.get("server") or "") or f"{DEFAULT_CTRADER_SERVER}-{'Live' if self.live else 'Demo'}"
         if not self.ready:
             return {
                 "connected": False,
@@ -626,9 +687,12 @@ class CTraderCloud:
                 "margin": 0.0,
                 "free_margin": 0.0,
                 "currency": "USD",
-                "server": "cTrader",
+                "server": server,
                 "login": 0,
-                "detail": "cTrader غير جاهز — فوّض التطبيق واختر حساباً",
+                "broker": BROKER_NAME,
+                "broker_id": BROKER_ID,
+                "platform": BROKER_PLATFORM,
+                "detail": "cTrader/FP Markets غير جاهز — فوّض التطبيق واختر حساب FP Markets",
             }
         sess = self.open_session()
         try:
@@ -647,7 +711,7 @@ class CTraderCloud:
             if margin > 10000 and trader.get("moneyDigits") == 2:
                 margin = margin / 100.0
             free_m = float(trader.get("freeMargin") or max(0.0, equity - margin))
-            login = int(trader.get("login") or trader.get("traderLogin") or self.account_id or 0)
+            login = int(trader.get("login") or trader.get("traderLogin") or kv.get("trader_login") or self.account_id or 0)
             return {
                 "connected": True,
                 "balance": balance,
@@ -655,9 +719,13 @@ class CTraderCloud:
                 "margin": margin,
                 "free_margin": free_m,
                 "currency": str(trader.get("depositAssetId") or trader.get("currency") or "USD"),
-                "server": "cTrader-Live" if self.live else "cTrader-Demo",
+                "server": server,
                 "login": login,
-                "detail": "FP Markets عبر cTrader Open API (من التطبيق مباشرة)",
+                "broker": BROKER_NAME,
+                "broker_id": BROKER_ID,
+                "broker_title": str(kv.get("broker_title") or BROKER_NAME),
+                "platform": BROKER_PLATFORM,
+                "detail": f"{BROKER_NAME} عبر cTrader Open API (من التطبيق مباشرة)",
                 "account_id": self.account_id,
             }
         finally:

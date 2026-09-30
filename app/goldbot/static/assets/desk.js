@@ -257,17 +257,18 @@
       list.innerHTML = "";
       const rows = j.accounts || [];
       if (!rows.length) {
-        list.innerHTML = "<li>لا حسابات — تأكد أن حساب FP Markets على منصة cTrader وأن التفويض اكتمل</li>";
+        list.innerHTML = "<li>لا حسابات FP Markets — افتح حساب cTrader من بوابة FP Markets ثم أعد التفويض</li>";
         return;
       }
       rows.forEach((a) => {
         const li = document.createElement("li");
-        const title = `${a.brokerTitle || "cTrader"} · ${a.traderLogin || a.ctidTraderAccountId}${a.isLive ? " · Live" : " · Demo"}`;
+        const broker = a.broker || a.brokerTitle || "FP Markets";
+        const title = `${broker} · ${a.traderLogin || a.ctidTraderAccountId}${a.isLive ? " · Live" : " · Demo"}`;
         li.innerHTML = `<strong>${title}</strong> <span>${a.depositCurrency || ""} · ${a.ctidTraderAccountId}</span>`;
         const btn = document.createElement("button");
         btn.type = "button";
         btn.className = "tiny";
-        btn.textContent = "ربط هذا الحساب";
+        btn.textContent = "ربط FP Markets";
         btn.onclick = () => bindCtraderAccount(a.ctidTraderAccountId, a.isLive);
         li.appendChild(btn);
         list.appendChild(li);
@@ -299,7 +300,7 @@
     $("readyPill").classList.toggle("on", !!(ready.broker_mt5_ready));
     $("statePill").textContent = data.state || "—";
     const live = !!(ready.live_execution || ready.broker_mt5_ready);
-    $("modePill").textContent = live ? `FP Markets حي · ${acc.server || "MT5"}` : (acc.mode === "paper" ? "ورقي (تجربة)" : (acc.mode || "—"));
+    $("modePill").textContent = live ? `FP Markets حي · ${acc.server || "cTrader"}` : (acc.mode === "paper" ? "ورقي (تجربة)" : (acc.mode || "—"));
     $("modePill").classList.toggle("on", live);
     $("symbolPill").textContent = data.symbol || "XAUUSD";
     $("latencyPill").textContent = data.latency_ms != null ? `${data.latency_ms}ms` : "—";

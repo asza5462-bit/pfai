@@ -34,7 +34,18 @@ from goldbot.mt5.metaapi_cloud import (
 from goldbot.mt5.ctrader_cloud import CTraderError, arabic_ctrader_error, ctrader
 from goldbot.mt5.mt5_linux import Mt5LinuxError, mt5_linux
 from goldbot.mt5.remote_hub import hub
-from goldbot.mt5.broker import BROKER_NAME, BROKER_SERVERS, DEFAULT_SERVER, DEFAULT_SYMBOL, resolve_fp_server
+from goldbot.mt5.broker import (
+    BROKER_CLIENT_AREA,
+    BROKER_ID,
+    BROKER_NAME,
+    BROKER_PLATFORM,
+    BROKER_PORTAL,
+    BROKER_SERVERS,
+    DEFAULT_CTRADER_SERVER,
+    DEFAULT_SERVER,
+    DEFAULT_SYMBOL,
+    resolve_fp_server,
+)
 from goldbot.storage.state import store
 from goldbot.util_rate import limiter
 
@@ -503,6 +514,9 @@ async def health():
         "degraded": False,
         "product": PRODUCT_NAME,
         "broker": BROKER_NAME,
+        "broker_id": BROKER_ID,
+        "broker_platform": BROKER_PLATFORM,
+        "broker_portal": BROKER_PORTAL,
         "version": __version__,
         "symbol": settings.symbol,
         "mode": desk.account.mode,
@@ -510,6 +524,7 @@ async def health():
         "state": desk.state,
         "tick_seconds": settings.tick_seconds,
         "primary": "ctrader",
+        "ctrader_server": DEFAULT_CTRADER_SERVER,
         "metaapi_configured": bool(meta_ok and settings.prefer_metaapi),
         "ctrader_configured": ct_cfg,
         "ctrader_ready": ct_ready,
@@ -1244,35 +1259,41 @@ async def execution_ways():
     return {
         "ok": True,
         "primary": "ctrader",
+        "broker": BROKER_NAME,
+        "broker_id": BROKER_ID,
+        "broker_platform": BROKER_PLATFORM,
         "finding_ar": (
-            "النظام الأساسي هو cTrader Open API لحسابات FP Markets على منصة cTrader — "
-            "التنفيذ من التطبيق مباشرة بدون MetaTrader / MetaApi."
+            f"AURUM مربوط بوسيط {BROKER_NAME} فقط. التنفيذ عبر cTrader Open API "
+            "لحسابات FP Markets على منصة cTrader — من التطبيق مباشرة."
         ),
         "ways": [
             {
                 "id": "ctrader",
-                "title_ar": "cTrader Open API (النظام الأساسي)",
+                "title_ar": f"{BROKER_NAME} · cTrader Open API (النظام الأساسي)",
                 "windows_required": False,
-                "cost": "مجاني — تطبيق Spotware Open API + حساب FP Markets cTrader",
+                "cost": f"مجاني — تطبيق Spotware Open API + حساب {BROKER_NAME} cTrader",
                 "ready": ctrader.ready,
                 "steps_ar": [
+                    f"افتح حساب {BROKER_NAME} cTrader من بوابة العميل",
                     "أنشئ تطبيقاً على openapi.ctrader.com (Client ID + Secret)",
-                    "احفظهما في AURUM واضغط تفويض cTrader",
-                    "اختر حساب FP Markets cTrader — التنفيذ من التطبيق مباشرة",
+                    "احفظهما في AURUM واضغط تفويض cTrader بحساب FP Markets",
+                    f"اختر حساب {BROKER_NAME} — حسابات الوسطاء الآخرين مرفوضة",
                 ],
                 "signup": "https://openapi.ctrader.com",
-                "note_ar": "يلزم حساب FP Markets على منصة cTrader.",
+                "broker_portal": BROKER_PORTAL,
+                "note_ar": f"مقفول على وسيط {BROKER_NAME} فقط.",
             },
         ],
         "rejected_ar": [
-            "مسار MetaTrader 5 / MetaApi غير مفعّل في هذا الإصدار",
-            "يلزم حساب cTrader لدى FP Markets",
+            "مسار MetaTrader 5 / MetaApi غير مفعّل",
+            f"حسابات وسطاء غير {BROKER_NAME} مرفوضة عند الربط",
         ],
         "metaapi_configured": False,
         "ctrader_configured": ctrader.configured,
         "ctrader_ready": ctrader.ready,
         "mt5_linux_configured": False,
         "servers": BROKER_SERVERS,
+        "ctrader_server": DEFAULT_CTRADER_SERVER,
     }
 
 
@@ -1319,6 +1340,11 @@ async def ctrader_status(
     ctrader.refresh()
     return {
         "ok": True,
+        "broker": BROKER_NAME,
+        "broker_id": BROKER_ID,
+        "broker_platform": BROKER_PLATFORM,
+        "broker_portal": BROKER_PORTAL,
+        "broker_client_area": BROKER_CLIENT_AREA,
         "configured": ctrader.configured,
         "ready": ctrader.ready,
         "has_token": bool(ctrader.access_token),
@@ -1326,15 +1352,17 @@ async def ctrader_status(
         "live": ctrader.live,
         "redirect_uri": ctrader.redirect_uri,
         "signup": "https://openapi.ctrader.com",
+        "ctrader_server": DEFAULT_CTRADER_SERVER,
         "bridge": _cloud_status_for_user(user["id"]),
         "account": desk.account.to_dict() if desk.account else {},
         "steps_ar": [
+            f"افتح حساب {BROKER_NAME} على منصة cTrader من {BROKER_CLIENT_AREA}",
             "أنشئ تطبيقاً على https://openapi.ctrader.com وانسخ Client ID و Client Secret",
             f"أضف Redirect URI: {ctrader.redirect_uri}",
-            "احفظهما هنا ثم اضغط «تفويض cTrader»",
-            "اختر حساب FP Markets cTrader من القائمة",
+            "احفظهما هنا ثم اضغط «تفويض cTrader» وسجّل دخول حساب FP Markets",
+            "اختر حساب FP Markets cTrader من القائمة (حسابات وسطاء آخرين مرفوضة)",
         ],
-        "note_ar": "يعمل فقط مع حساب FP Markets على منصة cTrader — حسابات MT5 فقط لا تدعم Open API.",
+        "note_ar": f"AURUM مربوط بوسيط {BROKER_NAME} فقط عبر cTrader Open API — حسابات MT5 أو وسطاء آخرين غير مدعومة.",
     }
 
 
@@ -1429,14 +1457,16 @@ async def ctrader_list_accounts(
     if not ctrader.configured or not ctrader.access_token:
         raise HTTPException(400, arabic_ctrader_error(CTraderError("missing access token", code="NO_TOKEN")))
     try:
-        rows = await asyncio.to_thread(ctrader.list_accounts)
+        rows = await asyncio.to_thread(lambda: ctrader.list_accounts(fp_markets_only=True))
     except CTraderError as e:
         raise HTTPException(400, arabic_ctrader_error(e))
     return {
         "ok": True,
+        "broker": BROKER_NAME,
+        "broker_id": BROKER_ID,
         "accounts": rows,
         "count": len(rows),
-        "hint_ar": "اختر حساب FP Markets cTrader ثم اضغط ربط — حسابات MT5 فقط لن تظهر/لن تعمل.",
+        "hint_ar": f"تظهر فقط حسابات {BROKER_NAME} على cTrader — اختر حساباً ثم اضغط ربط.",
     }
 
 
@@ -1450,14 +1480,20 @@ async def ctrader_bind(
     ctrader.refresh()
     if not ctrader.configured or not ctrader.access_token:
         raise HTTPException(400, arabic_ctrader_error(CTraderError("missing access token", code="NO_TOKEN")))
-    ctrader.select_account(body.account_id, live=body.live)
+    try:
+        selected = await asyncio.to_thread(lambda: ctrader.select_account(body.account_id, live=body.live))
+    except CTraderError as e:
+        raise HTTPException(400, arabic_ctrader_error(e))
     settings.mode = "mt5"
+    settings.mt5_server = str(selected.get("server") or DEFAULT_CTRADER_SERVER)
     auth.update_settings(
         user["id"],
         {
             "mode": "mt5",
             "execution": "ctrader",
             "ctrader_account_id": str(body.account_id),
+            "mt5_server": str(selected.get("server") or DEFAULT_CTRADER_SERVER),
+            "broker": BROKER_NAME,
         },
     )
     bridge.bind_ctrader(body.account_id)
@@ -1469,22 +1505,35 @@ async def ctrader_bind(
         desk.account = bridge.connect()
     online = bool(desk.account.connected)
     if online:
-        _set_provision_state("ok", "متصل عبر cTrader Open API — التنفيذ الحقيقي جاهز", connected=True)
+        _set_provision_state(
+            "ok",
+            f"متصل بـ {BROKER_NAME} عبر cTrader — التنفيذ الحقيقي جاهز",
+            connected=True,
+        )
     store.log_event(
         "ctrader_bound",
-        {"user": user["username"], "account_id": body.account_id, "connected": online},
+        {
+            "user": user["username"],
+            "account_id": body.account_id,
+            "connected": online,
+            "broker": BROKER_NAME,
+            "server": selected.get("server"),
+        },
     )
     return {
         "ok": True,
+        "broker": BROKER_NAME,
+        "broker_id": BROKER_ID,
+        "server": selected.get("server"),
         "ready": ctrader.ready,
         "account_id": body.account_id,
         "account": desk.account.to_dict(),
         "bridge": _cloud_status_for_user(user["id"]),
         "live_execution": online and bridge.is_live_execution(),
         "message": (
-            "تم الربط عبر cTrader — التنفيذ من التطبيق مباشرة"
+            f"تم الربط بـ {BROKER_NAME} عبر cTrader — التنفيذ من التطبيق مباشرة"
             if online
-            else "تم اختيار الحساب — إن فشل الاتصال تحقق من Live/Demo وأن الحساب cTrader."
+            else f"تم اختيار حساب {BROKER_NAME} — إن فشل الاتصال تحقق من Live/Demo وأن الحساب cTrader."
         ),
     }
 
