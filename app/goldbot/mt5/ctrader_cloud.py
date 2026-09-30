@@ -94,8 +94,9 @@ def _trendbar_ohlc(bar: dict) -> tuple[float, float, float, float]:
     low = low_raw / PRICE_SCALE
     return o, h, low, c
 
-AUTH_URI = "https://connect.spotware.com/apps/auth"
-TOKEN_URI = "https://connect.spotware.com/apps/token"
+# Official Spotware OAuth (legacy connect.spotware.com/apps/auth returns 404 after login)
+AUTH_URI = "https://id.ctrader.com/my/settings/openapi/grantingaccess/"
+TOKEN_URI = "https://openapi.ctrader.com/apps/token"
 WS_LIVE = "wss://live.ctraderapi.com:5036"
 WS_DEMO = "wss://demo.ctraderapi.com:5036"
 
@@ -139,9 +140,21 @@ def _env(key: str, default: str = "") -> str:
     return (os.getenv(key) or default).strip()
 
 
-def _http_form(url: str, data: dict, timeout: float = 30.0) -> dict:
-    body = urllib.parse.urlencode(data).encode()
-    req = urllib.request.Request(url, data=body, method="POST", headers={"Content-Type": "application/x-www-form-urlencoded"})
+def _http_json(url: str, *, method: str = "GET", data: dict | None = None, timeout: float = 30.0) -> dict:
+    headers = {"Accept": "application/json", "Content-Type": "application/json"}
+    body = None
+    if method.upper() == "GET":
+        if data:
+            url = f"{url}?{urllib.parse.urlencode(data)}"
+        req = urllib.request.Request(url, method="GET", headers=headers)
+    else:
+        body = urllib.parse.urlencode(data or {}).encode()
+        req = urllib.request.Request(
+            url,
+            data=body,
+            method="POST",
+            headers={"Accept": "application/json", "Content-Type": "application/x-www-form-urlencoded"},
+        )
     try:
         with urllib.request.urlopen(req, timeout=timeout) as resp:
             return json.loads(resp.read().decode() or "{}")
@@ -152,12 +165,22 @@ def _http_form(url: str, data: dict, timeout: float = 30.0) -> dict:
         except Exception:
             payload = {"message": raw or str(e)}
         raise CTraderError(
-            payload.get("error_description") or payload.get("error") or f"HTTP {e.code}",
-            code=str(payload.get("error") or e.code),
+            payload.get("description")
+            or payload.get("error_description")
+            or payload.get("error")
+            or f"HTTP {e.code}",
+            code=str(payload.get("errorCode") or payload.get("error") or e.code),
             details=payload,
         ) from e
     except urllib.error.URLError as e:
         raise CTraderError(f"network: {e.reason}", code="NETWORK") from e
+
+
+def _http_form(url: str, data: dict, timeout: float = 30.0) -> dict:
+    """Backward-compatible helper — Spotware token endpoint expects GET query params."""
+    if "openapi.ctrader.com/apps/token" in url or url.rstrip("/").endswith("/apps/token"):
+        return _http_json(url, method="GET", data=data, timeout=timeout)
+    return _http_json(url, method="POST", data=data, timeout=timeout)
 
 
 def _load_kv() -> dict:
@@ -704,15 +727,17 @@ class CTraderCloud:
         }
         if state:
             q["state"] = state
+        # Official path ends with '/' before query string
         return f"{AUTH_URI}?{urllib.parse.urlencode(q)}"
 
     def exchange_code(self, code: str) -> dict:
         self.refresh()
         if not self.configured:
             raise CTraderError("missing client id/secret", code="NO_APP")
-        token = _http_form(
+        token = _http_json(
             TOKEN_URI,
-            {
+            method="GET",
+            data={
                 "grant_type": "authorization_code",
                 "code": code.strip(),
                 "redirect_uri": self.redirect_uri,
@@ -720,6 +745,12 @@ class CTraderCloud:
                 "client_secret": self.client_secret,
             },
         )
+        if token.get("errorCode"):
+            raise CTraderError(
+                str(token.get("description") or token.get("errorCode")),
+                code=str(token.get("errorCode")),
+                details=token,
+            )
         access = token.get("accessToken") or token.get("access_token")
         refresh = token.get("refreshToken") or token.get("refresh_token")
         if not access:
@@ -732,15 +763,22 @@ class CTraderCloud:
         self.refresh()
         if not self.refresh_token:
             raise CTraderError("no refresh token", code="NO_TOKEN")
-        token = _http_form(
+        token = _http_json(
             TOKEN_URI,
-            {
+            method="GET",
+            data={
                 "grant_type": "refresh_token",
                 "refresh_token": self.refresh_token,
                 "client_id": self.client_id,
                 "client_secret": self.client_secret,
             },
         )
+        if token.get("errorCode"):
+            raise CTraderError(
+                str(token.get("description") or token.get("errorCode")),
+                code=str(token.get("errorCode")),
+                details=token,
+            )
         access = token.get("accessToken") or token.get("access_token")
         refresh = token.get("refreshToken") or token.get("refresh_token") or self.refresh_token
         if not access:
