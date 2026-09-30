@@ -24,6 +24,41 @@ PROVISIONING_BASE = "https://mt-provisioning-api-v1.agiliumtrade.agiliumtrade.ai
 CLIENT_HOST = "https://mt-client-api-v1.{region}.agiliumtrade.ai"
 _HEX32 = re.compile(r"^[0-9a-fA-F]{32}$")
 
+# Simple process-wide circuit breaker for MetaApi Client calls
+_cb_failures = 0
+_cb_open_until = 0.0
+_CB_THRESHOLD = 6
+_CB_COOLDOWN_SEC = 45.0
+
+
+def _circuit_allow() -> bool:
+    return time.time() >= _cb_open_until
+
+
+def _circuit_success() -> None:
+    global _cb_failures
+    _cb_failures = 0
+
+
+def _circuit_fail() -> None:
+    global _cb_failures, _cb_open_until
+    _cb_failures += 1
+    if _cb_failures >= _CB_THRESHOLD:
+        _cb_open_until = time.time() + _CB_COOLDOWN_SEC
+        log.error("MetaApi circuit OPEN for %.0fs after %s failures", _CB_COOLDOWN_SEC, _cb_failures)
+        _cb_failures = 0
+
+
+_TF_MAP = {
+    "M1": "1m",
+    "M5": "5m",
+    "M15": "15m",
+    "M30": "30m",
+    "H1": "1h",
+    "H4": "4h",
+    "D1": "1d",
+}
+
 
 def is_metaapi_account_id(value: str | None) -> bool:
     """MetaApi account ids are UUIDs (with/without dashes). Reject bare numbers like 1215."""
@@ -979,24 +1014,75 @@ class MetaApiCloud:
     def symbol_price(self, account_id: str, symbol: str, region: str | None = None) -> dict:
         from goldbot.mt5.symbols import symbol_candidates
 
+        if not _circuit_allow():
+            raise MetaApiError("MetaApi circuit open — temporary backoff", code="E_CIRCUIT", status=503)
         last_err: Exception | None = None
         for sym in symbol_candidates(symbol):
             try:
                 data = self._http(
                     "GET",
                     self._client_url(f"/users/current/accounts/{account_id}/symbols/{sym}/current-price", region),
-                    timeout=20,
+                    timeout=12,
                 )
                 if isinstance(data, dict) and (data.get("bid") or data.get("ask") or data.get("price")):
                     data = dict(data)
                     data["symbol"] = sym
+                    _circuit_success()
                     return data
             except Exception as e:
                 last_err = e
                 continue
+        _circuit_fail()
         if last_err:
             log.warning("symbol_price failed: %s", last_err)
         return {}
+
+    def candles(
+        self,
+        account_id: str,
+        symbol: str,
+        timeframe: str = "M15",
+        *,
+        count: int = 200,
+        region: str | None = None,
+    ) -> list[dict]:
+        """Broker OHLC from MetaApi historical market data (not Yahoo/paper)."""
+        from datetime import datetime, timedelta, timezone
+        from urllib.parse import quote, urlencode
+
+        from goldbot.mt5.symbols import symbol_candidates
+
+        if not _circuit_allow():
+            raise MetaApiError("MetaApi circuit open — temporary backoff", code="E_CIRCUIT", status=503)
+
+        tf = _TF_MAP.get((timeframe or "M15").upper(), "15m")
+        # Request a window large enough for `count` bars
+        minutes = {"1m": 1, "5m": 5, "15m": 15, "30m": 30, "1h": 60, "4h": 240, "1d": 1440}.get(tf, 15)
+        start = datetime.now(timezone.utc) - timedelta(minutes=max(count + 5, 30) * minutes)
+        start_s = start.strftime("%Y-%m-%dT%H:%M:%S.000Z")
+        limit = max(10, min(int(count), 1000))
+        last_err: Exception | None = None
+        for sym in symbol_candidates(symbol):
+            qs = urlencode({"startTime": start_s, "limit": str(limit)})
+            path = (
+                f"/users/current/accounts/{account_id}/historical-market-data/"
+                f"symbols/{quote(sym, safe='')}/timeframes/{tf}/candles?{qs}"
+            )
+            try:
+                data = self._http("GET", self._client_url(path, region), timeout=25)
+                if isinstance(data, list) and data:
+                    _circuit_success()
+                    return data
+                if isinstance(data, dict) and isinstance(data.get("candles"), list) and data["candles"]:
+                    _circuit_success()
+                    return list(data["candles"])
+            except Exception as e:
+                last_err = e
+                continue
+        _circuit_fail()
+        if last_err:
+            raise MetaApiError(str(getattr(last_err, "message", last_err)), code=getattr(last_err, "code", "E_CANDLES"))
+        return []
 
     def trade(self, account_id: str, trade: dict, region: str | None = None) -> dict:
         data = self._http(
@@ -1154,10 +1240,17 @@ class MetaApiCloud:
         try:
             resp = self.trade(account_id, payload, region=region)
         except MetaApiError as e:
+            msg = (e.message or "").lower()
+            # Broker already closed (SL/TP) — treat as success so local book can settle
+            if "not found" in msg or "does not exist" in msg or e.code in {"NotFoundError", "E_POSITION_NOT_FOUND"}:
+                return {"ok": True, "already_closed": True, "error": None, "code": e.code}
             return {"ok": False, "error": e.message, "code": e.code}
         numeric = resp.get("numericCode")
         string_code = str(resp.get("stringCode") or "")
         ok = (numeric in SUCCESS_CODES) or (string_code in SUCCESS_STRINGS)
+        msg = str(resp.get("message") or "").lower()
+        if not ok and ("not found" in msg or "does not exist" in msg):
+            return {"ok": True, "already_closed": True, "raw": resp, "error": None}
         return {"ok": ok, "raw": resp, "error": None if ok else resp.get("message")}
 
     def snapshot(self, account_id: str, region: str | None = None) -> dict:

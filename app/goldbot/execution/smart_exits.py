@@ -212,6 +212,59 @@ def manage_trade(
     return {"meta": meta, "sl": sl}, None, None
 
 
+_last_reconcile = 0.0
+
+
+def reconcile_broker_positions() -> list[dict]:
+    """Close local rows whose broker positions are already gone (SL/TP/manual)."""
+    global _last_reconcile
+    now = time.time()
+    if now - _last_reconcile < 12:
+        return []
+    _last_reconcile = now
+    if not bridge.is_live_execution() or not bridge.metaapi_account_id:
+        return []
+    from goldbot.mt5.metaapi_cloud import metaapi
+
+    if not metaapi.configured:
+        return []
+    try:
+        positions = metaapi.positions(bridge.metaapi_account_id, region=bridge.metaapi_region or None)
+    except Exception as e:
+        store.log_event("reconcile_fail", {"error": str(e)})
+        return []
+    live_ids = set()
+    for p in positions or []:
+        if not isinstance(p, dict):
+            continue
+        for key in ("id", "positionId", "ticket"):
+            if p.get(key) not in (None, ""):
+                live_ids.add(str(p[key]))
+    settled: list[dict] = []
+    for t in store.open_trades():
+        if not _is_live_trade(t):
+            continue
+        pid = _broker_position_id(t)
+        if not pid:
+            continue
+        if str(pid) in live_ids:
+            continue
+        # Position missing on broker → settle locally
+        entry = float(t.get("entry") or 0)
+        side = t.get("side")
+        # Approximate mark from last tick
+        tick = bridge.tick()
+        mark = float(tick["bid"] if side == "buy" else tick["ask"])
+        move = (mark - entry) if side == "buy" else (entry - mark)
+        lot = float(t.get("lot") or 0)
+        pnl = move * lot * 100.0 + float(_meta(t).get("partial_pnl") or 0)
+        store.close_trade(int(t["id"]), pnl=pnl, status="closed_broker_reconcile")
+        row = {"trade_id": t["id"], "pnl": round(pnl, 2), "reason": "broker_reconcile", "position_id": pid}
+        settled.append(row)
+        store.log_event("trade_close", row)
+    return settled
+
+
 def run_smart_manager(
     bid: float,
     ask: float,
@@ -222,6 +275,9 @@ def run_smart_manager(
     events: list[dict] = []
     closed: list[dict] = []
     updated: list[dict] = []
+    for row in reconcile_broker_positions():
+        closed.append(row)
+        events.append({"trade_id": row["trade_id"], "type": "broker_reconcile", **row})
     for t in store.open_trades():
         upd, cls, ev = manage_trade(t, bid, ask, candles, pulse)
         if upd:

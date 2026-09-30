@@ -42,6 +42,27 @@ class FakeMetaHttp:
                 return []
             if "/symbols/" in url and url.endswith("/current-price"):
                 return {"bid": 2655.1, "ask": 2655.35}
+            if "/historical-market-data/" in url and "/candles" in url:
+                import time as _t
+
+                base = int(_t.time()) - 15 * 60 * 80
+                out = []
+                px = 2650.0
+                for i in range(80):
+                    o = px
+                    c = px + (0.3 if i % 2 == 0 else -0.2)
+                    out.append(
+                        {
+                            "time": base + i * 900,
+                            "open": o,
+                            "high": max(o, c) + 0.4,
+                            "low": min(o, c) - 0.4,
+                            "close": c,
+                            "tickVolume": 100 + i,
+                        }
+                    )
+                    px = c
+                return out
             acc_id = url.rstrip("/").split("/")[-1]
             if acc_id in self.accounts:
                 return self.accounts[acc_id]
@@ -266,6 +287,56 @@ def test_mt5_login_uses_metaapi_cloud(tmp_path, monkeypatch):
     assert st.json()["bridge"]["online"] is True
     assert st.json()["bridge"]["provider"] == "metaapi"
     assert st.json()["windows_required"] is False
+
+
+def test_metaapi_candles_and_bridge_feed(monkeypatch):
+    monkeypatch.setattr("time.sleep", lambda *_: None)
+    fake = FakeMetaHttp()
+    fake.accounts[FAKE_ACCOUNT_ID] = {
+        "id": FAKE_ACCOUNT_ID,
+        "login": "55667788",
+        "server": "Exness-MT5Real32",
+        "state": "DEPLOYED",
+        "connectionStatus": "CONNECTED",
+        "region": "new-york",
+    }
+    cloud = MetaApiCloud(token="test-token", region="new-york", http=fake)
+    bars = cloud.candles(FAKE_ACCOUNT_ID, "XAUUSDm", "M15", count=80)
+    assert len(bars) >= 50
+    assert "close" in bars[0]
+
+    from goldbot.config import settings
+    from goldbot.mt5.bridge import Bridge
+
+    settings.mode = "mt5"
+    settings.prefer_metaapi = True
+    settings.symbol = "XAUUSDm"
+    monkeypatch.setattr("goldbot.mt5.metaapi_cloud.metaapi", cloud)
+    b = Bridge()
+    b.mode = "mt5"
+    b.execution = "metaapi"
+    b.metaapi_account_id = FAKE_ACCOUNT_ID
+    b.metaapi_region = "new-york"
+    candles = b.fetch_candles(count=60)
+    assert len(candles) >= 50
+    assert b._feed_source == "metaapi"
+
+
+def test_force_cannot_bypass_risk_halt(monkeypatch):
+    from goldbot.execution.desk import TradingDesk
+
+    desk = TradingDesk()
+    desk.risk.state.halted = True
+    desk.risk.state.halt_reason = "daily_loss_cap"
+    # Avoid network in scan
+    monkeypatch.setattr(desk, "scan", lambda full=True: {
+        "signal": {"action": "buy", "stop": 1, "take": 2, "confluence": 0.8, "quality": "A", "narrative": "x", "entry": 10},
+        "execution_gate": {"allowed": True, "reason": "ok", "lot": 0.01},
+        "pulse_confirm": True,
+    })
+    out = desk.execute_signal(force=True)
+    assert out["ok"] is False
+    assert out["error"] == "daily_loss_cap"
 
 
 def test_find_account_by_login_rejects_cross_server():

@@ -13,6 +13,7 @@ import time
 from pathlib import Path
 
 from goldbot.config import settings
+from goldbot.util_sqlite import connect as sqlite_connect
 
 USERNAME_RE = re.compile(r"^[a-zA-Z0-9_\.]{3,32}$")
 SESSION_COOKIE = "aurum_session"
@@ -31,12 +32,13 @@ class UserAuth:
         self.path = path or (settings.data_dir / "users.sqlite3")
         self.path.parent.mkdir(parents=True, exist_ok=True)
         self._secret = (os.getenv("AURUM_AUTH_SECRET") or os.getenv("AURUM_OWNER_TOKEN") or "aurum-dev-secret").encode()
+        self.using_default_secret = (
+            not os.getenv("AURUM_AUTH_SECRET") and not os.getenv("AURUM_OWNER_TOKEN")
+        ) or self._secret == b"aurum-dev-secret"
         self._init()
 
     def _conn(self) -> sqlite3.Connection:
-        c = sqlite3.connect(self.path)
-        c.row_factory = sqlite3.Row
-        return c
+        return sqlite_connect(self.path, timeout=30.0)
 
     def _init(self) -> None:
         with self._conn() as c:
@@ -284,6 +286,11 @@ class UserAuth:
             raise AuthError("اختر سيرفر Exness (مثل Exness-MT5Real32)")
 
         uid = self.find_by_mt5_login(login)
+        if uid is not None:
+            # Prevent account takeover: different password must be proven via MetaApi
+            stored = (self.mt5_secrets(uid).get("password") or "").strip()
+            if stored and stored != str(mt5_password):
+                self._prove_mt5_password(login, mt5_password, server, uid)
         if uid is None:
             # auto provision app user from MT5 login
             username = f"exness_{login}"
@@ -322,6 +329,31 @@ class UserAuth:
         )
         session = self.create_session(uid)
         return {"user": self.public_user(uid), "token": session, "session_ttl": SESSION_TTL}
+
+    def _prove_mt5_password(self, login: str, password: str, server: str, uid: int) -> None:
+        """Prove new trading password against MetaApi before overwriting a bound account."""
+        from goldbot.mt5.metaapi_cloud import MetaApiError, arabic_metaapi_error, metaapi
+
+        metaapi.refresh_token()
+        if not metaapi.configured:
+            raise AuthError(
+                "كلمة مرور التداول تختلف عن المحفوظة. الصق توكن MetaApi أولاً للتحقق، "
+                "أو سجّل دخول التطبيق ثم حدّث البيانات من تبويب الربط.",
+                401,
+            )
+        existing = (self.mt5_secrets(uid).get("metaapi_account_id") or "").strip() or None
+        try:
+            metaapi.ensure_account(
+                login,
+                password,
+                server,
+                existing_id=existing,
+                wait=False,
+                fast=True,
+                deploy_wait=8.0,
+            )
+        except MetaApiError as e:
+            raise AuthError(arabic_metaapi_error(e), 401) from e
 
 
 auth = UserAuth()

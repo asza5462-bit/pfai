@@ -1,6 +1,7 @@
 """AURUM FastAPI control plane — auth + elite gold desk."""
 from __future__ import annotations
 
+import asyncio
 import logging
 import os
 import threading
@@ -9,7 +10,7 @@ from contextlib import asynccontextmanager
 from pathlib import Path
 from typing import Any
 
-from fastapi import Cookie, FastAPI, Header, HTTPException, Query, Response
+from fastapi import Cookie, FastAPI, Header, HTTPException, Query, Request, Response
 from fastapi.responses import FileResponse, JSONResponse
 from fastapi.staticfiles import StaticFiles
 from pydantic import BaseModel, Field
@@ -32,11 +33,55 @@ from goldbot.mt5.metaapi_cloud import (
 from goldbot.mt5.mt5_linux import Mt5LinuxError, mt5_linux
 from goldbot.mt5.remote_hub import EXNESS_SERVERS, hub
 from goldbot.storage.state import store
+from goldbot.util_rate import limiter
 
 log = logging.getLogger("aurum.api")
 STATIC = Path(__file__).resolve().parent / "static"
 _bg_lock = threading.Lock()
 _bg_jobs: set[str] = set()
+
+
+def _client_ip(request: Request | None) -> str:
+    if request is None:
+        return "unknown"
+    fwd = request.headers.get("x-forwarded-for") or ""
+    if fwd:
+        return fwd.split(",")[0].strip()
+    return request.client.host if request.client else "unknown"
+
+
+def _rate_or_429(key: str, *, limit: int = 8, window_sec: float = 60.0) -> None:
+    ok, retry = limiter.allow(key, limit=limit, window_sec=window_sec)
+    if not ok:
+        raise HTTPException(
+            429,
+            f"محاولات كثيرة — انتظر {int(retry) + 1} ثانية ثم أعد المحاولة.",
+        )
+
+
+async def _provision_cloud_async(
+    user_id: int,
+    login: str,
+    password: str,
+    server: str,
+    symbol: str,
+    existing_id: str | None,
+    *,
+    timeout_sec: float = 22.0,
+    force_new: bool = False,
+) -> dict:
+    """Non-blocking wrapper — keeps uvicorn event loop responsive during MetaApi provision."""
+    return await asyncio.to_thread(
+        _provision_cloud_fast,
+        user_id,
+        login,
+        password,
+        server,
+        symbol,
+        existing_id,
+        timeout_sec=timeout_sec,
+        force_new=force_new,
+    )
 
 
 def _set_provision_state(status: str, message: str, **extra: Any) -> None:
@@ -287,13 +332,26 @@ async def lifespan(_: FastAPI):
     except Exception:
         pass
     desk.armed = False
+    if auth.using_default_secret:
+        log.warning(
+            "AURUM_AUTH_SECRET is default — set a strong secret in Render env before production use"
+        )
+    if not metaapi.configured:
+        log.warning(
+            "METAAPI_TOKEN missing — set it in Render Environment so cloud link survives redeploys "
+            "(ephemeral disk wipes SQLite-stored tokens)"
+        )
+    if str(settings.data_dir).startswith("/tmp") or "ephemeral" in str(settings.data_dir).lower():
+        log.warning("AURUM_DATA_DIR looks ephemeral: %s", settings.data_dir)
     desk.start_background()
     log.info(
-        "AURUM desk online mode=%s symbol=%s metaapi=%s mt5_linux=%s",
+        "AURUM desk online v%s mode=%s symbol=%s metaapi=%s mt5_linux=%s data=%s",
+        __version__,
         settings.mode,
         settings.symbol,
         metaapi.configured,
         mt5_linux.configured,
+        settings.data_dir,
     )
     yield
     desk.stop_background()
@@ -410,8 +468,13 @@ async def health():
     metaapi.refresh_token()
     mt5_linux.refresh()
     live = bridge.is_live_execution() and desk.account.connected and desk.account.mode == "mt5"
+    provision = _get_provision_state()
+    degraded = bool(provision.get("status") == "error") or (
+        settings.mode == "mt5" and not metaapi.configured and not mt5_linux.configured
+    )
     return {
         "ok": True,
+        "degraded": degraded,
         "product": PRODUCT_NAME,
         "version": __version__,
         "symbol": settings.symbol,
@@ -424,6 +487,7 @@ async def health():
         "execution": bridge.execution or desk.account.mode,
         "live_execution": live,
         "real_orders_only": True,
+        "auth_secret_default": bool(getattr(auth, "using_default_secret", False)),
         "auth": {"needs_setup": auth.needs_setup(), "users": auth.user_count()},
     }
 
@@ -470,7 +534,8 @@ async def auth_status(authorization: str | None = Header(default=None), aurum_se
 
 
 @app.post("/api/auth/register")
-async def register(body: RegisterBody, response: Response):
+async def register(body: RegisterBody, response: Response, request: Request):
+    _rate_or_429(f"register:{_client_ip(request)}", limit=5, window_sec=300)
     try:
         result = auth.register(body.username, body.password, body.password_confirm)
     except AuthError as e:
@@ -481,7 +546,8 @@ async def register(body: RegisterBody, response: Response):
 
 
 @app.post("/api/auth/login")
-async def login(body: LoginBody, response: Response):
+async def login(body: LoginBody, response: Response, request: Request):
+    _rate_or_429(f"login:{_client_ip(request)}:{body.username}", limit=10, window_sec=120)
     try:
         result = auth.login(body.username, body.password)
     except AuthError as e:
@@ -506,8 +572,9 @@ async def exness_servers():
 
 
 @app.post("/api/auth/mt5-login")
-async def mt5_login(body: Mt5LoginBody, response: Response):
+async def mt5_login(body: Mt5LoginBody, response: Response, request: Request):
     """Login with Exness/MT5 — provision MetaApi cloud terminal (no Windows)."""
+    _rate_or_429(f"mt5:{_client_ip(request)}:{body.mt5_login}", limit=6, window_sec=180)
     try:
         result = auth.login_with_mt5(body.mt5_login, body.mt5_password, body.mt5_server, body.symbol)
     except AuthError as e:
@@ -540,7 +607,7 @@ async def mt5_login(body: Mt5LoginBody, response: Response):
     cloud_ok = False
     if metaapi.configured and settings.prefer_metaapi:
         try:
-            cloud = _provision_cloud_fast(
+            cloud = await _provision_cloud_async(
                 user["id"],
                 str(secrets["login"]),
                 secrets["password"],
@@ -827,8 +894,29 @@ def _readiness(snap: dict) -> dict:
 
 
 @app.get("/api/status")
-async def status():
-    snap = desk.last or desk.scan(full=True)
+async def status(
+    authorization: str | None = Header(default=None),
+    aurum_session: str | None = Cookie(default=None, alias=SESSION_COOKIE),
+):
+    user = auth.user_from_token(_token_from(authorization, aurum_session))
+    snap = desk.last or {}
+    if user:
+        # Full desk only for authenticated sessions — avoid sync scan on anonymous hits
+        if not snap:
+            snap = await asyncio.to_thread(desk.scan, True)
+        return {
+            "product": PRODUCT_NAME,
+            "tagline": PRODUCT_TAGLINE,
+            "version": __version__,
+            "disclaimer": (
+                "التداول ينطوي على مخاطر. لا يوجد بوت معتمد يضمن الربح. "
+                "AURUM منصة تنفيذ وإدارة مخاطر حقيقية — النتائج غير مضمونة."
+            ),
+            "readiness": _readiness(snap),
+            "auth": {"needs_setup": auth.needs_setup(), "users": auth.user_count(), "authenticated": True},
+            **snap,
+        }
+    # Public: redacted readiness only
     return {
         "product": PRODUCT_NAME,
         "tagline": PRODUCT_TAGLINE,
@@ -837,9 +925,16 @@ async def status():
             "التداول ينطوي على مخاطر. لا يوجد بوت معتمد يضمن الربح. "
             "AURUM منصة تنفيذ وإدارة مخاطر حقيقية — النتائج غير مضمونة."
         ),
-        "readiness": _readiness(snap),
-        "auth": {"needs_setup": auth.needs_setup(), "users": auth.user_count()},
-        **snap,
+        "mode": desk.account.mode,
+        "state": desk.state,
+        "live_execution": bool(bridge.is_live_execution() and desk.account.connected),
+        "metaapi_configured": metaapi.configured,
+        "auth": {"needs_setup": auth.needs_setup(), "users": auth.user_count(), "authenticated": False},
+        "readiness": {
+            "ok": False,
+            "grade": "login_required",
+            "summary_ar": "سجّل الدخول لعرض إشارة المكتب والتفاصيل",
+        },
     }
 
 
@@ -884,7 +979,7 @@ async def start_desk(authorization: str | None = Header(default=None), aurum_ses
         # Auto-heal: stale MetaApi id cleared by connect → fast re-provision
         if not desk.account.connected and metaapi.configured and secrets.get("password"):
             try:
-                cloud = _provision_cloud_fast(
+                cloud = await _provision_cloud_async(
                     user["id"],
                     str(secrets["login"]),
                     secrets["password"],
@@ -1235,7 +1330,7 @@ async def cloud_save_token(
             settings.mt5_server = secrets["server"]
             settings.symbol = secrets.get("symbol") or settings.symbol
             bridge.bind_remote_user(user["id"])
-            cloud = _provision_cloud_fast(
+            cloud = await _provision_cloud_async(
                 user["id"],
                 str(secrets["login"]),
                 secrets["password"],
@@ -1483,7 +1578,7 @@ async def cloud_reconnect(
     cloud = None
     if metaapi.configured and secrets.get("login") and secrets.get("password"):
         try:
-            cloud = _provision_cloud_fast(
+            cloud = await _provision_cloud_async(
                 user["id"],
                 str(secrets["login"]),
                 secrets["password"],
@@ -1498,7 +1593,7 @@ async def cloud_reconnect(
                 auth.update_settings(user["id"], {"metaapi_account_id": ""})
                 bridge.metaapi_account_id = ""
                 try:
-                    cloud = _provision_cloud_fast(
+                    cloud = await _provision_cloud_async(
                         user["id"],
                         str(secrets["login"]),
                         secrets["password"],

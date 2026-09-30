@@ -65,7 +65,10 @@ def test_api_health_and_status(tmp_path, monkeypatch):
 
     s = client.get("/api/status")
     assert s.status_code == 200
-    assert "signal" in s.json()
+    pub = s.json()
+    # Anonymous status is redacted (no full signal dump)
+    assert pub.get("auth", {}).get("authenticated") is False
+    assert "signal" not in pub
 
     # protected routes require auth
     assert client.post("/api/start").status_code == 401
@@ -77,10 +80,15 @@ def test_api_health_and_status(tmp_path, monkeypatch):
     )
     assert reg.status_code == 200
 
+    s2 = client.get("/api/status")
+    assert s2.status_code == 200
+    assert "signal" in s2.json()
+    assert s2.json().get("auth", {}).get("authenticated") is True
+
     start = client.post("/api/start")
     assert start.status_code == 200
     body = start.json()
-    assert body.get("ok") is True or body.get("error") == "risk_halted"
+    assert body.get("ok") is True or body.get("error") in {"risk_halted", "not_live"}
 
     stop = client.post("/api/stop")
     assert stop.status_code == 200

@@ -249,10 +249,48 @@ class TradingDesk:
             bid, ask = float(tick["bid"]), float(tick["ask"])
             fast_pulse.push(bid, ask)
             # smart manage first (integrated)
-            managed = run_smart_manager(bid, ask, candles, fast_pulse)
+            managed = run_smart_manager(bid, ask, candles or [], fast_pulse)
             if managed.closed:
                 for c in managed.closed:
                     self.risk.register_close(float(c.get("pnl") or 0))
+
+            if not candles:
+                self._refresh_account()
+                payload = {
+                    "symbol": settings.symbol,
+                    "timeframe": settings.timeframe,
+                    "tick": tick,
+                    "account": self.account.to_dict(),
+                    "signal": {
+                        "action": "flat",
+                        "confluence": 0,
+                        "quality": "none",
+                        "narrative": "بانتظار شموع الوسيط من MetaApi",
+                        "entry": bid,
+                        "stop": 0,
+                        "take": 0,
+                        "schools": [],
+                    },
+                    "pulse": {"bias": "neutral", "score": 0},
+                    "pulse_confirm": False,
+                    "pending_signal": None,
+                    "risk": self.risk.state.to_dict(),
+                    "execution_gate": {"allowed": False, "reason": "broker_candles_warming", "lot": 0},
+                    "auto_trade": self.auto_trade,
+                    "armed": self.armed or self.auto_trade,
+                    "state": self.state,
+                    "feed": tick.get("source") or bridge.mode,
+                    "manage": {"events": managed.events, "closed": managed.closed, "updated": managed.updated},
+                    "closed_this_scan": managed.closed,
+                    "open_trades": store.open_trades(),
+                    "candles_tail": [],
+                    "candle_count": 0,
+                    "latency_ms": round((time.perf_counter() - t0) * 1000, 2),
+                    "tick_seconds": settings.tick_seconds,
+                    "loop_seconds": settings.loop_seconds,
+                }
+                self.last = payload
+                return payload
 
             signal = build_signal(candles, spread_points=float(tick.get("spread_points") or 0))
             pulse = fast_pulse.analyze(candles)
@@ -268,7 +306,11 @@ class TradingDesk:
             allowed, reason = self.risk.allow_trade(equity, signal.action)
             if signal.action != "flat" and not pulse_ok:
                 allowed, reason = False, "awaiting_pulse_confirm"
+            if signal.action != "flat" and len(candles) < 40:
+                allowed, reason = False, "broker_candles_warming"
             lot = self.risk.lot_size(equity, signal.entry, signal.stop) if signal.action != "flat" else 0.0
+            if signal.action != "flat" and lot < 0.01:
+                allowed, reason = False, "lot_too_small"
 
             if signal.action in {"buy", "sell"} and signal.quality in {"A", "B", "C"}:
                 self._pending_signal = signal.to_dict()
@@ -333,6 +375,9 @@ class TradingDesk:
         gate = snap["execution_gate"]
         if sig["action"] == "flat":
             return {"ok": False, "error": "no_actionable_signal", "scan": snap}
+        # Hard risk halt — never bypassable by force
+        if self.risk.state.halted:
+            return {"ok": False, "error": self.risk.state.halt_reason or "halted", "scan": snap}
         if not force and not gate["allowed"]:
             return {"ok": False, "error": gate["reason"], "scan": snap}
         if not force and not self.auto_trade:
@@ -351,7 +396,9 @@ class TradingDesk:
                     "scan": snap,
                 }
 
-        lot = gate["lot"] or 0.01
+        lot = float(gate.get("lot") or 0)
+        if lot < 0.01:
+            return {"ok": False, "error": "lot_too_small", "message": "حجم الصفقة أقل من الحد الأدنى 0.01", "scan": snap}
         result = bridge.order_market(sig["action"], lot, sig["stop"], sig["take"], comment="AURUM-ELITE")
         if result.get("ok"):
             fill = float(result.get("price") or result.get("entry") or 0)
@@ -381,30 +428,38 @@ class TradingDesk:
             self._pending_signal = None
             self.state = "IN_TRADE"
             store.log_event("trade_open", {"trade_id": trade_id, **result})
-            return {"ok": True, "trade_id": trade_id, "result": result, "scan": self.scan(full=True)}
+            # Reuse snap + light refresh instead of a second full scan
+            snap2 = dict(snap)
+            snap2["open_trades"] = store.open_trades()
+            snap2["account"] = self.account.to_dict()
+            self.last = snap2
+            return {"ok": True, "trade_id": trade_id, "result": result, "scan": snap2}
         store.log_event("trade_reject", result)
         return {"ok": False, "error": result.get("error") or "order_failed", "result": result, "scan": snap}
 
+    def _tick_once(self) -> None:
+        """Sync desk work — always run off the asyncio event loop."""
+        self.pulse_tick()
+        if time.time() - self._last_full_scan >= settings.loop_seconds:
+            snap = self.scan(full=True)
+            if (
+                self.auto_trade
+                and snap["execution_gate"]["allowed"]
+                and snap["signal"]["action"] != "flat"
+                and snap.get("pulse_confirm")
+            ):
+                self.execute_signal(force=False)
+
     async def _loop(self) -> None:
         self._running = True
+        loop = asyncio.get_running_loop()
         while self._running:
             try:
-                # Fast path every tick
-                self.pulse_tick()
-                # Periodic full strategy scan
-                if time.time() - self._last_full_scan >= settings.loop_seconds:
-                    snap = self.scan(full=True)
-                    if (
-                        self.auto_trade
-                        and snap["execution_gate"]["allowed"]
-                        and snap["signal"]["action"] != "flat"
-                        and snap.get("pulse_confirm")
-                    ):
-                        self.execute_signal(force=False)
+                await loop.run_in_executor(None, self._tick_once)
             except Exception as e:
                 log.exception("desk loop error: %s", e)
                 store.log_event("error", {"message": str(e)})
-            await asyncio.sleep(max(0.2, float(settings.tick_seconds)))
+            await asyncio.sleep(max(0.35, float(settings.tick_seconds)))
 
     def start_background(self) -> None:
         try:

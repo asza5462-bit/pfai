@@ -61,15 +61,19 @@ class RiskManager:
             self.state.halt_reason = f"daily_loss_cap_{settings.max_daily_loss_pct}%"
 
     def lot_size(self, equity: float, entry: float, stop: float, contract_size: float = 100.0) -> float:
-        """XAUUSD: 1.0 lot ≈ 100 oz; risk money / (stop distance * contract)."""
+        """XAUUSD: 1.0 lot ≈ 100 oz; risk money / (stop distance * contract).
+
+        Returns 0.0 when computed size is below broker min (0.01) — never oversize tiny accounts.
+        """
         risk_money = equity * (settings.risk_per_trade_pct / 100.0)
         stop_dist = abs(entry - stop)
-        if stop_dist <= 0:
+        if stop_dist <= 0 or equity <= 0 or risk_money <= 0:
             return 0.0
         # For gold CFDs many brokers: PnL ≈ move_in_price * lot * 100
         raw = risk_money / (stop_dist * contract_size)
-        # Normalize to broker min step 0.01
-        lot = max(0.01, min(5.0, round(raw, 2)))
+        lot = round(max(0.0, min(5.0, raw)), 2)
+        if lot < 0.01:
+            return 0.0
         return lot
 
     def allow_trade(self, equity: float, signal_action: str) -> tuple[bool, str]:

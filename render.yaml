@@ -49,9 +49,9 @@ services:
       - key: AURUM_MAX_SPREAD
         value: "45"
       - key: AURUM_LOOP_SECONDS
-        value: "6"
+        value: "8"
       - key: AURUM_TICK_SECONDS
-        value: "0.5"
+        value: "1"
       - key: AURUM_PULSE_CONFIRM
         value: "true"
       - key: AURUM_COOLDOWN_SEC

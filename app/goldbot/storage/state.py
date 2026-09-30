@@ -7,6 +7,7 @@ import time
 from pathlib import Path
 
 from goldbot.config import settings
+from goldbot.util_sqlite import connect as sqlite_connect
 
 
 class DeskStore:
@@ -16,9 +17,7 @@ class DeskStore:
         self._init()
 
     def _conn(self) -> sqlite3.Connection:
-        c = sqlite3.connect(self.path)
-        c.row_factory = sqlite3.Row
-        return c
+        return sqlite_connect(self.path, timeout=30.0)
 
     def _init(self) -> None:
         with self._conn() as c:

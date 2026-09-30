@@ -123,7 +123,7 @@
       }
       // Keep whatever the user typed; only set default if empty
       if (input && !input.value.trim()) {
-        input.value = j.default || "Exness-MT5Trial15";
+        input.value = j.default || "Exness-MT5Real32";
       }
     } catch (_) {
       if (list) {
@@ -430,7 +430,8 @@
 
   function startTimers() {
     clearInterval(pulseTimer); clearInterval(refreshTimer);
-    pulseTimer = setInterval(pulse, 1000);
+    // 2s pulse + 10s scan — lighter than 1s/8s; desk loop already manages live trades
+    pulseTimer = setInterval(pulse, 2000);
     refreshTimer = setInterval(async () => {
       try {
         render(await api("/api/scan", { method: "POST" }));
@@ -439,7 +440,7 @@
       } catch (e) {
         if (e.status === 401) enterLoggedOut();
       }
-    }, 8000);
+    }, 10000);
   }
 
   function enterLoggedOut() {
@@ -508,7 +509,7 @@
     }
     const server = ($("mt5Server").value || "").trim();
     if (!server.toLowerCase().includes("exness")) {
-      showAuth("تأكد من اسم السيرفر كما في Exness (مثال: Exness-MT5Trial15)");
+      showAuth("تأكد من اسم السيرفر كما في Exness (مثال: Exness-MT5Real32)");
       return;
     }
     if (btn) { btn.disabled = true; btn.textContent = "جاري الربط…"; }

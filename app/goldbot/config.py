@@ -70,8 +70,9 @@ class Settings:
     cooldown_seconds: int = field(default_factory=lambda: _env_int("AURUM_COOLDOWN_SEC", 120))
     auto_trade: bool = field(default_factory=lambda: _env_bool("AURUM_AUTO_TRADE", False))  # arm only after login/start
     # Dual-loop cadence: fast pulse/manage + slower strategy scan
-    loop_seconds: float = field(default_factory=lambda: _env_float("AURUM_LOOP_SECONDS", 6.0))
-    tick_seconds: float = field(default_factory=lambda: _env_float("AURUM_TICK_SECONDS", 0.5))
+    loop_seconds: float = field(default_factory=lambda: _env_float("AURUM_LOOP_SECONDS", 8.0))
+    # 1.0s default: MetaApi tick spam at 0.5s saturates free tiers and blocks the desk
+    tick_seconds: float = field(default_factory=lambda: _env_float("AURUM_TICK_SECONDS", 1.0))
     require_pulse_confirm: bool = field(default_factory=lambda: _env_bool("AURUM_PULSE_CONFIRM", True))
     max_hold_seconds: int = field(default_factory=lambda: _env_int("AURUM_MAX_HOLD_SEC", 10800))
     max_chase_r: float = field(default_factory=lambda: _env_float("AURUM_MAX_CHASE_R", 0.35))

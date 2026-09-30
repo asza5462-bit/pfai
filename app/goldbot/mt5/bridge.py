@@ -319,9 +319,83 @@ class Bridge:
     def fetch_candles(self, symbol: str | None = None, timeframe: str | None = None, count: int = 200) -> list[Candle]:
         symbol = symbol or settings.symbol
         timeframe = (timeframe or settings.timeframe).upper()
+        # Live MetaApi path: broker OHLC only (never mix Yahoo/synth into live signals)
+        if self.mode == "mt5" and self.metaapi_account_id and settings.prefer_metaapi:
+            bars = self._fetch_metaapi(symbol, timeframe, count)
+            if bars:
+                return bars
+            log.warning("metaapi candles empty — refusing paper fallback while live mode active")
+            # Keep last cache briefly so desk doesn't stall hard
+            if self._candle_cache and time.time() - self._candle_cache_ts < 120:
+                return self._candle_cache[-count:] if len(self._candle_cache) > count else list(self._candle_cache)
+            return []
         if self.mode == "mt5" and self._mt5 is not None:
             return self._fetch_mt5(symbol, timeframe, count)
         return self._fetch_paper(count)
+
+    def _fetch_metaapi(self, symbol: str, timeframe: str, count: int) -> list[Candle]:
+        from goldbot.mt5.metaapi_cloud import metaapi
+
+        if not metaapi.configured or not self.metaapi_account_id:
+            return []
+        now = time.time()
+        # Cache broker candles briefly — MetaApi historical is heavier than tick
+        if (
+            self._candle_cache
+            and self._feed_source == "metaapi"
+            and now - self._candle_cache_ts < 20
+            and len(self._candle_cache) >= min(count, 50)
+        ):
+            return self._candle_cache[-count:] if len(self._candle_cache) > count else list(self._candle_cache)
+        try:
+            raw = metaapi.candles(
+                self.metaapi_account_id,
+                symbol,
+                timeframe,
+                count=count,
+                region=self.metaapi_region or None,
+            )
+        except Exception as e:
+            log.warning("metaapi candles fail: %s", e)
+            return []
+        out: list[Candle] = []
+        for r in raw:
+            if not isinstance(r, dict):
+                continue
+            ts = r.get("time") or r.get("brokerTime") or r.get("timestamp")
+            try:
+                if isinstance(ts, str):
+                    # ISO → unix
+                    from datetime import datetime
+
+                    t = int(datetime.fromisoformat(ts.replace("Z", "+00:00")).timestamp())
+                else:
+                    t = int(ts)
+                    if t > 10_000_000_000:
+                        t //= 1000
+            except Exception:
+                continue
+            try:
+                out.append(
+                    Candle(
+                        time=t,
+                        open=float(r.get("open") or 0),
+                        high=float(r.get("high") or 0),
+                        low=float(r.get("low") or 0),
+                        close=float(r.get("close") or 0),
+                        volume=float(r.get("tickVolume") or r.get("volume") or r.get("realVolume") or 0),
+                    )
+                )
+            except (TypeError, ValueError):
+                continue
+        if out:
+            out.sort(key=lambda c: c.time)
+            self._last_price = out[-1].close
+            self._candle_cache = out
+            self._candle_cache_ts = now
+            self._feed_source = "metaapi"
+            self._seeded = True
+        return out[-count:] if len(out) > count else out
 
     def _tf_mt5(self, timeframe: str):
         mt5 = self._mt5
@@ -668,7 +742,18 @@ class Bridge:
         if self.execution == "metaapi" and self.metaapi_account_id:
             from goldbot.mt5.metaapi_cloud import is_metaapi_account_id, metaapi
 
-            return bool(metaapi.configured and is_metaapi_account_id(self.metaapi_account_id))
+            if not (metaapi.configured and is_metaapi_account_id(self.metaapi_account_id)):
+                return False
+            # Soft connectivity gate: last connect/tick must not be long-stale disconnected
+            try:
+                from goldbot.storage.state import store
+
+                prov = store.get_kv("metaapi_provision_state") or {}
+                if isinstance(prov, dict) and prov.get("status") == "error":
+                    return False
+            except Exception:
+                pass
+            return True
         if self.execution == "mt5_linux":
             from goldbot.mt5.mt5_linux import mt5_linux
 
