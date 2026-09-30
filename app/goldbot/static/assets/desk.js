@@ -355,6 +355,59 @@
     };
   }
 
+  if ($("btnSaveExnessCreds")) {
+    $("btnSaveExnessCreds").onclick = async () => {
+      const pass = ($("cloudMt5Pass") && $("cloudMt5Pass").value || "").trim();
+      const server = ($("cloudMt5Server") && $("cloudMt5Server").value || "").trim() || "Exness-MT5Real32";
+      if (pass.length < 4) {
+        $("connectMsg").textContent = "أدخل كلمة مرور التداول (ليس Investor)";
+        $("connectMsg").classList.remove("ok");
+        return;
+      }
+      $("connectMsg").textContent = "جاري حفظ كلمة المرور وإعادة الربط…";
+      $("connectMsg").classList.remove("ok");
+      try {
+        const j = await api("/api/cloud/credentials", {
+          method: "POST",
+          body: JSON.stringify({
+            mt5_password: pass,
+            mt5_server: server,
+            force_new: true,
+          }),
+        });
+        setBridgeUI(j.bridge || j.cloud, null, null, true);
+        if (j.account) {
+          $("equity").textContent = Number(j.account.equity || 0).toFixed(2);
+          $("modePill").textContent = j.account.mode || "mt5";
+        }
+        const live = !!(j.account && j.account.connected);
+        $("connectMsg").textContent = j.message || (live ? "تم التصحيح والاتصال" : "تم الحفظ — بانتظار اتصال Exness");
+        $("connectMsg").classList.toggle("ok", live);
+        if ($("cloudMt5Pass")) $("cloudMt5Pass").value = "";
+        if (!live) {
+          for (let i = 0; i < 18; i++) {
+            await new Promise((r) => setTimeout(r, 5000));
+            const st = await refreshCloudStatusOnly();
+            if (st && (st.live_execution || (st.bridge && st.bridge.online))) {
+              $("connectMsg").textContent = "اكتمل الربط السحابي — جاهز";
+              $("connectMsg").classList.add("ok");
+              break;
+            }
+            const prov = (st && st.provision) || {};
+            if (prov.status === "error" && prov.message) {
+              $("connectMsg").textContent = prov.code ? `${prov.message} [${prov.code}]` : prov.message;
+              $("connectMsg").classList.remove("ok");
+              break;
+            }
+          }
+        }
+      } catch (e) {
+        $("connectMsg").textContent = e.message || "تعذّر تصحيح بيانات Exness";
+        $("connectMsg").classList.remove("ok");
+      }
+    };
+  }
+
   if ($("btnSaveMetaToken")) {
     $("btnSaveMetaToken").onclick = async () => {
       const token = ($("cloudMetaToken").value || "").trim();

@@ -25,6 +25,7 @@ from goldbot.mt5.metaapi_cloud import (
     arabic_metaapi_error,
     is_metaapi_account_id,
     is_validation_cooldown_error,
+    is_validation_failed_error,
     metaapi,
     normalize_account_id,
     normalize_exness_server,
@@ -1368,6 +1369,67 @@ class CloudReconnectBody(BaseModel):
     force_new: bool = False  # drop saved MetaApi account id and recreate
 
 
+class CloudCredentialsBody(BaseModel):
+    """Refresh Exness trading password/server then force cloud reconnect."""
+
+    mt5_password: str = Field(min_length=4)
+    mt5_server: str = "Exness-MT5Real32"
+    mt5_login: str | None = None
+    symbol: str | None = None
+    force_new: bool = True
+
+
+@app.post("/api/cloud/credentials")
+async def cloud_update_credentials(
+    body: CloudCredentialsBody,
+    authorization: str | None = Header(default=None),
+    aurum_session: str | None = Cookie(default=None, alias=SESSION_COOKIE),
+):
+    """Save corrected Exness trading password/server and re-provision MetaApi."""
+    user = require_user(authorization, aurum_session)
+    _rate_or_429(f"creds:{user['id']}", limit=6, window_sec=180)
+    secrets = auth.mt5_secrets(user["id"])
+    login = str(body.mt5_login or secrets.get("login") or "").strip()
+    if not login:
+        raise HTTPException(400, "لا يوجد رقم حساب Exness محفوظ — سجّل الدخول من شاشة MT5 أولاً")
+    server = normalize_exness_server(body.mt5_server) or str(body.mt5_server).strip()
+    if not server:
+        raise HTTPException(400, "أدخل سيرفر Exness مثل Exness-MT5Real32")
+    patch = {
+        "mt5_login": login,
+        "mt5_password": body.mt5_password,
+        "mt5_server": server,
+        "mode": "mt5",
+    }
+    if body.symbol:
+        from goldbot.mt5.symbols import normalize_symbol
+
+        patch["symbol"] = normalize_symbol(body.symbol)
+    if body.force_new:
+        patch["metaapi_account_id"] = ""
+        patch["execution"] = ""
+        bridge.metaapi_account_id = ""
+        bridge.execution = ""
+    auth.update_settings(user["id"], patch)
+    settings.mode = "mt5"
+    settings.mt5_login = int(login) if login.isdigit() else settings.mt5_login
+    settings.mt5_password = body.mt5_password
+    settings.mt5_server = server
+    if body.symbol:
+        settings.symbol = patch["symbol"]
+    # Clear prior validation cooldown for this login+server so user can retry immediately after fix
+    try:
+        store.set_kv(f"metaapi_cooldown:{login}:{server.lower()}", {"until": 0})
+    except Exception:
+        pass
+    store.log_event("cloud_credentials_updated", {"login": login, "server": server, "force_new": body.force_new})
+    return await cloud_reconnect(
+        CloudReconnectBody(force_new=bool(body.force_new)),
+        authorization,
+        aurum_session,
+    )
+
+
 @app.get("/api/cloud/diagnose")
 async def cloud_diagnose(
     authorization: str | None = Header(default=None),
@@ -1589,7 +1651,12 @@ async def cloud_reconnect(
                 force_new=bool(body.force_new),
             )
         except MetaApiError as e:
-            if "not found" in (e.message or "").lower() or e.code in {"E_BAD_ACCOUNT_ID", "NotFoundError"}:
+            soft_retry = (
+                "not found" in (e.message or "").lower()
+                or e.code in {"E_BAD_ACCOUNT_ID", "NotFoundError", "E_VALIDATION_FAILED"}
+                or is_validation_failed_error(e)
+            )
+            if soft_retry and not body.force_new:
                 auth.update_settings(user["id"], {"metaapi_account_id": ""})
                 bridge.metaapi_account_id = ""
                 try:
@@ -1611,24 +1678,25 @@ async def cloud_reconnect(
                         log.error("metaapi reconnect retry failed code=%s msg=%s", e2.code, e2.message)
                         store.set_kv(
                             "metaapi_last_error",
-                            {"error": ar, "raw": e2.message, "code": e2.code, "ts": time.time()},
+                            {"error": ar, "raw": e2.message, "code": e2.code or "E_VALIDATION_FAILED", "ts": time.time()},
                         )
-                        _set_provision_state("error", ar, code=e2.code)
+                        _set_provision_state("error", ar, code=e2.code or "E_VALIDATION_FAILED")
                         raise HTTPException(
                             400,
-                            {"error": ar, "error_code": e2.code, "detail": ar},
+                            {"error": ar, "error_code": e2.code or "E_VALIDATION_FAILED", "detail": ar},
                         )
             elif e.code == "E_PROVISION_PENDING":
                 cloud = {"ok": True, "pending": True, "code": e.code}
             elif not mt5_linux.configured:
                 ar = arabic_metaapi_error(e)
-                log.error("metaapi reconnect failed code=%s msg=%s", e.code, e.message)
+                code = e.code or ("E_VALIDATION_FAILED" if is_validation_failed_error(e) else "E_CLOUD")
+                log.error("metaapi reconnect failed code=%s msg=%s", code, e.message)
                 store.set_kv(
                     "metaapi_last_error",
-                    {"error": ar, "raw": e.message, "code": e.code, "ts": time.time()},
+                    {"error": ar, "raw": e.message, "code": code, "ts": time.time()},
                 )
-                _set_provision_state("error", ar, code=e.code)
-                raise HTTPException(400, {"error": ar, "error_code": e.code, "detail": ar})
+                _set_provision_state("error", ar, code=code)
+                raise HTTPException(400, {"error": ar, "error_code": code, "detail": ar})
             store.log_event("metaapi_reconnect_error", {"error": e.message, "code": e.code})
 
     desk.account = bridge.connect()

@@ -289,6 +289,20 @@ def test_mt5_login_uses_metaapi_cloud(tmp_path, monkeypatch):
     assert st.json()["windows_required"] is False
 
 
+def test_arabic_validation_failed_message():
+    from goldbot.mt5.metaapi_cloud import MetaApiError, arabic_metaapi_error, is_validation_failed_error
+
+    err = MetaApiError(
+        "Validation failed (b68bf70cc3c140d5b4c5f3855561d3b7)",
+        code="ValidationError",
+    )
+    assert is_validation_failed_error(err) is True
+    ar = arabic_metaapi_error(err)
+    assert "Validation failed" not in ar or "رفض التحقق" in ar
+    assert "كلمة مرور التداول" in ar
+    assert "Exness-MT5Real32" in ar
+
+
 def test_metaapi_candles_and_bridge_feed(monkeypatch):
     monkeypatch.setattr("time.sleep", lambda *_: None)
     fake = FakeMetaHttp()

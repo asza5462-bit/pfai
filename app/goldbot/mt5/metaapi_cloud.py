@@ -92,6 +92,17 @@ def is_validation_cooldown_error(exc: MetaApiError | Exception | str) -> bool:
     return "rejected too many times" in msg or "retry in 1 hour" in msg or "validation for trading account" in msg and "rejected" in msg
 
 
+def is_validation_failed_error(exc: MetaApiError | Exception | str) -> bool:
+    """MetaApi 'Validation failed (accountId)' — broker rejected login/password/server."""
+    msg = str(getattr(exc, "message", None) or exc).lower()
+    code = str(getattr(exc, "code", "") or "")
+    if "validation failed" in msg:
+        return True
+    if code == "E_VALIDATION_FAILED":
+        return True
+    return False
+
+
 def normalize_exness_server(server: str | None) -> str:
     """Normalize Exness MT5 server names (trim, collapse spaces, fix common typos)."""
     s = str(server or "").strip()
@@ -161,6 +172,18 @@ def arabic_metaapi_error(exc: MetaApiError | Exception) -> str:
             "MetaApi أوقف التحقق من هذا الحساب مؤقتاً بعد محاولات فاشلة كثيرة. "
             "تأكد من: كلمة مرور التداول (ليس Investor) + السيرفر حرفياً من Exness "
             "(مثل Exness-MT5Real32) ثم انتظر ساعة كاملة قبل «إعادة ربط كامل»."
+        )
+    if (
+        is_validation_failed_error(exc)
+        or code == "E_VALIDATION_FAILED"
+        or "validation failed" in low
+    ):
+        return (
+            "MetaApi رفض التحقق من حساب Exness (Validation failed). "
+            "صحّح من تبويب الربط: ١) كلمة مرور التداول فقط — ليس Investor "
+            "٢) السيرفر حرفياً مثل Exness-MT5Real32 من تطبيق Exness "
+            "٣) احفظ ثم اضغط «إعادة ربط كامل». "
+            "إن غيّرت كلمة المرور مؤخراً في Exness أدخل الجديدة هنا."
         )
     if code == "E_SRV_NOT_FOUND" or ".dat file for server" in low:
         suggestions = _suggested_servers_from_error(details)
@@ -633,6 +656,13 @@ class MetaApiCloud:
                     except Exception:
                         pass
                     raise MetaApiError(e.message, code="E_VALIDATION_COOLDOWN", status=429, details=e.details) from e
+                if is_validation_failed_error(e) or "validation failed" in msg:
+                    raise MetaApiError(
+                        e.message,
+                        code="E_VALIDATION_FAILED",
+                        status=400,
+                        details=e.details,
+                    ) from e
                 if e.code in {
                     "E_AUTH",
                     "UnauthorizedError",
@@ -724,6 +754,21 @@ class MetaApiCloud:
                     break
         return acc
 
+    def _connection_error_text(self, acc: dict) -> str:
+        parts: list[str] = []
+        for key in ("connectionError", "error", "message", "lastError"):
+            v = acc.get(key)
+            if v:
+                parts.append(str(v))
+        replicas = acc.get("accountReplicas") or acc.get("replicas") or []
+        if isinstance(replicas, list):
+            for r in replicas:
+                if isinstance(r, dict):
+                    for key in ("connectionError", "error", "message"):
+                        if r.get(key):
+                            parts.append(str(r[key]))
+        return " | ".join(parts)
+
     def wait_connected(self, account_id: str, timeout: float = 120.0) -> dict:
         deadline = time.time() + timeout
         last: dict = {}
@@ -740,6 +785,15 @@ class MetaApiCloud:
             state = str(last.get("state") or "").upper()
             if status == "CONNECTED" and state == "DEPLOYED":
                 return last
+            # Fail fast on hard credential rejection — don't burn the full timeout
+            err_txt = self._connection_error_text(last)
+            if err_txt and is_validation_failed_error(err_txt):
+                raise MetaApiError(
+                    err_txt if "validation failed" in err_txt.lower() else f"Validation failed ({account_id})",
+                    code="E_VALIDATION_FAILED",
+                    status=400,
+                    details=last,
+                )
             if state != "DEPLOYED":
                 try:
                     self.deploy(account_id)
@@ -940,7 +994,18 @@ class MetaApiCloud:
             wait_timeout = (35.0 if is_real else 25.0) if fast else float(
                 settings.metaapi_connect_timeout if not is_real else max(settings.metaapi_connect_timeout, 150)
             )
-            acc = self.wait_connected(account_id, timeout=wait_timeout)
+            early_validation: MetaApiError | None = None
+            try:
+                acc = self.wait_connected(account_id, timeout=wait_timeout)
+            except MetaApiError as e:
+                if is_validation_failed_error(e) and not fast:
+                    early_validation = e
+                    try:
+                        acc = self.get_account(account_id)
+                    except Exception:
+                        acc = {"id": account_id, "server": server, "connectionStatus": "DISCONNECTED"}
+                else:
+                    raise
             status = str(acc.get("connectionStatus") or "").upper()
             replicas = acc.get("accountReplicas") or acc.get("replicas") or []
             if not status and isinstance(replicas, list):
@@ -949,20 +1014,46 @@ class MetaApiCloud:
                         status = "CONNECTED"
                         break
             connected = status == "CONNECTED"
-            # Full wait finished but still disconnected → surface real failure (not soft pending)
+            # Credential reject → refresh password/server + redeploy once
             if not connected and not fast:
                 detail = (
-                    acc.get("connectionError")
-                    or acc.get("error")
-                    or acc.get("message")
+                    (early_validation.message if early_validation else "")
+                    or self._connection_error_text(acc)
                     or "الطرفية السحابية لم تتصل بـ Exness"
                 )
-                raise MetaApiError(
-                    str(detail),
-                    code="E_NOT_CONNECTED",
-                    status=400,
-                    details=acc,
-                )
+                if is_validation_failed_error(detail) or early_validation is not None:
+                    try:
+                        log.warning(
+                            "validation failed on %s — refreshing password/server + redeploy once",
+                            account_id,
+                        )
+                        acc = self.migrate_account_server(
+                            {"id": account_id, "server": acc.get("server") or server},
+                            login=login,
+                            password=password,
+                            server=server,
+                            deploy_wait=min(75.0, deploy_budget + 30),
+                        )
+                        try:
+                            acc = self.wait_connected(account_id, timeout=45.0 if is_real else 30.0)
+                        except MetaApiError as e2:
+                            detail = e2.message or detail
+                            acc = getattr(e2, "details", None) if isinstance(getattr(e2, "details", None), dict) else acc
+                        status = str(acc.get("connectionStatus") or "").upper()
+                        connected = status == "CONNECTED"
+                        if connected:
+                            detail = ""
+                        else:
+                            detail = self._connection_error_text(acc) or detail
+                    except MetaApiError as heal_err:
+                        detail = heal_err.message or detail
+                if not connected:
+                    code = (
+                        "E_VALIDATION_FAILED"
+                        if is_validation_failed_error(detail) or "validation failed" in detail.lower()
+                        else "E_NOT_CONNECTED"
+                    )
+                    raise MetaApiError(str(detail), code=code, status=400, details=acc)
         else:
             status = str(acc.get("connectionStatus") or "").upper()
             connected = status == "CONNECTED" and str(acc.get("state") or "").upper() == "DEPLOYED"

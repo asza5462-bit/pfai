@@ -19,7 +19,7 @@
       <p class="auth-tag">Exness مباشر من التطبيق · بدون Windows</p>
       <ol id="setupSteps" class="setup-steps">
         <li><strong>١</strong> افتح <a href="https://app.metaapi.cloud/api-access/generate-token" target="_blank" rel="noopener">توليد توكن MetaApi</a> وانسخه</li>
-        <li><strong>٢</strong> الصق التوكن بالأسفل + بيانات Exness (السيرفر مثل <code>Exness-MT5Trial15</code>)</li>
+        <li><strong>٢</strong> الصق التوكن بالأسفل + بيانات Exness (السيرفر مثل <code>Exness-MT5Real32</code>)</li>
         <li><strong>٣</strong> اضغط «ارتباط سحابي» وانتظر «متصل»</li>
       </ol>
       <p id="setupNext" class="setup-next">الخطوة التالية: احصل على توكن MetaApi</p>
@@ -146,6 +146,16 @@
           <input id="cloudMetaToken" type="password" placeholder="الصق التوكن هنا" autocomplete="off" />
         </label>
         <button type="button" id="btnSaveMetaToken" class="primary">حفظ توكن MetaApi</button>
+
+        <h2>تصحيح بيانات Exness (عند Validation failed)</h2>
+        <p class="auth-note">إن ظهر رفض التحقق: أدخل <strong>كلمة مرور التداول</strong> (ليس Investor) والسيرفر حرفياً ثم احفظ.</p>
+        <label>كلمة مرور التداول
+          <input id="cloudMt5Pass" type="password" placeholder="كلمة مرور التداول من Exness" autocomplete="off" />
+        </label>
+        <label>سيرفر Exness
+          <input id="cloudMt5Server" list="mt5ServerList" placeholder="Exness-MT5Real32" value="Exness-MT5Real32" autocomplete="off" />
+        </label>
+        <button type="button" id="btnSaveExnessCreds" class="primary">حفظ وتصحيح الربط</button>
 
         <h2>المسار 2 — MT5 على Linux Docker</h2>
         <ol class="steps">
