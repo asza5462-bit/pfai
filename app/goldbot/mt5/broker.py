@@ -6,9 +6,13 @@ import re
 BROKER_NAME = "FP Markets"
 BROKER_ID = "fpmarkets"
 BROKER_SHORT = "FPMarkets"
+BROKER_PLATFORM = "cTrader"
+BROKER_PORTAL = "https://www.fpmarkets.com"
+BROKER_CLIENT_AREA = "https://portal.fpmarkets.com"
 
 # Exact server strings must match FP Markets portal / MT5 login email
 DEFAULT_SERVER = "FPMarkets-Live"
+DEFAULT_CTRADER_SERVER = "FPMarkets-cTrader"
 DEFAULT_SYMBOL = "XAUUSD"
 
 METAAPI_KEYWORDS = [
@@ -19,6 +23,29 @@ METAAPI_KEYWORDS = [
     "FP Markets LLC",
     "FP Trading",
 ]
+
+# cTrader Open API brokerTitle / brokerName values for FP Markets
+CTRADER_BROKER_KEYWORDS = [
+    "fp markets",
+    "fpmarkets",
+    "fp trading",
+    "fptrading",
+    "first prudential",
+    "fpmarkets ltd",
+    "fp markets ltd",
+    "fp markets llc",
+]
+
+
+def is_fp_markets_ctrader_broker(title: str | None) -> bool:
+    """True when a cTrader account brokerTitle belongs to FP Markets."""
+    low = str(title or "").strip().lower()
+    if not low:
+        return False
+    if "exness" in low or "ic markets" in low or "icmarkets" in low:
+        return False
+    compact = low.replace(" ", "").replace("-", "").replace("_", "")
+    return any(k.replace(" ", "") in compact for k in CTRADER_BROKER_KEYWORDS)
 
 
 def _fp_servers() -> list[str]:

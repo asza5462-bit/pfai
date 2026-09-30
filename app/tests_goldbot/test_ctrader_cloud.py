@@ -7,8 +7,20 @@ from goldbot.api import app
 from goldbot.auth.users import UserAuth
 from goldbot.mt5 import ctrader_cloud as ctrader_mod
 from goldbot.mt5.bridge import bridge
+from goldbot.mt5.broker import is_fp_markets_ctrader_broker
 from goldbot.mt5.ctrader_cloud import CTraderCloud, CTraderError, arabic_ctrader_error
 from goldbot.storage.state import DeskStore
+
+
+
+
+def test_fp_markets_ctrader_broker_detect():
+    assert is_fp_markets_ctrader_broker("FP Markets")
+    assert is_fp_markets_ctrader_broker("FPMarkets")
+    assert is_fp_markets_ctrader_broker("First Prudential Markets")
+    assert not is_fp_markets_ctrader_broker("Exness")
+    assert not is_fp_markets_ctrader_broker("IC Markets")
+    assert "FP Markets" in arabic_ctrader_error(CTraderError("not FP Markets", code="WRONG_BROKER"))
 
 
 def test_arabic_ctrader_errors():
@@ -107,9 +119,11 @@ def test_ctrader_bind_and_bridge_order(tmp_path, monkeypatch):
                 "margin": 50.0,
                 "free_margin": 2460.0,
                 "currency": "USD",
-                "server": "cTrader-Live",
+                "server": "FPMarkets-cTrader-Live",
                 "login": 990011,
-                "detail": "test ctrader",
+                "broker": "FP Markets",
+                "broker_id": "fpmarkets",
+                "detail": "test ctrader FP Markets",
                 "account_id": self.account_id,
             }
 
@@ -128,16 +142,19 @@ def test_ctrader_bind_and_bridge_order(tmp_path, monkeypatch):
                 "position_id": "42",
             }
 
-        def list_accounts(self):
-            return [
+        def list_accounts(self, *, fp_markets_only=True):
+            rows = [
                 {
                     "ctidTraderAccountId": 123456,
                     "isLive": True,
                     "traderLogin": 990011,
                     "brokerTitle": "FP Markets",
+                    "broker": "FP Markets",
+                    "is_fp_markets": True,
                     "depositCurrency": "USD",
                 }
             ]
+            return rows if not fp_markets_only else [a for a in rows if a.get("is_fp_markets")]
 
     cloud = FakeCloud()
     monkeypatch.setattr("goldbot.api.ctrader", cloud)

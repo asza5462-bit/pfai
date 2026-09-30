@@ -130,9 +130,9 @@ class Bridge:
                         currency=str(snap.get("currency") or "USD"),
                         mode="mt5",
                         connected=True,
-                        server=str(snap.get("server") or "cTrader"),
+                        server=str(snap.get("server") or "FPMarkets-cTrader"),
                         login=int(snap.get("login") or 0),
-                        detail=str(snap.get("detail") or "cTrader Open API"),
+                        detail=str(snap.get("detail") or "FP Markets via cTrader Open API"),
                     )
                 if self.execution == "ctrader":
                     return AccountSnapshot(
