@@ -1360,7 +1360,12 @@ async def ctrader_save_app(
         "ok": True,
         "configured": ctrader.configured,
         "redirect_uri": ctrader.redirect_uri,
-        "message": "تم حفظ تطبيق cTrader — اضغط تفويض ثم اختر الحساب.",
+        "broker": BROKER_NAME,
+        "message": (
+            f"تم حفظ تطبيق cTrader لـ {BROKER_NAME}. "
+            "انسخ Redirect URI إلى Spotware ثم اضغط «تفويض cTrader»."
+        ),
+        "next_ar": "نسخ Redirect URI → تفويض → اختيار حساب FP Markets → ابدأ التداول",
         "bridge": _cloud_status_for_user(user["id"]),
     }
 

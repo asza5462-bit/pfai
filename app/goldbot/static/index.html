@@ -25,21 +25,21 @@
       <p id="setupNext" class="setup-next">الخطوة التالية: سجّل الدخول ثم اربط حساب FP Markets cTrader</p>
 
       <div class="auth-tabs">
-        <button type="button" id="tabLogin" class="on">دخول التطبيق</button>
-        <button type="button" id="tabRegister">حساب تطبيق</button>
+        <button type="button" id="tabRegister" class="on">إنشاء حساب</button>
+        <button type="button" id="tabLogin">دخول التطبيق</button>
       </div>
 
-      <form id="loginForm" class="auth-form">
-        <label>اسم المستخدم<input id="loginUser" required minlength="3" /></label>
-        <label>كلمة المرور<input id="loginPass" type="password" required minlength="8" /></label>
-        <button type="submit" class="primary">تسجيل الدخول</button>
+      <form id="registerForm" class="auth-form">
+        <label>اسم المستخدم<input id="regUser" required minlength="3" autocomplete="username" /></label>
+        <label>كلمة المرور<input id="regPass" type="password" required minlength="8" autocomplete="new-password" /></label>
+        <label>تأكيد كلمة المرور<input id="regPass2" type="password" required minlength="8" autocomplete="new-password" /></label>
+        <button type="submit" class="primary">إنشاء حساب وابدأ الربط</button>
       </form>
 
-      <form id="registerForm" class="auth-form hidden">
-        <label>اسم المستخدم<input id="regUser" required minlength="3" /></label>
-        <label>كلمة المرور<input id="regPass" type="password" required minlength="8" /></label>
-        <label>تأكيد كلمة المرور<input id="regPass2" type="password" required minlength="8" /></label>
-        <button type="submit" class="primary">إنشاء حساب تطبيق</button>
+      <form id="loginForm" class="auth-form hidden">
+        <label>اسم المستخدم<input id="loginUser" required minlength="3" autocomplete="username" /></label>
+        <label>كلمة المرور<input id="loginPass" type="password" required minlength="8" autocomplete="current-password" /></label>
+        <button type="submit" class="primary">تسجيل الدخول</button>
       </form>
 
       <p id="authMsg" class="auth-msg"></p>
@@ -119,9 +119,12 @@
         <label>Client Secret
           <input id="ctraderClientSecret" type="password" placeholder="Client Secret" autocomplete="off" />
         </label>
-        <label class="auth-note">Redirect URI (انسخه إلى تطبيق Spotware)
+        <label class="auth-note">Redirect URI (انسخه حرفياً إلى تطبيق Spotware)
           <input id="ctraderRedirectUri" type="text" readonly value="" />
         </label>
+        <div class="cta" style="margin-top:0.35rem">
+          <button type="button" id="btnCopyRedirect" class="ghost">نسخ Redirect URI</button>
+        </div>
         <label>بيئة الحساب
           <select id="ctraderLive">
             <option value="1" selected>Live</option>
