@@ -24,4 +24,15 @@ AURUM_MODE=paper uvicorn goldbot.api:app --host 0.0.0.0 --port 8000
 
 ## ربط Exness
 
-راجع `GET /api/connect-guide`. تحتاج Windows + MT5 + متغيرات `MT5_*` و `AURUM_MODE=mt5`.
+راجع `GET /api/connect-guide` أو تبويب «ربط Exness السحابي».
+
+### cTrader Open API (من التطبيق مباشرة)
+
+يعمل فقط إن كان حساب Exness على منصة **cTrader** (وليس MT5 فقط):
+
+1. أنشئ تطبيقاً على [openapi.ctrader.com](https://openapi.ctrader.com) واحصل على Client ID + Secret.
+2. أضف Redirect URI: `https://YOUR_HOST/api/ctrader/oauth/callback`
+3. من تبويب الربط: احفظ التطبيق → تفويض cTrader → اختر الحساب.
+4. اختياري عبر البيئة: `CTRADER_CLIENT_ID` / `CTRADER_CLIENT_SECRET` / `AURUM_PUBLIC_URL`.
+
+مسارات أخرى: MetaApi (MT5) · Windows agent · Linux Docker MT5.

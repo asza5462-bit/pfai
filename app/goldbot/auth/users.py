@@ -236,6 +236,9 @@ class UserAuth:
                 cur["metaapi_region"] = str(patch.get("metaapi_region") or "").strip()
             if "execution" in patch:
                 cur["execution"] = str(patch.get("execution") or "").strip()
+            if "ctrader_account_id" in patch:
+                raw = str(patch.get("ctrader_account_id") or "").strip()
+                cur["ctrader_account_id"] = raw if raw.isdigit() else ""
             c.execute("UPDATE users SET settings=? WHERE id=?", (json.dumps(cur), user_id))
         return self.public_user(user_id)
 
@@ -258,6 +261,7 @@ class UserAuth:
             "symbol": cur.get("symbol") or settings.symbol,
             "metaapi_account_id": cur.get("metaapi_account_id") or "",
             "metaapi_region": cur.get("metaapi_region") or settings.metaapi_region,
+            "ctrader_account_id": cur.get("ctrader_account_id") or "",
             "execution": cur.get("execution") or "",
         }
 

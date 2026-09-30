@@ -11,7 +11,7 @@ from pathlib import Path
 from typing import Any
 
 from fastapi import Cookie, FastAPI, Header, HTTPException, Query, Request, Response
-from fastapi.responses import FileResponse, JSONResponse
+from fastapi.responses import FileResponse, JSONResponse, RedirectResponse
 from fastapi.staticfiles import StaticFiles
 from pydantic import BaseModel, Field
 
@@ -31,6 +31,7 @@ from goldbot.mt5.metaapi_cloud import (
     normalize_exness_server,
     servers_compatible,
 )
+from goldbot.mt5.ctrader_cloud import CTraderError, arabic_ctrader_error, ctrader
 from goldbot.mt5.mt5_linux import Mt5LinuxError, mt5_linux
 from goldbot.mt5.remote_hub import EXNESS_SERVERS, hub
 from goldbot.storage.state import store
@@ -326,9 +327,10 @@ def _provision_cloud_fast(
 
 @asynccontextmanager
 async def lifespan(_: FastAPI):
-    # Load MetaApi token / Linux executor from env or app-saved store
+    # Load MetaApi token / Linux executor / cTrader from env or app-saved store
     metaapi.refresh_token()
     mt5_linux.refresh()
+    ctrader.refresh()
     # Always disarm on boot — user must press «ابدأ» after live connect.
     # Prevents KV auto_trade=True + AURUM_MODE=paper from paper-filling after redeploy.
     try:
@@ -349,11 +351,12 @@ async def lifespan(_: FastAPI):
         log.warning("AURUM_DATA_DIR looks ephemeral: %s", settings.data_dir)
     desk.start_background()
     log.info(
-        "AURUM desk online v%s mode=%s symbol=%s metaapi=%s mt5_linux=%s data=%s",
+        "AURUM desk online v%s mode=%s symbol=%s metaapi=%s ctrader=%s mt5_linux=%s data=%s",
         __version__,
         settings.mode,
         settings.symbol,
         metaapi.configured,
+        ctrader.configured,
         mt5_linux.configured,
         settings.data_dir,
     )
@@ -471,10 +474,14 @@ async def download_agent():
 async def health():
     metaapi.refresh_token()
     mt5_linux.refresh()
+    ctrader.refresh()
     live = bridge.is_live_execution() and desk.account.connected and desk.account.mode == "mt5"
     provision = _get_provision_state()
     degraded = bool(provision.get("status") == "error") or (
-        settings.mode == "mt5" and not metaapi.configured and not mt5_linux.configured
+        settings.mode == "mt5"
+        and not metaapi.configured
+        and not mt5_linux.configured
+        and not ctrader.ready
     )
     return {
         "ok": True,
@@ -487,6 +494,8 @@ async def health():
         "state": desk.state,
         "tick_seconds": settings.tick_seconds,
         "metaapi_configured": metaapi.configured,
+        "ctrader_configured": ctrader.configured,
+        "ctrader_ready": ctrader.ready,
         "mt5_linux_configured": mt5_linux.configured,
         "execution": bridge.execution or desk.account.mode,
         "live_execution": live,
@@ -501,9 +510,16 @@ async def setup_next():
     """Public next-step guide for first-time Exness cloud connect."""
     metaapi.refresh_token()
     mt5_linux.refresh()
+    ctrader.refresh()
     if desk.account.connected and desk.account.mode == "mt5":
         step = "ready"
         next_ar = "الحساب متصل — اضغط «ابدأ التداول» من المكتب."
+    elif ctrader.ready:
+        step = "ctrader_ready"
+        next_ar = "cTrader جاهز — اضغط «ابدأ التداول» من المكتب (حساب Exness على منصة cTrader)."
+    elif ctrader.configured and ctrader.access_token:
+        step = "ctrader_select_account"
+        next_ar = "فوّض cTrader ثم اختر حسابك من تبويب الربط."
     elif metaapi.configured:
         step = "bind_metaapi_account"
         next_ar = (
@@ -514,15 +530,21 @@ async def setup_next():
         step = "exness_vnc_or_login"
         next_ar = "منفّذ Linux مضبوط. سجّل Exness عبر VNC إن لزم، ثم ادخل من شاشة MT5."
     else:
-        step = "metaapi_token"
-        next_ar = "الخطوة التالية: افتح رابط توليد التوكن، انسخه، والصقه في الحقل الأول ثم أدخل بيانات Exness."
+        step = "choose_path"
+        next_ar = (
+            "اختر مساراً: cTrader Open API (حساب Exness cTrader) من تبويب الربط، "
+            "أو توكن MetaApi لحساب MT5، أو Windows."
+        )
     return {
         "ok": True,
         "step": step,
         "next_ar": next_ar,
         "metaapi_configured": metaapi.configured,
+        "ctrader_configured": ctrader.configured,
+        "ctrader_ready": ctrader.ready,
         "mt5_linux_configured": mt5_linux.configured,
         "token_url": "https://app.metaapi.cloud/api-access/generate-token",
+        "ctrader_signup": "https://openapi.ctrader.com",
         "default_server": "Exness-MT5Real32",
         "default_symbol": "XAUUSDm",
         "version": __version__,
@@ -739,6 +761,53 @@ def _cloud_status_for_user(user_id: int) -> dict:
             "windows_required": True,
             "bridge_token_issued": bool(st.get("bridge_token_issued") or hub.token_for_user(user_id)),
         }
+    # cTrader Open API — in-app path when selected or fully ready
+    ctrader.refresh()
+    if exec_pref == "ctrader" or (settings.prefer_ctrader and ctrader.ready and exec_pref in {"", "ctrader"}):
+        if ctrader.ready:
+            try:
+                snap = ctrader.snapshot()
+            except CTraderError as e:
+                return {
+                    "online": False,
+                    "execution": "ctrader",
+                    "provider": "ctrader",
+                    "account_id": ctrader.account_id,
+                    "detail": arabic_ctrader_error(e),
+                    "windows_required": False,
+                }
+            online = bool(snap.get("connected"))
+            if online:
+                bridge.bind_ctrader(ctrader.account_id)
+                bridge.mode = "mt5"
+            return {
+                "online": online,
+                "execution": "ctrader",
+                "provider": "ctrader",
+                "account_id": ctrader.account_id,
+                "account": snap,
+                "detail": snap.get("detail")
+                or ("متصل عبر cTrader Open API" if online else "cTrader غير متصل"),
+                "windows_required": False,
+            }
+        if exec_pref == "ctrader":
+            detail = (
+                "احفظ Client ID/Secret من openapi.ctrader.com ثم فوّض واختر حساب cTrader"
+                if not ctrader.configured
+                else (
+                    "اضغط «تفويض cTrader» ثم اختر الحساب"
+                    if not ctrader.access_token
+                    else "اختر حساب cTrader من القائمة"
+                )
+            )
+            return {
+                "online": False,
+                "execution": "ctrader",
+                "provider": "ctrader",
+                "account_id": ctrader.account_id,
+                "detail": detail,
+                "windows_required": False,
+            }
     raw_id = secrets.get("metaapi_account_id") or bridge.metaapi_account_id
     account_id = normalize_account_id(raw_id) if is_metaapi_account_id(raw_id) else ""
     if raw_id and not account_id:
@@ -872,12 +941,13 @@ def _readiness(snap: dict) -> dict:
     feed_ok = (
         feed.startswith("gold_api")
         or feed.startswith("yahoo")
-        or feed in {"mt5", "metaapi"}
+        or feed in {"mt5", "metaapi", "ctrader"}
         or feed.endswith("_live")
         or feed.endswith("_synth")
     )
     acc = snap.get("account") or {}
     live_exec = bridge.is_live_execution() and acc.get("mode") == "mt5" and bool(acc.get("connected"))
+    ctrader.refresh()
     checks = {
         "service_up": True,
         "product_aurum": True,
@@ -890,12 +960,14 @@ def _readiness(snap: dict) -> dict:
         # Paper "connected" must NOT count as live Exness
         "mt5_connected": live_exec,
         "metaapi_configured": metaapi.configured,
-        "cloud_execution": bridge.execution == "metaapi" and live_exec,
+        "ctrader_configured": ctrader.configured,
+        "ctrader_ready": ctrader.ready,
+        "cloud_execution": bridge.execution in {"metaapi", "ctrader"} and live_exec,
         "auth_configured": auth.user_count() > 0,
         "real_orders_only": True,
     }
     paper_ready = all(checks[k] for k in ("service_up", "price_live", "feed_ok", "candles_ok", "risk_active", "auth_configured"))
-    live_ready = paper_ready and live_exec and checks["metaapi_configured"]
+    live_ready = paper_ready and live_exec and (checks["metaapi_configured"] or checks["ctrader_ready"])
     grade = "live_ready" if live_ready else "paper_ready" if paper_ready else "not_ready"
     return {
         "grade": grade,
@@ -987,7 +1059,28 @@ async def pulse(authorization: str | None = Header(default=None), aurum_session:
 async def start_desk(authorization: str | None = Header(default=None), aurum_session: str | None = Cookie(default=None, alias=SESSION_COOKIE)):
     user = require_user(authorization, aurum_session)
     secrets = auth.mt5_secrets(user["id"])
-    if secrets.get("mode") == "mt5" and secrets.get("login"):
+    exec_pref = str(secrets.get("execution") or "").strip()
+    # cTrader path — no MT5 login required
+    if exec_pref == "ctrader" or (settings.prefer_ctrader and ctrader.ready and exec_pref in {"", "ctrader"}):
+        ctrader.refresh()
+        settings.mode = "mt5"
+        if secrets.get("ctrader_account_id") and str(secrets["ctrader_account_id"]).isdigit():
+            bridge.bind_ctrader(int(secrets["ctrader_account_id"]))
+        elif ctrader.account_id:
+            bridge.bind_ctrader(ctrader.account_id)
+        else:
+            bridge.execution = "ctrader"
+            bridge.mode = "mt5"
+        desk.account = await asyncio.to_thread(bridge.connect)
+        if not desk.account.connected:
+            return {
+                "ok": False,
+                "error": "ctrader",
+                "message": desk.account.detail
+                or "cTrader غير متصل — احفظ التطبيق وفوّض واختر حساب Exness cTrader.",
+                "bridge": _cloud_status_for_user(user["id"]),
+            }
+    elif secrets.get("mode") == "mt5" and secrets.get("login"):
         settings.mode = "mt5"
         settings.mt5_login = secrets["login"]
         settings.mt5_password = secrets["password"]
@@ -1143,16 +1236,31 @@ async def execution_ways():
     """Research-backed real paths to trade Exness without Windows."""
     metaapi.refresh_token()
     mt5_linux.refresh()
+    ctrader.refresh()
     return {
         "ok": True,
         "finding_ar": (
-            "Exness لا توفّر REST API عام للأفراد. التنفيذ الحقيقي يتم فقط عبر طرفية MetaTrader 5. "
-            "بدون Windows يتوفر مساران مؤكدان."
+            "Exness لا توفّر REST API عام للأفراد على MT5. التنفيذ الحقيقي: "
+            "cTrader Open API (حساب cTrader)، أو MetaApi/MT5 سحابي، أو Windows/Linux MT5."
         ),
         "ways": [
             {
+                "id": "ctrader",
+                "title_ar": "cTrader Open API (من التطبيق مباشرة)",
+                "windows_required": False,
+                "cost": "مجاني — تطبيق Spotware Open API + حساب Exness على cTrader",
+                "ready": ctrader.ready,
+                "steps_ar": [
+                    "أنشئ تطبيقاً على openapi.ctrader.com (Client ID + Secret)",
+                    "احفظهما في AURUM واضغط تفويض cTrader",
+                    "اختر حساب Exness cTrader — التنفيذ من التطبيق مباشرة",
+                ],
+                "signup": "https://openapi.ctrader.com",
+                "note_ar": "يعمل فقط إن كان حساب Exness على منصة cTrader (وليس MT5 فقط).",
+            },
+            {
                 "id": "metaapi",
-                "title_ar": "MetaApi سحابي (الأسهل)",
+                "title_ar": "MetaApi سحابي (حسابات MT5)",
                 "windows_required": False,
                 "cost": "حساب MT واحد مجاني تقريباً + تجربة",
                 "ready": metaapi.configured,
@@ -1178,10 +1286,12 @@ async def execution_ways():
             },
         ],
         "rejected_ar": [
-            "لا يوجد توكن Exness رسمي للتداول بالـ REST للأفراد",
+            "لا يوجد توكن Exness رسمي للتداول بالـ REST للأفراد على MT5",
             "أتمتة واجهة المتصفح غير موثوقة ومخالفة لشروط الاستخدام",
         ],
         "metaapi_configured": metaapi.configured,
+        "ctrader_configured": ctrader.configured,
+        "ctrader_ready": ctrader.ready,
         "mt5_linux_configured": mt5_linux.configured,
         "servers": EXNESS_SERVERS,
     }
@@ -1192,13 +1302,237 @@ async def connect_guide():
     ways = await execution_ways()
     return {
         "title": "طرق التنفيذ الحقيقي بدون Windows",
-        "steps": ways["ways"][0]["steps_ar"] + ["أو استخدم مسار Linux Docker من /api/ways"],
+        "steps": ways["ways"][0]["steps_ar"] + ["أو MetaApi / Linux Docker من /api/ways"],
         "metaapi_configured": ways["metaapi_configured"],
+        "ctrader_configured": ways["ctrader_configured"],
+        "ctrader_ready": ways["ctrader_ready"],
         "mt5_linux_configured": ways["mt5_linux_configured"],
         "warning": ways["finding_ar"],
         "servers": EXNESS_SERVERS,
         "metaapi_signup": "https://app.metaapi.cloud/api-access/generate-token",
+        "ctrader_signup": "https://openapi.ctrader.com",
         "ways": ways["ways"],
+    }
+
+
+class CTraderAppBody(BaseModel):
+    client_id: str = Field(..., min_length=4)
+    client_secret: str = Field(..., min_length=4)
+    live: bool = True
+
+
+class CTraderTokenBody(BaseModel):
+    access_token: str = Field(..., min_length=10)
+    refresh_token: str | None = None
+
+
+class CTraderBindBody(BaseModel):
+    account_id: int = Field(..., ge=1)
+    live: bool | None = None
+
+
+@app.get("/api/ctrader/status")
+async def ctrader_status(
+    authorization: str | None = Header(default=None),
+    aurum_session: str | None = Cookie(default=None, alias=SESSION_COOKIE),
+):
+    user = require_user(authorization, aurum_session)
+    ctrader.refresh()
+    return {
+        "ok": True,
+        "configured": ctrader.configured,
+        "ready": ctrader.ready,
+        "has_token": bool(ctrader.access_token),
+        "account_id": ctrader.account_id,
+        "live": ctrader.live,
+        "redirect_uri": ctrader.redirect_uri,
+        "signup": "https://openapi.ctrader.com",
+        "bridge": _cloud_status_for_user(user["id"]),
+        "account": desk.account.to_dict() if desk.account else {},
+        "steps_ar": [
+            "أنشئ تطبيقاً على https://openapi.ctrader.com وانسخ Client ID و Client Secret",
+            f"أضف Redirect URI: {ctrader.redirect_uri}",
+            "احفظهما هنا ثم اضغط «تفويض cTrader»",
+            "اختر حساب Exness cTrader من القائمة",
+        ],
+        "note_ar": "يعمل فقط مع حساب Exness على منصة cTrader — حسابات MT5 فقط لا تدعم Open API.",
+    }
+
+
+@app.post("/api/ctrader/app")
+async def ctrader_save_app(
+    body: CTraderAppBody,
+    authorization: str | None = Header(default=None),
+    aurum_session: str | None = Cookie(default=None, alias=SESSION_COOKIE),
+):
+    user = require_user(authorization, aurum_session)
+    ctrader.save_app(body.client_id, body.client_secret, live=body.live)
+    auth.update_settings(user["id"], {"execution": "ctrader", "mode": "mt5"})
+    store.log_event("ctrader_app_saved", {"user": user["username"], "live": body.live})
+    return {
+        "ok": True,
+        "configured": ctrader.configured,
+        "redirect_uri": ctrader.redirect_uri,
+        "message": "تم حفظ تطبيق cTrader — اضغط تفويض ثم اختر الحساب.",
+        "bridge": _cloud_status_for_user(user["id"]),
+    }
+
+
+@app.get("/api/ctrader/oauth/start")
+async def ctrader_oauth_start(
+    authorization: str | None = Header(default=None),
+    aurum_session: str | None = Cookie(default=None, alias=SESSION_COOKIE),
+):
+    user = require_user(authorization, aurum_session)
+    try:
+        import secrets as _secrets
+
+        state = _secrets.token_urlsafe(16)
+        store.set_kv("ctrader_oauth_state", {"state": state, "user_id": user["id"], "ts": time.time()})
+        url = ctrader.auth_url(state=state)
+    except CTraderError as e:
+        raise HTTPException(400, arabic_ctrader_error(e))
+    return {"ok": True, "auth_url": url, "redirect_uri": ctrader.redirect_uri}
+
+
+@app.get("/api/ctrader/oauth/callback")
+async def ctrader_oauth_callback(
+    code: str | None = Query(default=None),
+    state: str | None = Query(default=None),
+    error: str | None = Query(default=None),
+):
+    """Public OAuth redirect target — exchanges code then sends user back to the desk."""
+    if error:
+        return RedirectResponse(f"/?ctrader=error&msg={error}", status_code=302)
+    if not code:
+        return RedirectResponse("/?ctrader=error&msg=missing_code", status_code=302)
+    saved = store.get_kv("ctrader_oauth_state") or {}
+    if state and saved.get("state") and state != saved.get("state"):
+        return RedirectResponse("/?ctrader=error&msg=bad_state", status_code=302)
+    try:
+        ctrader.exchange_code(code)
+        uid = saved.get("user_id")
+        if uid:
+            auth.update_settings(int(uid), {"execution": "ctrader", "mode": "mt5"})
+        store.log_event("ctrader_oauth_ok", {"user_id": uid})
+    except CTraderError as e:
+        store.log_event("ctrader_oauth_error", {"error": str(e)})
+        return RedirectResponse("/?ctrader=error&msg=token", status_code=302)
+    return RedirectResponse("/?ctrader=authorized", status_code=302)
+
+
+@app.post("/api/ctrader/token")
+async def ctrader_save_token(
+    body: CTraderTokenBody,
+    authorization: str | None = Header(default=None),
+    aurum_session: str | None = Cookie(default=None, alias=SESSION_COOKIE),
+):
+    user = require_user(authorization, aurum_session)
+    if not ctrader.configured:
+        raise HTTPException(400, arabic_ctrader_error(CTraderError("missing app", code="NO_APP")))
+    ctrader.save_access_token(body.access_token, body.refresh_token)
+    auth.update_settings(user["id"], {"execution": "ctrader", "mode": "mt5"})
+    return {
+        "ok": True,
+        "has_token": True,
+        "message": "تم حفظ توكن cTrader — اختر الحساب من القائمة.",
+        "bridge": _cloud_status_for_user(user["id"]),
+    }
+
+
+@app.get("/api/ctrader/accounts")
+async def ctrader_list_accounts(
+    authorization: str | None = Header(default=None),
+    aurum_session: str | None = Cookie(default=None, alias=SESSION_COOKIE),
+):
+    require_user(authorization, aurum_session)
+    ctrader.refresh()
+    if not ctrader.configured or not ctrader.access_token:
+        raise HTTPException(400, arabic_ctrader_error(CTraderError("missing access token", code="NO_TOKEN")))
+    try:
+        rows = await asyncio.to_thread(ctrader.list_accounts)
+    except CTraderError as e:
+        raise HTTPException(400, arabic_ctrader_error(e))
+    return {
+        "ok": True,
+        "accounts": rows,
+        "count": len(rows),
+        "hint_ar": "اختر حساب Exness cTrader ثم اضغط ربط — حسابات MT5 فقط لن تظهر/لن تعمل.",
+    }
+
+
+@app.post("/api/ctrader/bind")
+async def ctrader_bind(
+    body: CTraderBindBody,
+    authorization: str | None = Header(default=None),
+    aurum_session: str | None = Cookie(default=None, alias=SESSION_COOKIE),
+):
+    user = require_user(authorization, aurum_session)
+    ctrader.refresh()
+    if not ctrader.configured or not ctrader.access_token:
+        raise HTTPException(400, arabic_ctrader_error(CTraderError("missing access token", code="NO_TOKEN")))
+    ctrader.select_account(body.account_id, live=body.live)
+    settings.mode = "mt5"
+    auth.update_settings(
+        user["id"],
+        {
+            "mode": "mt5",
+            "execution": "ctrader",
+            "ctrader_account_id": str(body.account_id),
+        },
+    )
+    bridge.bind_ctrader(body.account_id)
+    bridge.mode = "mt5"
+    try:
+        desk.account = await asyncio.to_thread(bridge.connect)
+    except Exception as e:
+        log.warning("ctrader bind connect: %s", e)
+        desk.account = bridge.connect()
+    online = bool(desk.account.connected)
+    if online:
+        _set_provision_state("ok", "متصل عبر cTrader Open API — التنفيذ الحقيقي جاهز", connected=True)
+    store.log_event(
+        "ctrader_bound",
+        {"user": user["username"], "account_id": body.account_id, "connected": online},
+    )
+    return {
+        "ok": True,
+        "ready": ctrader.ready,
+        "account_id": body.account_id,
+        "account": desk.account.to_dict(),
+        "bridge": _cloud_status_for_user(user["id"]),
+        "live_execution": online and bridge.is_live_execution(),
+        "message": (
+            "تم الربط عبر cTrader — التنفيذ من التطبيق مباشرة"
+            if online
+            else "تم اختيار الحساب — إن فشل الاتصال تحقق من Live/Demo وأن الحساب cTrader."
+        ),
+    }
+
+
+@app.post("/api/ctrader/enable")
+async def ctrader_enable(
+    authorization: str | None = Header(default=None),
+    aurum_session: str | None = Cookie(default=None, alias=SESSION_COOKIE),
+):
+    """Prefer cTrader execution path for this user (after app+token+account are set)."""
+    user = require_user(authorization, aurum_session)
+    ctrader.refresh()
+    auth.update_settings(user["id"], {"execution": "ctrader", "mode": "mt5"})
+    settings.mode = "mt5"
+    if ctrader.ready:
+        bridge.bind_ctrader(ctrader.account_id)
+        desk.account = await asyncio.to_thread(bridge.connect)
+    else:
+        bridge.execution = "ctrader"
+        bridge.mode = "mt5"
+    return {
+        "ok": True,
+        "ready": ctrader.ready,
+        "configured": ctrader.configured,
+        "bridge": _cloud_status_for_user(user["id"]),
+        "account": desk.account.to_dict(),
+        "message": "مسار cTrader مفعّل" if ctrader.ready else "مسار cTrader مفعّل — أكمل التفويض واختيار الحساب",
     }
 
 
@@ -1368,9 +1702,13 @@ async def cloud_status(authorization: str | None = Header(default=None), aurum_s
                     }
     except Exception:
         pass
+    ctrader.refresh()
     return {
         "ok": True,
         "metaapi_configured": metaapi.configured,
+        "ctrader_configured": ctrader.configured,
+        "ctrader_ready": ctrader.ready,
+        "ctrader_account_id": ctrader.account_id,
         "mt5_linux_configured": mt5_linux.configured,
         "region": settings.metaapi_region,
         "bridge": st,
@@ -1381,6 +1719,7 @@ async def cloud_status(authorization: str | None = Header(default=None), aurum_s
         "cooldown": cooldown,
         "last_error": last_err,
         "signup_url": "https://app.metaapi.cloud/api-access/generate-token",
+        "ctrader_signup": "https://openapi.ctrader.com",
     }
 
 

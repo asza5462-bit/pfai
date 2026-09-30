@@ -60,6 +60,11 @@ class Settings:
     # Off by default — MetaApi is the primary no-Windows path; enable only with a Linux executor URL
     prefer_mt5_linux: bool = field(default_factory=lambda: _env_bool("AURUM_PREFER_MT5_LINUX", False))
 
+    # cTrader Open API — real Exness/cTrader from the app (no Windows; cTrader accounts only)
+    prefer_ctrader: bool = field(default_factory=lambda: _env_bool("AURUM_PREFER_CTRADER", True))
+    ctrader_client_id: str = field(default_factory=lambda: os.getenv("CTRADER_CLIENT_ID", ""))
+    ctrader_client_secret: str = field(default_factory=lambda: os.getenv("CTRADER_CLIENT_SECRET", ""))
+
     # Risk — elite desk defaults (capital preservation first)
     risk_per_trade_pct: float = field(default_factory=lambda: _env_float("AURUM_RISK_PCT", 0.35))
     max_daily_loss_pct: float = field(default_factory=lambda: _env_float("AURUM_MAX_DAILY_LOSS_PCT", 1.25))
