@@ -1977,8 +1977,6 @@ async def cloud_update_credentials(
     server = resolve_fp_server(body.mt5_server)
     if not server:
         raise HTTPException(400, "أدخل سيرفر FP Markets مثل FPMarkets-Live (ليس وسيطاً آخر)")
-    if not server:
-        raise HTTPException(400, "أدخل سيرفر FP Markets مثل FPMarkets-Live (ليس وسيطاً آخر)")
     patch = {
         "mt5_login": login,
         "mt5_password": body.mt5_password,
