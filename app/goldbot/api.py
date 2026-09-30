@@ -769,30 +769,39 @@ async def mt5_login(body: Mt5LoginBody, response: Response, request: Request):
     }
 
 
+def _ctrader_pending_status() -> dict:
+    ctrader.refresh()
+    detail = (
+        f"احفظ Client ID/Secret من openapi.ctrader.com لربط {BROKER_NAME}"
+        if not ctrader.configured
+        else (
+            "اضغط «تفويض cTrader» وسجّل دخول حساب FP Markets"
+            if not ctrader.access_token
+            else "اختر حساب FP Markets cTrader من القائمة"
+        )
+    )
+    return {
+        "online": False,
+        "execution": "ctrader",
+        "provider": "ctrader",
+        "broker": BROKER_NAME,
+        "account_id": ctrader.account_id,
+        "detail": detail,
+        "windows_required": False,
+        "ctrader_configured": ctrader.configured,
+        "ctrader_ready": False,
+        "has_token": bool(ctrader.access_token),
+    }
+
+
 def _cloud_status_for_user(user_id: int) -> dict:
+    """Status for desk connect pill — cTrader/FP Markets is the primary product path."""
     secrets = auth.mt5_secrets(user_id)
     exec_pref = str(secrets.get("execution") or bridge.execution or "").strip()
-    # Windows agent path takes priority when user explicitly enabled it
-    if exec_pref == "windows_bridge":
-        bridge.bind_remote_user(user_id)
-        bridge.execution = "windows_bridge"
-        bridge.mode = "mt5"
-        st = hub.status_for_user(user_id)
-        st = dict(st)
-        online = bool(st.get("online"))
-        return {
-            "online": online,
-            "execution": "windows_bridge",
-            "provider": "windows_bridge",
-            "account": st.get("account") or {},
-            "detail": st.get("detail")
-            or ("متصل عبر Windows MT5" if online else "شغّل وكيل Windows مع MetaTrader 5 مفتوح"),
-            "windows_required": True,
-            "bridge_token_issued": bool(st.get("bridge_token_issued") or hub.token_for_user(user_id)),
-        }
-    # cTrader Open API — in-app path when selected or fully ready
     ctrader.refresh()
-    if exec_pref == "ctrader" or (settings.prefer_ctrader and ctrader.ready and exec_pref in {"", "ctrader"}):
+
+    # Live cTrader always wins
+    if ctrader.ready or exec_pref == "ctrader":
         if ctrader.ready:
             try:
                 snap = ctrader.snapshot()
@@ -801,9 +810,12 @@ def _cloud_status_for_user(user_id: int) -> dict:
                     "online": False,
                     "execution": "ctrader",
                     "provider": "ctrader",
+                    "broker": BROKER_NAME,
                     "account_id": ctrader.account_id,
                     "detail": arabic_ctrader_error(e),
                     "windows_required": False,
+                    "ctrader_configured": ctrader.configured,
+                    "ctrader_ready": False,
                 }
             online = bool(snap.get("connected"))
             if online:
@@ -813,109 +825,50 @@ def _cloud_status_for_user(user_id: int) -> dict:
                 "online": online,
                 "execution": "ctrader",
                 "provider": "ctrader",
+                "broker": BROKER_NAME,
                 "account_id": ctrader.account_id,
                 "account": snap,
                 "detail": snap.get("detail")
-                or ("متصل عبر cTrader Open API" if online else "cTrader غير متصل"),
+                or (f"متصل بـ {BROKER_NAME} عبر cTrader" if online else "cTrader غير متصل"),
                 "windows_required": False,
+                "ctrader_configured": True,
+                "ctrader_ready": online,
             }
-        if exec_pref == "ctrader":
-            detail = (
-                "احفظ Client ID/Secret من openapi.ctrader.com ثم فوّض واختر حساب cTrader"
-                if not ctrader.configured
-                else (
-                    "اضغط «تفويض cTrader» ثم اختر الحساب"
-                    if not ctrader.access_token
-                    else "اختر حساب cTrader من القائمة"
-                )
+        return _ctrader_pending_status()
+
+    # Legacy MetaApi only when explicitly preferred/enabled
+    if settings.prefer_metaapi:
+        raw_id = secrets.get("metaapi_account_id") or bridge.metaapi_account_id
+        account_id = normalize_account_id(raw_id) if is_metaapi_account_id(raw_id) else ""
+        metaapi.refresh_token()
+        if account_id and metaapi.configured:
+            if bridge.metaapi_account_id != account_id:
+                bridge.bind_metaapi(account_id, secrets.get("metaapi_region") or settings.metaapi_region)
+            snap = metaapi.snapshot(
+                account_id,
+                region=(secrets.get("metaapi_region") or settings.metaapi_region) or None,
             )
-            return {
-                "online": False,
-                "execution": "ctrader",
-                "provider": "ctrader",
-                "account_id": ctrader.account_id,
-                "detail": detail,
-                "windows_required": False,
-            }
-    raw_id = secrets.get("metaapi_account_id") or bridge.metaapi_account_id
-    account_id = normalize_account_id(raw_id) if is_metaapi_account_id(raw_id) else ""
-    if raw_id and not account_id:
-        # Heal corrupt ids like "1215" immediately
-        auth.update_settings(user_id, {"metaapi_account_id": ""})
-        bridge.metaapi_account_id = ""
-    region = secrets.get("metaapi_region") or bridge.metaapi_region or settings.metaapi_region
-    metaapi.refresh_token()
-    mt5_linux.refresh()
-    if account_id and metaapi.configured:
-        if bridge.metaapi_account_id != account_id:
-            bridge.bind_metaapi(account_id, region)
-        snap = metaapi.snapshot(account_id, region=region or None)
-        if snap.get("stale"):
-            auth.update_settings(user_id, {"metaapi_account_id": ""})
-            bridge.metaapi_account_id = ""
-            return {
-                "online": False,
-                "execution": "pending",
-                "provider": "metaapi",
-                "account_id": "",
-                "stale": True,
-                "detail": snap.get("detail") or "معرّف الحساب تالف — أعد الربط الكامل",
-                "windows_required": False,
-            }
-        online = bool(snap.get("connected"))
-        if online or not mt5_linux.configured:
+            online = bool(snap.get("connected"))
             return {
                 "online": online,
                 "execution": "metaapi",
                 "provider": "metaapi",
                 "account_id": account_id,
-                "region": region,
                 "account": snap,
                 "detail": snap.get("detail") or ("متصل سحابياً" if online else "غير متصل"),
                 "windows_required": False,
             }
-    if mt5_linux.configured:
-        snap = mt5_linux.snapshot()
-        online = bool(snap.get("connected"))
-        if online:
-            bridge.execution = "mt5_linux"
-            bridge.mode = "mt5"
-        return {
-            "online": online,
-            "execution": "mt5_linux",
-            "provider": "mt5_linux",
-            "base_url": mt5_linux.base_url,
-            "account": snap,
-            "detail": snap.get("detail") or ("متصل عبر Linux Docker" if online else "منفّذ Linux غير متصل"),
-            "windows_required": False,
-        }
-    # MetaApi token present but cloud account not bound yet — never show Windows-agent copy
-    if metaapi.configured and settings.prefer_metaapi:
-        prov = _get_provision_state()
-        detail = (
-            (prov.get("message") if prov.get("status") in {"pending", "error"} else None)
-            or "توكن MetaApi جاهز — أعد إدخال بيانات FP Markets أو اضغط «إعادة ربط كامل»"
-        )
-        return {
-            "online": False,
-            "execution": "pending",
-            "provider": "metaapi",
-            "account_id": "",
-            "detail": detail,
-            "windows_required": False,
-            "provision": prov,
-        }
-    st = hub.status_for_user(user_id)
-    st = dict(st)
-    # Rewrite legacy Windows-agent wording when MetaApi is the product path
-    detail = st.get("detail") or ""
-    if "وكيل" in detail or "Windows" in detail:
-        detail = "اختر مسار MetaApi السحابي (بدون Windows) من الأعلى"
-    st["detail"] = detail or "فعّل توكن MetaApi ثم اربط حساب FP Markets"
-    st.setdefault("execution", "pending")
-    st.setdefault("provider", "metaapi" if metaapi.configured else "none")
-    st.setdefault("windows_required", False)
-    return st
+        if metaapi.configured and exec_pref == "metaapi":
+            return {
+                "online": False,
+                "execution": "pending",
+                "provider": "metaapi",
+                "detail": "توكن MetaApi جاهز — أعد ربط الحساب",
+                "windows_required": False,
+            }
+
+    # Default product guidance: cTrader / FP Markets
+    return _ctrader_pending_status()
 
 
 @app.post("/api/auth/logout")
@@ -1043,11 +996,14 @@ async def status(
             "auth": {"needs_setup": auth.needs_setup(), "users": auth.user_count(), "authenticated": True},
             **snap,
         }
-    # Public: redacted readiness only
+    # Public: redacted readiness + cTrader setup hint
+    ctrader.refresh()
     return {
         "product": PRODUCT_NAME,
         "tagline": PRODUCT_TAGLINE,
         "version": __version__,
+        "broker": BROKER_NAME,
+        "primary": "ctrader",
         "disclaimer": (
             "التداول ينطوي على مخاطر. لا يوجد بوت معتمد يضمن الربح. "
             "AURUM منصة تنفيذ وإدارة مخاطر حقيقية — النتائج غير مضمونة."
@@ -1055,12 +1011,24 @@ async def status(
         "mode": desk.account.mode,
         "state": desk.state,
         "live_execution": bool(bridge.is_live_execution() and desk.account.connected),
-        "metaapi_configured": metaapi.configured,
+        "ctrader_configured": ctrader.configured,
+        "ctrader_ready": ctrader.ready,
+        "metaapi_configured": False,
         "auth": {"needs_setup": auth.needs_setup(), "users": auth.user_count(), "authenticated": False},
         "readiness": {
             "ok": False,
-            "grade": "login_required",
-            "summary_ar": "سجّل الدخول لعرض إشارة المكتب والتفاصيل",
+            "grade": "login_required" if not auth.needs_setup() else "register_required",
+            "summary_ar": (
+                "أنشئ حساب تطبيق أولاً ثم اربط FP Markets عبر cTrader"
+                if auth.needs_setup()
+                else "سجّل الدخول ثم أكمل ربط cTrader من تبويب الربط"
+            ),
+            "next_for_broker": [
+                "إنشاء/دخول حساب التطبيق",
+                "حفظ Client ID/Secret من openapi.ctrader.com",
+                "تفويض cTrader واختيار حساب FP Markets",
+                "ابدأ التداول",
+            ],
         },
     }
 
@@ -1686,80 +1654,67 @@ async def bridge_complete(body: BridgeCompleteBody, authorization: str | None = 
     return hub.complete_command(row["bridge_token"], int(body.command_id), body.result)
 
 
+def _metaapi_disabled_http():
+    if not settings.prefer_metaapi:
+        raise HTTPException(
+            410,
+            "مسار MetaApi معطّل — استخدم تبويب ربط cTrader / FP Markets.",
+        )
+
+
 @app.get("/api/bridge/status")
 async def bridge_status(authorization: str | None = Header(default=None), aurum_session: str | None = Cookie(default=None, alias=SESSION_COOKIE)):
     user = require_user(authorization, aurum_session)
-    metaapi.refresh_token()
+    ctrader.refresh()
     st = _cloud_status_for_user(user["id"])
     return {
         "ok": True,
         "bridge": st,
         "cloud": st,
-        "execution": st.get("execution"),
-        "metaapi_configured": metaapi.configured,
-        "windows_required": bool(st.get("windows_required")),
+        "execution": st.get("execution") or "ctrader",
+        "broker": BROKER_NAME,
+        "primary": "ctrader",
+        "ctrader_configured": ctrader.configured,
+        "ctrader_ready": ctrader.ready,
+        "metaapi_configured": False,
+        "windows_required": False,
     }
 
 
 @app.get("/api/cloud/status")
 async def cloud_status(authorization: str | None = Header(default=None), aurum_session: str | None = Cookie(default=None, alias=SESSION_COOKIE)):
+    """Compat status endpoint — reports cTrader/FP Markets connect state."""
     user = require_user(authorization, aurum_session)
-    metaapi.refresh_token()
-    mt5_linux.refresh()
-    st = _cloud_status_for_user(user["id"])
-    last_err = store.get_kv("metaapi_last_error")
-    provision = _get_provision_state()
-    live = bridge.is_live_execution() and desk.account.connected and desk.account.mode == "mt5"
-    if live and provision.get("status") != "ok":
-        _set_provision_state("ok", "متصل بسحابة FP Markets — التنفيذ الحقيقي جاهز", connected=True)
-        provision = _get_provision_state()
-    secrets = auth.mt5_secrets(user["id"])
-    cooldown = None
-    try:
-        login = str(secrets.get("login") or "").strip()
-        server = str(secrets.get("server") or "").strip()
-        if login and server:
-            cool = store.get_kv(f"metaapi_cooldown:{login}:{server.lower()}") or {}
-            until = float((cool or {}).get("until") or 0)
-            if until > time.time():
-                mins = max(1, int((until - time.time()) / 60))
-                cooldown = {
-                    "until": until,
-                    "minutes_left": mins,
-                    "login": login,
-                    "server": server,
-                    "message": (
-                        f"MetaApi يمنع التحقق مؤقتاً — انتظر حوالي {mins} دقيقة "
-                        "بعد تصحيح كلمة مرور التداول/السيرفر."
-                    ),
-                }
-                if provision.get("status") != "error":
-                    provision = {
-                        **provision,
-                        "status": "error",
-                        "message": cooldown["message"],
-                        "code": "E_VALIDATION_COOLDOWN",
-                    }
-    except Exception:
-        pass
     ctrader.refresh()
+    st = _cloud_status_for_user(user["id"])
+    live = bridge.is_live_execution() and desk.account.connected and desk.account.mode == "mt5"
+    if live:
+        _set_provision_state("ok", f"متصل بـ {BROKER_NAME} عبر cTrader — التنفيذ الحقيقي جاهز", connected=True)
+    provision = _get_provision_state()
+    if not live and not ctrader.ready:
+        provision = {
+            "status": "pending" if ctrader.configured else "idle",
+            "message": st.get("detail") or "أكمل ربط cTrader",
+            "connected": False,
+        }
     return {
         "ok": True,
-        "metaapi_configured": metaapi.configured,
+        "primary": "ctrader",
+        "broker": BROKER_NAME,
+        "metaapi_configured": False,
         "ctrader_configured": ctrader.configured,
         "ctrader_ready": ctrader.ready,
         "ctrader_account_id": ctrader.account_id,
-        "mt5_linux_configured": mt5_linux.configured,
-        "region": settings.metaapi_region,
+        "mt5_linux_configured": False,
         "bridge": st,
         "account": desk.account.to_dict(),
         "live_execution": live,
         "real_orders_only": True,
         "provision": provision,
-        "cooldown": cooldown,
-        "last_error": last_err,
-        "signup_url": "https://app.metaapi.cloud/api-access/generate-token",
+        "cooldown": None,
+        "last_error": None,
         "ctrader_signup": "https://openapi.ctrader.com",
+        "broker_portal": BROKER_PORTAL,
     }
 
 
@@ -1770,6 +1725,7 @@ async def cloud_save_token(
     aurum_session: str | None = Cookie(default=None, alias=SESSION_COOKIE),
 ):
     """Save MetaApi token from the app (encrypted), validate, and auto-reconnect FP Markets."""
+    _metaapi_disabled_http()
     user = require_user(authorization, aurum_session)
     from goldbot.mt5.metaapi_cloud import save_stored_token
 
@@ -1850,6 +1806,7 @@ async def cloud_list_accounts(
     authorization: str | None = Header(default=None),
     aurum_session: str | None = Cookie(default=None, alias=SESSION_COOKIE),
 ):
+    _metaapi_disabled_http()
     """List MetaApi terminals under the saved token — for the guaranteed bind path."""
     require_user(authorization, aurum_session)
     metaapi.refresh_token()
@@ -1901,6 +1858,7 @@ async def cloud_bind_account(
     aurum_session: str | None = Cookie(default=None, alias=SESSION_COOKIE),
 ):
     """Guaranteed path: bind a MetaApi account that is already working in their dashboard."""
+    _metaapi_disabled_http()
     user = require_user(authorization, aurum_session)
     _rate_or_429(f"bind:{user['id']}", limit=8, window_sec=120)
     metaapi.refresh_token()
@@ -1991,6 +1949,7 @@ async def cloud_update_credentials(
     aurum_session: str | None = Cookie(default=None, alias=SESSION_COOKIE),
 ):
     """Save corrected FP Markets trading password/server and re-provision MetaApi."""
+    _metaapi_disabled_http()
     user = require_user(authorization, aurum_session)
     _rate_or_429(f"creds:{user['id']}", limit=6, window_sec=180)
     secrets = auth.mt5_secrets(user["id"])
@@ -2040,6 +1999,7 @@ async def cloud_diagnose(
     authorization: str | None = Header(default=None),
     aurum_session: str | None = Cookie(default=None, alias=SESSION_COOKIE),
 ):
+    _metaapi_disabled_http()
     """Explain why MetaApi/FP Markets cloud link failed — server mismatch, cooldown, token, etc."""
     user = require_user(authorization, aurum_session)
     metaapi.refresh_token()
@@ -2206,6 +2166,7 @@ async def cloud_diagnose(
 
 @app.post("/api/cloud/reset")
 async def cloud_reset(authorization: str | None = Header(default=None), aurum_session: str | None = Cookie(default=None, alias=SESSION_COOKIE)):
+    _metaapi_disabled_http()
     """Clear corrupt MetaApi account id and force a fresh cloud terminal."""
     user = require_user(authorization, aurum_session)
     auth.update_settings(user["id"], {"metaapi_account_id": "", "execution": ""})
@@ -2220,6 +2181,7 @@ async def cloud_reconnect(
     authorization: str | None = Header(default=None),
     aurum_session: str | None = Cookie(default=None, alias=SESSION_COOKIE),
 ):
+    _metaapi_disabled_http()
     """Re-provision MetaApi and/or probe Linux MT5 executor."""
     user = require_user(authorization, aurum_session)
     metaapi.refresh_token()

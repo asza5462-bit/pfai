@@ -250,6 +250,7 @@ def test_mt5_login_uses_metaapi_cloud(tmp_path, monkeypatch):
 
     settings.metaapi_token = "unit-test-token"
     settings.prefer_metaapi = True
+    settings.prefer_ctrader = False
 
     fake = FakeMetaHttp()
     cloud = MetaApiCloud(token="unit-test-token", region="new-york", http=fake)
@@ -265,6 +266,7 @@ def test_mt5_login_uses_metaapi_cloud(tmp_path, monkeypatch):
     bridge.execution = ""
     bridge.remote_user_id = None
     bridge.mode = "paper"
+    bridge.ctrader_account_id = None
 
     client = TestClient(app)
     login = client.post(
