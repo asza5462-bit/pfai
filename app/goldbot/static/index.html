@@ -107,19 +107,21 @@
         <p id="ctraderStatusLine" class="auth-note">حالة الربط: —</p>
 
         <h2>الوسيط: FP Markets فقط</h2>
-        <p class="auth-note">AURUM مقفول على <strong>FP Markets</strong> عبر منصة <strong>cTrader</strong>. حسابات وسطاء آخرين تُرفض عند الربط.</p>
+        <p class="auth-note">لا تستخدم زر التفويض القديم إن ظهر 404 — الطريقة المعتمدة الآن هي <strong>Playground</strong> بالأسفل.</p>
+
+        <h2>١) حفظ تطبيق Spotware</h2>
         <ol class="steps">
-          <li>افتح حساب cTrader من <a href="https://portal.fpmarkets.com" target="_blank" rel="noopener">بوابة FP Markets</a>.</li>
-          <li>أنشئ تطبيقاً على <a href="https://openapi.ctrader.com/apps" target="_blank" rel="noopener">openapi.ctrader.com/apps</a> وانتظر حتى تصبح الحالة <strong>Active</strong>.</li>
-          <li>أضف Redirect URI بالأسفل حرفياً → احفظ Client ID/Secret هنا → «تفويض cTrader» → Allow access → اختر حساب FP Markets.</li>
+          <li>افتح <a href="https://openapi.ctrader.com/apps" target="_blank" rel="noopener">openapi.ctrader.com/apps</a> وسجّل دخول cTrader ID.</li>
+          <li>أنشئ تطبيقاً وانتظر حتى تصبح الحالة <strong>Active</strong>.</li>
+          <li>انسخ Client ID و Client Secret والصقهما هنا ثم احفظ.</li>
         </ol>
         <label>Client ID
-          <input id="ctraderClientId" type="text" placeholder="من openapi.ctrader.com" autocomplete="off" />
+          <input id="ctraderClientId" type="text" placeholder="من Credentials في تطبيقك" autocomplete="off" />
         </label>
         <label>Client Secret
           <input id="ctraderClientSecret" type="password" placeholder="Client Secret" autocomplete="off" />
         </label>
-        <label class="auth-note">Redirect URI (انسخه حرفياً إلى تطبيق Spotware)
+        <label class="auth-note">Redirect URI (اختياري للـ Playground — أضفه إن أردت لاحقاً)
           <input id="ctraderRedirectUri" type="text" readonly value="" />
         </label>
         <div class="cta" style="margin-top:0.35rem">
@@ -133,25 +135,29 @@
         </label>
         <div class="cta" style="margin-top:0.5rem">
           <button type="button" id="btnSaveCtraderApp" class="primary">حفظ تطبيق cTrader</button>
-          <button type="button" id="btnCtraderAuth" class="ghost">تفويض cTrader</button>
-          <button type="button" id="btnCopyAuthUrl" class="ghost">نسخ رابط التفويض</button>
-          <button type="button" id="btnListCtraderAccounts" class="ghost">عرض حساباتي</button>
+          <button type="button" id="btnOpenPlayground" class="primary">فتح Playground</button>
         </div>
-        <p class="auth-note">إن ظهر <strong>404</strong> بعد تسجيل الدخول: التطبيق يجب أن يكون <strong>Active</strong> وRedirect URI مطابق حرفياً. أو استخدم Playground بالأسفل.</p>
-        <h2>بديل سريع — توكن Playground</h2>
+
+        <h2>٢) جلب التوكن من Playground (بدون 404)</h2>
         <ol class="steps">
-          <li>افتح <a href="https://openapi.ctrader.com/apps" target="_blank" rel="noopener">openapi.ctrader.com/apps</a> → تطبيقك → <strong>Playground</strong>.</li>
-          <li>اختر scope: Account info and trading → Get token → Allow access.</li>
-          <li>الصق Access Token (وRefresh إن وُجد) ثم احفظ.</li>
+          <li>في صفحة التطبيقات اضغط <strong>Playground</strong> بجانب تطبيقك.</li>
+          <li>Scope: <strong>Account info and trading</strong> → Get token → Allow access.</li>
+          <li>انسخ Access Token (وربما Refresh Token) والصقهما هنا.</li>
         </ol>
         <label>Access Token
-          <input id="ctraderAccessToken" type="password" placeholder="الصق Access Token من Playground" autocomplete="off" />
+          <input id="ctraderAccessToken" type="password" placeholder="الصق Access Token هنا" autocomplete="off" />
         </label>
-        <label>Refresh Token (اختياري)
-          <input id="ctraderRefreshToken" type="password" placeholder="اختياري" autocomplete="off" />
+        <label>Refresh Token (مستحسن)
+          <input id="ctraderRefreshToken" type="password" placeholder="الصق Refresh Token إن وُجد" autocomplete="off" />
         </label>
-        <button type="button" id="btnSaveCtraderToken" class="primary">حفظ التوكن وعرض الحسابات</button>
+        <div class="cta" style="margin-top:0.5rem">
+          <button type="button" id="btnSaveCtraderToken" class="primary">حفظ التوكن وعرض الحسابات</button>
+          <button type="button" id="btnListCtraderAccounts" class="ghost">عرض حساباتي</button>
+        </div>
         <ul id="ctraderAccountsList" class="trades" style="margin-top:0.75rem"></ul>
+        <p class="auth-note">زر «تفويض cTrader» القديم معطّل لأنه يفتح صفحات Spotware التي تعطي 404 حالياً على الجوال.</p>
+        <button type="button" id="btnCtraderAuth" class="ghost hidden">تفويض cTrader (معطّل)</button>
+        <button type="button" id="btnCopyAuthUrl" class="ghost hidden">نسخ رابط التفويض</button>
 
         <p id="cloudAccountLine" class="auth-note">معرّف الحساب: —</p>
         <div class="cta" style="margin-top:0.75rem">
