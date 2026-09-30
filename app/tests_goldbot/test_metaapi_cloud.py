@@ -141,14 +141,16 @@ def test_account_id_validation():
 
 def test_normalize_broker_server_fpmarkets():
     from goldbot.mt5.broker import normalize_broker_server
-    from goldbot.mt5.metaapi_cloud import normalize_exness_server
+    from goldbot.mt5.metaapi_cloud import normalize_broker_server
 
     assert normalize_broker_server("FPMarkets-Live") == "FPMarkets-Live"
     assert normalize_broker_server("fpmarkets live") == "FPMarkets-Live"
     assert normalize_broker_server("FPMarkets-Live2") == "FPMarkets-Live2"
     assert normalize_broker_server("FP Markets Demo") == "FPMarkets-Demo"
-    # legacy alias still works for old Exness paste
-    assert normalize_exness_server("Exness-MT5Real32") == "Exness-MT5Real32"
+    assert normalize_broker_server("Exness-MT5Real32") == ""
+    from goldbot.mt5.broker import resolve_fp_server, is_fp_markets_server
+    assert resolve_fp_server("Exness-MT5Real32") == ""
+    assert is_fp_markets_server("FPMarkets-Live") is True
 
 
 
@@ -347,7 +349,7 @@ def test_windows_bridge_enable(tmp_path, monkeypatch):
     assert en.status_code == 200, en.text
     body = en.json()
     assert body["ok"] is True
-    assert "aurum_exness_agent.py" in body["agent_command"]
+    assert "aurum_fpmarkets_agent.py" in body["agent_command"]
     assert body["bridge_token"]
     assert "Windows" in (body["message"] or "") or "ويندوز" in (body["message"] or "").lower() or body["ok"]
 

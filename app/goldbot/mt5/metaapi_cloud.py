@@ -21,7 +21,9 @@ from goldbot.mt5.broker import (
     DEFAULT_SYMBOL,
     METAAPI_KEYWORDS,
     is_broker_server_suggestion,
+    is_fp_markets_server,
     normalize_broker_server,
+    resolve_fp_server,
     servers_compatible as broker_servers_compatible,
 )
 
@@ -110,11 +112,6 @@ def is_validation_failed_error(exc: MetaApiError | Exception | str) -> bool:
     return False
 
 
-def normalize_exness_server(server: str | None) -> str:
-    """Backward-compatible alias — now normalizes FP Markets (and legacy Exness)."""
-    return normalize_broker_server(server)
-
-
 def servers_compatible(a: str | None, b: str | None) -> bool:
     """True when two broker server strings refer to the same terminal host."""
     return broker_servers_compatible(a, b)
@@ -167,6 +164,8 @@ def arabic_metaapi_error(exc: MetaApiError | Exception) -> str:
             "٣) اضغط «حفظ وتصحيح الربط» — سيُحذف الحساب السحابي العالق ويُنشأ من جديد. "
             "تأكد أيضاً أن الحساب غير معطّل في FP Markets."
         )
+    if code == "E_BROKER_SERVER":
+        return "هذا التطبيق مربوط بـ FP Markets فقط — استخدم سيرفراً مثل FPMarkets-Live."
     if code == "E_SRV_NOT_FOUND" or ".dat file for server" in low:
         suggestions = _suggested_servers_from_error(details)
         hint = (" المقترحات: " + "، ".join(suggestions[:6])) if suggestions else ""
@@ -475,7 +474,13 @@ class MetaApiCloud:
         aid = normalize_account_id(account_id)
         if not aid:
             raise MetaApiError(f"معرّف حساب MetaApi غير صالح: {account_id!r}", code="E_BAD_ACCOUNT_ID")
-        server_n = normalize_exness_server(server) or str(server).strip()
+        server_n = resolve_fp_server(server)
+        if not server_n:
+            raise MetaApiError(
+                "السيرفر يجب أن يكون FP Markets (مثل FPMarkets-Live)",
+                code="E_BROKER_SERVER",
+                status=400,
+            )
         body: dict[str, Any] = {
             "password": str(password),
             "server": server_n,
@@ -510,7 +515,13 @@ class MetaApiCloud:
         if not aid:
             raise MetaApiError("لا يوجد معرّف للحساب عند ترحيل السيرفر", code="E_BAD_ACCOUNT_ID")
         old = str(account.get("server") or "")
-        server_n = normalize_exness_server(server) or str(server).strip()
+        server_n = resolve_fp_server(server)
+        if not server_n:
+            raise MetaApiError(
+                "السيرفر يجب أن يكون FP Markets (مثل FPMarkets-Live)",
+                code="E_BROKER_SERVER",
+                status=400,
+            )
         log.warning(
             "metaapi migrate login=%s account=%s server %s → %s",
             login,
@@ -550,7 +561,13 @@ class MetaApiCloud:
         fast: bool = False,
     ) -> dict:
         """Create cloud-g2 MT5 account with retries for broker detection / 202."""
-        server_n = normalize_exness_server(server) or str(server).strip()
+        server_n = resolve_fp_server(server)
+        if not server_n:
+            raise MetaApiError(
+                "السيرفر يجب أن يكون FP Markets (مثل FPMarkets-Live)",
+                code="E_BROKER_SERVER",
+                status=400,
+            )
         body: dict[str, Any] = {
             "login": str(login).strip(),
             "password": str(password),
@@ -607,7 +624,7 @@ class MetaApiCloud:
                 # Auto-correct server from MetaApi suggestions (FP Markets Live etc.)
                 if e.code == "E_SRV_NOT_FOUND" or ".dat file for server" in (e.message or "").lower():
                     for sug in _suggested_servers_from_error(e.details):
-                        sug_n = normalize_exness_server(sug) or sug
+                        sug_n = resolve_fp_server(sug)
                         if sug_n.lower() in tried_servers:
                             continue
                         if not is_broker_server_suggestion(sug_n):
@@ -948,7 +965,13 @@ class MetaApiCloud:
                 status=503,
             )
 
-        server = normalize_exness_server(server) or str(server).strip()
+        server = resolve_fp_server(server)
+        if not server:
+            raise MetaApiError(
+                "السيرفر يجب أن يكون FP Markets (مثل FPMarkets-Live)",
+                code="E_BROKER_SERVER",
+                status=400,
+            )
         login = str(login).strip()
 
         # Honor MetaApi "retry in 1 hour" lockout — per login+server only

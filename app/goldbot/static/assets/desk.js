@@ -291,9 +291,9 @@
     const pulse = data.pulse || {};
     const ready = data.readiness || {};
     $("readyPill").textContent = ready.summary_ar || ready.grade || "—";
-    $("readyPill").classList.toggle("on", !!(ready.broker_mt5_ready || ready.exness_mt5_ready));
+    $("readyPill").classList.toggle("on", !!(ready.broker_mt5_ready));
     $("statePill").textContent = data.state || "—";
-    const live = !!(ready.live_execution || ready.broker_mt5_ready || ready.exness_mt5_ready);
+    const live = !!(ready.live_execution || ready.broker_mt5_ready);
     $("modePill").textContent = live ? `FP Markets حي · ${acc.server || "MT5"}` : (acc.mode === "paper" ? "ورقي (تجربة)" : (acc.mode || "—"));
     $("modePill").classList.toggle("on", live);
     $("symbolPill").textContent = data.symbol || "XAUUSD";
@@ -527,8 +527,8 @@
     $("btnListAccounts").onclick = () => loadMetaAccounts();
   }
 
-  if ($("btnSaveExnessCreds")) {
-    $("btnSaveExnessCreds").onclick = async () => {
+  if ($("btnSaveBrokerCreds")) {
+    $("btnSaveBrokerCreds").onclick = async () => {
       const pass = ($("cloudMt5Pass") && $("cloudMt5Pass").value || "").trim();
       const server = ($("cloudMt5Server") && $("cloudMt5Server").value || "").trim() || "FPMarkets-Live";
       if (pass.length < 4) {

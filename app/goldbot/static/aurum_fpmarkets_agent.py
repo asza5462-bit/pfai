@@ -1,15 +1,15 @@
 #!/usr/bin/env python3
 """
-AURUM Exness / MetaTrader 5 Windows Agent
+AURUM FP Markets / MetaTrader 5 Windows Agent
 ========================================
-Runs on Windows where MetaTrader 5 terminal is installed and logged into Exness.
+Runs on Windows where MetaTrader 5 terminal is installed and logged into FP Markets.
 Connects to the AURUM cloud desk and executes real orders.
 
 Usage:
   pip install MetaTrader5 requests
-  python aurum_exness_agent.py --cloud https://pfai-v8.onrender.com --token YOUR_BRIDGE_TOKEN
+  python aurum_fpmarkets_agent.py --cloud https://pfai-v8.onrender.com --token YOUR_BRIDGE_TOKEN
 
-Keep MT5 open. Use Demo server first (Exness-MT5Trial*).
+Keep MT5 open. Use Demo server first (FPMarkets-Demo*).
 """
 from __future__ import annotations
 
@@ -29,7 +29,7 @@ def api(cloud: str, token: str, method: str, path: str, json_body=None):
     r = requests.request(
         method,
         url,
-        headers={"Authorization": f"Bearer {token}", "User-Agent": "AURUM-Exness-Agent/3.1"},
+        headers={"Authorization": f"Bearer {token}", "User-Agent": "AURUM-FPMarkets-Agent/3.8"},
         json=json_body,
         timeout=30,
     )
@@ -71,6 +71,61 @@ def account_snap(mt5) -> dict:
         "leverage": int(info.leverage),
         "mode": "mt5",
         "connected": True,
+    }
+
+
+def close_position(mt5, payload: dict) -> dict:
+    pid = payload.get("position_id") or payload.get("ticket")
+    if pid in (None, "", 0, "0"):
+        return {"ok": False, "error": "no_position_id", "mode": "mt5", "execution": "windows_bridge"}
+    try:
+        position_id = int(pid)
+    except (TypeError, ValueError):
+        return {"ok": False, "error": "bad_position_id", "mode": "mt5", "execution": "windows_bridge"}
+    positions = mt5.positions_get(ticket=position_id) or mt5.positions_get()
+    target = None
+    for pos in positions or []:
+        if int(getattr(pos, "ticket", 0) or 0) == position_id or int(getattr(pos, "identifier", 0) or 0) == position_id:
+            target = pos
+            break
+    if target is None:
+        return {"ok": True, "already_closed": True, "mode": "mt5", "execution": "windows_bridge"}
+    symbol = str(getattr(target, "symbol", "") or payload.get("symbol") or "XAUUSD")
+    volume = float(payload.get("volume") or getattr(target, "volume", 0) or 0)
+    if volume <= 0:
+        return {"ok": False, "error": "bad_volume", "mode": "mt5", "execution": "windows_bridge"}
+    tick = mt5.symbol_info_tick(symbol)
+    if tick is None:
+        return {"ok": False, "error": f"no tick {mt5.last_error()}", "mode": "mt5", "execution": "windows_bridge"}
+    # POSITION_TYPE_BUY = 0 → close with SELL
+    is_buy = int(getattr(target, "type", 0) or 0) == 0
+    order_type = mt5.ORDER_TYPE_SELL if is_buy else mt5.ORDER_TYPE_BUY
+    price = tick.bid if is_buy else tick.ask
+    request = {
+        "action": mt5.TRADE_ACTION_DEAL,
+        "symbol": symbol,
+        "volume": volume,
+        "type": order_type,
+        "position": int(getattr(target, "ticket", position_id) or position_id),
+        "price": float(price),
+        "deviation": 40,
+        "magic": 908070,
+        "comment": "AURUM-CLOSE",
+        "type_time": mt5.ORDER_TIME_GTC,
+        "type_filling": mt5.ORDER_FILLING_IOC,
+    }
+    result = mt5.order_send(request)
+    if result is None:
+        return {"ok": False, "error": str(mt5.last_error()), "mode": "mt5", "execution": "windows_bridge"}
+    ok = result.retcode == mt5.TRADE_RETCODE_DONE
+    return {
+        "ok": ok,
+        "mode": "mt5",
+        "execution": "windows_bridge",
+        "retcode": int(result.retcode),
+        "ticket": int(getattr(result, "order", 0) or 0),
+        "price": float(getattr(result, "price", price) or price),
+        "error": None if ok else str(result.comment),
     }
 
 
@@ -126,7 +181,7 @@ def execute_order(mt5, payload: dict) -> dict:
 
 
 def main():
-    p = argparse.ArgumentParser(description="AURUM Exness MT5 agent")
+    p = argparse.ArgumentParser(description="AURUM FP Markets MT5 agent")
     p.add_argument("--cloud", required=True, help="AURUM cloud URL")
     p.add_argument("--token", required=True, help="Bridge token from web login")
     p.add_argument("--poll", type=float, default=1.0, help="Poll seconds")
@@ -147,7 +202,7 @@ def main():
                 "POST",
                 "/api/bridge/heartbeat",
                 {
-                    "info": {"agent": "aurum_exness_agent", "version": "3.1.0", "python": sys.version.split()[0]},
+                    "info": {"agent": "aurum_fpmarkets_agent", "version": "3.8.2", "python": sys.version.split()[0]},
                     "account": snap,
                 },
             )
@@ -156,6 +211,8 @@ def main():
                 print("Command", cmd.get("id"), cmd.get("kind"))
                 if cmd.get("kind") == "order_market":
                     result = execute_order(mt5, cmd.get("payload") or {})
+                elif cmd.get("kind") == "close_position":
+                    result = close_position(mt5, cmd.get("payload") or {})
                 else:
                     result = {"ok": False, "error": f"unknown_kind:{cmd.get('kind')}"}
                 api(

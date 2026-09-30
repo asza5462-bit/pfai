@@ -13,8 +13,6 @@ GOLD_SYMBOLS = (
     "XAUUSDs",
 )
 
-# Backward-compatible alias
-EXNESS_GOLD_SYMBOLS = GOLD_SYMBOLS
 
 
 def normalize_symbol(symbol: str | None) -> str:

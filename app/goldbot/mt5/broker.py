@@ -1,4 +1,4 @@
-"""Active broker profile — FP Markets (MT5 / cTrader)."""
+"""Active broker profile — FP Markets only (MT5 / cTrader)."""
 from __future__ import annotations
 
 import re
@@ -7,7 +7,7 @@ BROKER_NAME = "FP Markets"
 BROKER_ID = "fpmarkets"
 BROKER_SHORT = "FPMarkets"
 
-# Common MT5 server names (exact string must match the portal / MT5 login email)
+# Exact server strings must match FP Markets portal / MT5 login email
 DEFAULT_SERVER = "FPMarkets-Live"
 DEFAULT_SYMBOL = "XAUUSD"
 
@@ -33,24 +33,26 @@ def _fp_servers() -> list[str]:
         "FPTrading-Live",
         "FPTrading-Demo",
     ]
+    # Extra live/demo shards commonly seen in MT5 server search
+    out.extend(f"FPMarkets-Live{i}" for i in range(6, 16))
+    out.extend(f"FPMarkets-Demo{i}" for i in range(3, 8))
     return out
 
 
 BROKER_SERVERS = _fp_servers()
 
-# Backward-compatible aliases used by older imports/tests
-EXNESS_SERVERS = BROKER_SERVERS  # deprecated name — now FP Markets list
-
 
 def normalize_broker_server(server: str | None) -> str:
-    """Normalize FP Markets (and legacy Exness) MT5 server paste variants."""
+    """Normalize FP Markets / FP Trading MT5 server paste variants."""
     s = str(server or "").strip()
     if not s:
+        return ""
+    # Reject non-FP brokers explicitly
+    if re.search(r"(?i)exness", s):
         return ""
     s = re.sub(r"[\s_]+", "-", s)
     s = re.sub(r"-{2,}", "-", s)
 
-    # FP Markets / FP Trading
     s_fp = re.sub(r"(?i)^fp\s*-?\s*markets?-?", "FPMarkets-", s)
     s_fp = re.sub(r"(?i)^fpmarkets?-?", "FPMarkets-", s_fp)
     s_fp = re.sub(r"(?i)^fp\s*-?\s*trading?-?", "FPTrading-", s_fp)
@@ -80,23 +82,22 @@ def normalize_broker_server(server: str | None) -> str:
         if m:
             return "FPTrading-Demo" + (m.group(2) or "")
         return "FPTrading-" + tail
-
-    # Legacy Exness paste (still normalize if present)
-    s_ex = re.sub(r"(?i)^exness-?mt5-?", "Exness-MT5", s)
-    low = s_ex.lower()
-    if low.startswith("exness-mt5"):
-        tail = s_ex[len("Exness-MT5") :]
-        if tail.startswith("-"):
-            tail = tail[1:]
-        if tail.lower().startswith("trial"):
-            num = re.sub(r"(?i)^trial-?", "", tail)
-            return "Exness-MT5Trial" + num
-        if tail.lower().startswith("real"):
-            num = re.sub(r"(?i)^real-?", "", tail)
-            return "Exness-MT5Real" + num
-        return "Exness-MT5" + tail
-
     return s_fp
+
+
+def is_fp_markets_server(server: str | None) -> bool:
+    n = normalize_broker_server(server) if server else ""
+    # If raw still looks like FP but normalize emptied (shouldn't), check raw
+    if not n:
+        return False
+    low = n.lower().replace(" ", "")
+    return low.startswith("fpmarkets-") or low.startswith("fptrading-")
+
+
+def resolve_fp_server(server: str | None) -> str:
+    """Return normalized FP Markets server or empty string (never another broker)."""
+    n = normalize_broker_server(server)
+    return n if is_fp_markets_server(n) else ""
 
 
 def servers_compatible(a: str | None, b: str | None) -> bool:
@@ -110,12 +111,8 @@ def servers_compatible(a: str | None, b: str | None) -> bool:
 
 
 def is_broker_server_suggestion(name: str) -> bool:
-    """Accept only FP Markets (or FP Trading) server suggestions — never Exness."""
+    """Accept only FP Markets / FP Trading MetaApi server suggestions."""
     low = str(name or "").lower().replace(" ", "")
     if "exness" in low:
         return False
     return any(k in low for k in ("fpmarkets", "fptrading", "fpmarketsllc", "firstprudential"))
-
-
-# Deprecated alias
-normalize_exness_server = normalize_broker_server

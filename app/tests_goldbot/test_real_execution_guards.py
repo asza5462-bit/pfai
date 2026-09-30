@@ -3,7 +3,7 @@ from __future__ import annotations
 
 from goldbot.execution.smart_exits import _is_live_trade
 from goldbot.mt5.bridge import Bridge
-from goldbot.mt5.broker import is_broker_server_suggestion, normalize_broker_server
+from goldbot.mt5.broker import is_broker_server_suggestion, normalize_broker_server, resolve_fp_server
 
 
 def test_is_live_trade_covers_all_real_executors():
@@ -20,6 +20,8 @@ def test_fp_markets_server_suggestions_reject_exness():
     assert is_broker_server_suggestion("FPMarkets-Live") is True
     assert is_broker_server_suggestion("FPTrading-Demo") is True
     assert is_broker_server_suggestion("Exness-MT5Real32") is False
+    assert resolve_fp_server("Exness-MT5Real32") == ""
+    assert resolve_fp_server("FPMarkets-Live") == "FPMarkets-Live"
     assert normalize_broker_server("fpmarkets live2") == "FPMarkets-Live2"
 
 
