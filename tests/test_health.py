@@ -23,6 +23,8 @@ def test_health_and_index(client: TestClient):
     assert index.status_code == 200
     assert "NOVA Code" in index.text
     assert "cTrader" not in index.text
+    assert client.head("/").status_code == 200
+    assert client.head("/health").status_code == 200
 
 
 def test_owner_setup_and_auth(client: TestClient):

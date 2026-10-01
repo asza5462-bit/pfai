@@ -146,13 +146,13 @@ class ChatBody(BaseModel):
     auto_apply: bool = True
 
 
-@app.get("/")
+@app.api_route("/", methods=["GET", "HEAD"])
 async def index():
     return FileResponse(STATIC / "index.html")
 
 
-@app.get("/health")
-@app.get("/healthz")
+@app.api_route("/health", methods=["GET", "HEAD"])
+@app.api_route("/healthz", methods=["GET", "HEAD"])
 async def health():
     return {
         "ok": True,
