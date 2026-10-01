@@ -7,8 +7,9 @@ import json
 import sqlite3
 import threading
 import time
+from collections.abc import Iterator
 from contextlib import contextmanager
-from typing import Any, Iterator
+from typing import Any
 
 from cryptography.fernet import Fernet, InvalidToken
 

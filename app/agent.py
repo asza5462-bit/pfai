@@ -5,14 +5,13 @@ import json
 import re
 import time
 import uuid
-from pathlib import Path
 from typing import Any
 
 from fastapi import HTTPException
 
+from app import workspace
 from app.database import db
 from app.provider import complete
-from app import workspace
 
 MAX_ROUNDS = 4
 MAX_ACTIONS = 24
@@ -290,5 +289,5 @@ def _execute_action(project_id: str, user_id: int, action: dict[str, Any], *, au
         return {"type": kind, "ok": False, "error": "unsupported action"}
     except HTTPException as exc:
         return {"type": kind, "path": path, "ok": False, "error": str(exc.detail)}
-    except Exception as exc:
+    except Exception as exc:  # noqa: BLE001 - tool failures must be returned to the model, not crash the run
         return {"type": kind, "path": path, "ok": False, "error": f"{type(exc).__name__}: {exc}"}

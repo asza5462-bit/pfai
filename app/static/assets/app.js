@@ -534,6 +534,31 @@ async function loadDiff() {
   }
 }
 
+async function createCheckpoint() {
+  if (!state.project) return toast("اختر مشروعاً", "error");
+  const message = prompt("وصف نقطة الحفظ", "NOVA checkpoint");
+  if (!message) return;
+  try {
+    const result = await api(`/api/projects/${state.project.id}/checkpoint`, {
+      method: "POST",
+      body: JSON.stringify({ message }),
+    });
+    if (!result.ok && !String(result.stderr || "").includes("nothing to commit")) {
+      throw new Error(result.stderr || "تعذّر إنشاء نقطة الحفظ");
+    }
+    await loadDiff();
+    toast("تم إنشاء نقطة حفظ Git", "success");
+  } catch (error) {
+    toast(error.message, "error");
+  }
+}
+
+function previewProject() {
+  if (!state.project) return toast("اختر مشروعاً", "error");
+  const path = state.activeFile?.endsWith(".html") ? state.activeFile : "index.html";
+  window.open(`/api/projects/${state.project.id}/preview/${encodeURI(path)}`, "_blank", "noopener");
+}
+
 function showBottom(name) {
   $("#bottom-panel").classList.remove("collapsed");
   $$(".bottom-tabs button[data-bottom]").forEach((button) => button.classList.toggle("active", button.dataset.bottom === name));
@@ -608,6 +633,8 @@ function bindEvents() {
   $("#create-project-btn").addEventListener("click", openProjectDialog);
   $("#project-form").addEventListener("submit", createProject);
   $("#settings-btn").addEventListener("click", openSettings);
+  $("#preview-btn").addEventListener("click", previewProject);
+  $("#checkpoint-btn").addEventListener("click", createCheckpoint);
   $("#settings-form").addEventListener("submit", saveProvider);
   $("#test-provider-btn").addEventListener("click", testProvider);
   $$(".dialog-close").forEach((button) => button.addEventListener("click", () => button.closest("dialog").close()));
