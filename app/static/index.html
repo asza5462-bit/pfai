@@ -166,7 +166,10 @@
             <button id="attach-current" class="tool-btn" title="إرفاق الملف الحالي">
               <svg viewBox="0 0 24 24"><path d="m8 12 6-6a3 3 0 0 1 4 4l-8 8a5 5 0 0 1-7-7l8-8"/></svg>
             </button>
-            <label class="auto-toggle"><input id="auto-apply" type="checkbox" checked /><span></span> تنفيذ تلقائي</label>
+            <div class="approval-toggles">
+              <label class="auto-toggle"><input id="agent-commands" type="checkbox" /><span></span> تشغيل أوامر</label>
+              <label class="auto-toggle"><input id="auto-apply" type="checkbox" checked /><span></span> تعديل تلقائي</label>
+            </div>
           </div>
           <textarea id="chat-input" rows="3" placeholder="صف ما تريد بناءه أو تغييره…"></textarea>
           <button id="send-btn" class="send-btn" title="إرسال">

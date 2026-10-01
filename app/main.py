@@ -144,6 +144,7 @@ class ChatBody(BaseModel):
     message: str = Field(min_length=1, max_length=50_000)
     selected_file: str | None = Field(default=None, max_length=500)
     auto_apply: bool = True
+    allow_commands: bool = False
 
 
 @app.api_route("/", methods=["GET", "HEAD"])
@@ -323,6 +324,7 @@ async def chat(project_id: str, body: ChatBody, user: User, request: Request):
         body.message,
         selected_file=body.selected_file,
         auto_apply=body.auto_apply,
+        allow_commands=body.allow_commands,
     )
 
 
