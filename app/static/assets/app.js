@@ -138,7 +138,12 @@ async function loadProjects() {
     const remembered = localStorage.getItem("nova.project");
     const target = state.projects.find((project) => project.id === remembered) || state.projects[0];
     if (target) await selectProject(target.id);
-    else showEmptyProject();
+    else {
+      showEmptyProject();
+      setTimeout(() => {
+        if (!state.project && !$("#project-dialog").open) openProjectDialog();
+      }, 80);
+    }
   } catch (error) {
     toast(error.message, "error");
   }
