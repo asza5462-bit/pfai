@@ -1,6 +1,8 @@
 """Project workspace, files, diffs, and bounded command execution."""
 from __future__ import annotations
 
+import hashlib
+import io
 import os
 import re
 import shlex
@@ -8,8 +10,6 @@ import shutil
 import subprocess
 import time
 import uuid
-import hashlib
-import io
 import zipfile
 from pathlib import Path
 from typing import Any
