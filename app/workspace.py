@@ -187,10 +187,19 @@ def read_file(project_id: str, user_id: int, path: str) -> dict:
 
 
 def write_file(project_id: str, user_id: int, path: str, content: str) -> dict:
-    if len(content.encode()) > settings.max_file_bytes:
+    encoded_size = len(content.encode())
+    if encoded_size > settings.max_file_bytes:
         raise HTTPException(413, "محتوى الملف أكبر من الحد")
     root = project_root(project_id, user_id)
     target = safe_path(root, path)
+    previous_size = target.stat().st_size if target.exists() and target.is_file() else 0
+    project_size = sum(
+        item.stat().st_size
+        for item in root.rglob("*")
+        if item.is_file() and ".git" not in item.parts and not item.is_symlink()
+    )
+    if project_size - previous_size + encoded_size > settings.max_project_bytes:
+        raise HTTPException(413, "المشروع تجاوز حد التخزين")
     target.parent.mkdir(parents=True, exist_ok=True)
     target.write_text(content, encoding="utf-8")
     db.execute("UPDATE projects SET updated_at=? WHERE id=?", (time.time(), project_id))
@@ -308,5 +317,13 @@ def _run(args: list[str], cwd: Path, *, timeout: int) -> dict:
             "exit_code": 124,
             "stdout": (exc.stdout or "")[-100_000:] if isinstance(exc.stdout, str) else "",
             "stderr": "انتهت مهلة تنفيذ الأمر",
+            "duration_ms": round((time.monotonic() - started) * 1000),
+        }
+    except OSError as exc:
+        return {
+            "ok": False,
+            "exit_code": 127,
+            "stdout": "",
+            "stderr": f"تعذّر تشغيل الأمر: {exc}",
             "duration_ms": round((time.monotonic() - started) * 1000),
         }

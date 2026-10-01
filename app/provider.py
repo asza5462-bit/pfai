@@ -102,9 +102,12 @@ async def _openai_compatible(config: ProviderConfig, messages: list[dict[str, st
     payload = {
         "model": config.model,
         "messages": messages,
-        "max_tokens": max_tokens,
-        "temperature": 0.15,
     }
+    if config.model.lower().startswith(("gpt-5", "o1", "o3", "o4")):
+        payload["max_completion_tokens"] = max_tokens
+    else:
+        payload["max_tokens"] = max_tokens
+        payload["temperature"] = 0.15
     try:
         async with httpx.AsyncClient(timeout=httpx.Timeout(120.0, connect=15.0)) as client:
             response = await client.post(url, headers=headers, json=payload)

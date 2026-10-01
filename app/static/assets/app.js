@@ -662,6 +662,15 @@ function bindEvents() {
     location.reload();
   });
   $(".activity[data-panel=explorer]").addEventListener("click", () => $("#sidebar").classList.toggle("open"));
+  $(".activity[data-panel=git]").addEventListener("click", () => showBottom("diff"));
+  $(".activity[data-panel=chat]").addEventListener("click", () => $("#app .chat-panel").classList.toggle("mobile-closed"));
+  $(".activity[data-panel=search]").addEventListener("click", () => {
+    if (!state.project) return toast("اختر مشروعاً أولاً");
+    const query = prompt("ابحث باسم الملف");
+    $$(".tree-row").forEach((row) => {
+      row.style.display = !query || row.dataset.path.toLowerCase().includes(query.toLowerCase()) ? "" : "none";
+    });
+  });
   document.addEventListener("click", (event) => {
     if (!event.target.closest(".project-switcher")) $("#project-menu").classList.add("hidden");
   });

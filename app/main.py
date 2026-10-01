@@ -54,7 +54,10 @@ app.mount("/assets", StaticFiles(directory=str(STATIC / "assets")), name="assets
 
 @app.middleware("http")
 async def security_middleware(request: Request, call_next):
-    content_length = int(request.headers.get("content-length") or 0)
+    try:
+        content_length = int(request.headers.get("content-length") or 0)
+    except ValueError:
+        return JSONResponse({"detail": "Content-Length غير صالح"}, status_code=400)
     if content_length > 2_500_000:
         return JSONResponse({"detail": "الطلب أكبر من الحد"}, status_code=413)
     response = await call_next(request)
