@@ -1,68 +1,15 @@
-# AURUM — Elite Gold Desk on Render
-# Live FP Markets execution via cTrader Open API (from the app). Set CTRADER_* in dashboard.
-
 services:
   - type: web
-    name: pfai-v8
+    name: app-github-render
     runtime: docker
-    plan: standard
+    plan: free
     region: oregon
     dockerfilePath: ./Dockerfile
     dockerContext: .
-    dockerCommand: ""
     healthCheckPath: /health
     autoDeploy: true
-    numInstances: 1
     envVars:
-      - key: AURUM_HOST
-        value: "0.0.0.0"
+      - key: APP_ENV
+        value: production
       - key: PORT
         value: "8000"
-      - key: AURUM_MODE
-        value: "paper"
-      - key: AURUM_PREFER_CTRADER
-        value: "true"
-      - key: AURUM_PREFER_METAAPI
-        value: "false"
-      - key: AURUM_PREFER_MT5_LINUX
-        value: "false"
-      - key: AURUM_SYMBOL
-        value: "XAUUSD"
-      - key: AURUM_TIMEFRAME
-        value: "M15"
-      - key: AURUM_AUTO_TRADE
-        value: "false"
-      - key: AURUM_OPEN_REGISTER
-        value: "1"
-      - key: AURUM_COOKIE_SECURE
-        value: "1"
-      - key: AURUM_PUBLIC_URL
-        value: "https://pfai-v8.onrender.com"
-      - key: AURUM_RISK_PCT
-        value: "0.35"
-      - key: AURUM_MAX_DAILY_LOSS_PCT
-        value: "1.25"
-      - key: AURUM_MIN_RR
-        value: "2.2"
-      - key: AURUM_MIN_CONFLUENCE
-        value: "0.62"
-      - key: AURUM_MAX_SPREAD
-        value: "45"
-      - key: AURUM_LOOP_SECONDS
-        value: "8"
-      - key: AURUM_TICK_SECONDS
-        value: "1"
-      - key: AURUM_PULSE_CONFIRM
-        value: "true"
-      - key: AURUM_COOLDOWN_SEC
-        value: "120"
-      - key: AURUM_MAX_HOLD_SEC
-        value: "10800"
-      - key: AURUM_DATA_DIR
-        value: "data/goldbot"
-      - key: AURUM_PAPER_BALANCE
-        value: "10000"
-      # Secrets — set in Render dashboard, never commit:
-      # CTRADER_CLIENT_ID, CTRADER_CLIENT_SECRET (Spotware Open API app)
-      # AURUM_AUTH_SECRET (strong random)
-      # Optional after OAuth: CTRADER_ACCESS_TOKEN, CTRADER_REFRESH_TOKEN, CTRADER_ACCOUNT_ID

@@ -1,1 +1,0 @@
-"""AURUM authentication package."""
