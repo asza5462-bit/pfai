@@ -140,6 +140,7 @@ async def run_agent(
     *,
     selected_file: str | None = None,
     auto_apply: bool = True,
+    allow_commands: bool = False,
 ) -> dict[str, Any]:
     if not prompt.strip():
         raise HTTPException(400, "الرسالة فارغة")
@@ -184,7 +185,13 @@ async def run_agent(
             if fingerprint in seen_actions:
                 continue
             seen_actions.add(fingerprint)
-            result = _execute_action(project_id, user_id, action, auto_apply=auto_apply)
+            result = _execute_action(
+                project_id,
+                user_id,
+                action,
+                auto_apply=auto_apply,
+                allow_commands=allow_commands,
+            )
             round_observations.append(result)
             observations.append(result)
             if result.get("changed"):
@@ -215,6 +222,7 @@ async def run_agent(
         "commands": commands,
         "rounds": min(MAX_ROUNDS, round_index + 1),
         "auto_applied": auto_apply,
+        "commands_approved": allow_commands,
         "diff": diff[:80_000],
     }
     message_id = _save_message(conversation_id, "assistant", final_message, metadata)
@@ -257,7 +265,14 @@ def _parse_plan(raw: str) -> dict[str, Any]:
     return {"message": raw[:5000], "status": "complete", "actions": []}
 
 
-def _execute_action(project_id: str, user_id: int, action: dict[str, Any], *, auto_apply: bool) -> dict[str, Any]:
+def _execute_action(
+    project_id: str,
+    user_id: int,
+    action: dict[str, Any],
+    *,
+    auto_apply: bool,
+    allow_commands: bool,
+) -> dict[str, Any]:
     kind = str(action.get("type") or "").lower()
     path = str(action.get("path") or "")
     try:
@@ -279,6 +294,14 @@ def _execute_action(project_id: str, user_id: int, action: dict[str, Any], *, au
             return {"type": kind, "path": path, "ok": True, "changed": True}
         if kind == "run":
             command = str(action.get("command") or "")
+            if not allow_commands:
+                return {
+                    "type": kind,
+                    "command": command,
+                    "ok": False,
+                    "approval_required": True,
+                    "error": "تشغيل الأمر يحتاج موافقة المستخدم",
+                }
             result = workspace.run_command(project_id, user_id, command)
             return {"type": kind, "command": command, **result}
         if kind == "checkpoint":

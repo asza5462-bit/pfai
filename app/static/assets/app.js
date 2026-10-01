@@ -465,6 +465,7 @@ async function sendChat() {
         message,
         selected_file: state.activeFile,
         auto_apply: $("#auto-apply").checked,
+        allow_commands: $("#agent-commands").checked,
       }),
     });
     addMessage("assistant", result.message, { changed_files: result.changed_files });

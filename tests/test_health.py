@@ -114,3 +114,35 @@ def test_agent_writes_real_file(client: TestClient, monkeypatch: pytest.MonkeyPa
     assert response.json()["changed_files"] == ["src/generated.py"]
     generated = client.get(f"/api/projects/{project_id}/file", params={"path": "src/generated.py"})
     assert generated.json()["content"] == "ANSWER = 42\n"
+
+
+def test_agent_commands_require_explicit_approval(client: TestClient, monkeypatch: pytest.MonkeyPatch):
+    project_id = client.get("/api/projects").json()["projects"][0]["id"]
+    conversation = client.post(
+        f"/api/projects/{project_id}/conversations",
+        json={"title": "Approval"},
+    ).json()["conversation"]
+
+    async def fake_complete(*_args, **_kwargs):
+        return json.dumps(
+            {
+                "message": "أحتاج تشغيل الاختبارات.",
+                "status": "complete",
+                "actions": [{"type": "run", "command": "pytest -q"}],
+            },
+            ensure_ascii=False,
+        )
+
+    monkeypatch.setattr("app.agent.complete", fake_complete)
+    response = client.post(
+        f"/api/projects/{project_id}/chat",
+        json={
+            "conversation_id": conversation["id"],
+            "message": "اختبر المشروع",
+            "auto_apply": True,
+            "allow_commands": False,
+        },
+    )
+    assert response.status_code == 200
+    command = response.json()["commands"][0]
+    assert command["approval_required"] is True

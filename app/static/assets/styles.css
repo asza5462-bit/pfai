@@ -262,6 +262,7 @@ textarea { resize: vertical; }
 .agent-progress em { font-style: normal; margin-right: 5px; }
 .composer { position: relative; padding: 9px 10px 11px; border-top: 1px solid var(--line); background: #090b11; }
 .composer-tools { display: flex; align-items: center; justify-content: space-between; margin-bottom: 6px; }
+.approval-toggles { display: flex; align-items: center; gap: 11px; }
 .tool-btn { border: 0; background: transparent; color: var(--muted); cursor: pointer; padding: 3px; }
 .tool-btn:hover { color: var(--violet-2); }
 .auto-toggle { margin: 0; display: flex; align-items: center; gap: 6px; color: var(--muted); font-size: 9px; cursor: pointer; }
