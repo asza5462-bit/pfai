@@ -3,12 +3,18 @@ ENV PYTHONDONTWRITEBYTECODE=1 \
     PYTHONUNBUFFERED=1 \
     PYTHONPATH=/app \
     PORT=8000 \
-    APP_ENV=production
+    APP_ENV=production \
+    NOVA_DATA_DIR=/app/data \
+    NOVA_COOKIE_SECURE=true
 WORKDIR /app
+RUN apt-get update \
+    && apt-get install -y --no-install-recommends git nodejs npm \
+    && rm -rf /var/lib/apt/lists/*
 COPY requirements.txt /app/requirements.txt
 RUN pip install --no-cache-dir -r /app/requirements.txt
 COPY app /app/app
 RUN useradd --create-home --uid 10001 appuser \
+    && mkdir -p /app/data/workspaces \
     && chown -R appuser:appuser /app
 USER appuser
 EXPOSE 8000

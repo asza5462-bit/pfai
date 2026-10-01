@@ -1,3 +1,3 @@
-"""Clean web app — GitHub + Render."""
+"""NOVA Code — agentic AI software studio."""
 
-__version__ = "1.0.0"
+__version__ = "2.0.0"
