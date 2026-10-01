@@ -91,6 +91,17 @@ class Database:
                     created_at REAL NOT NULL,
                     FOREIGN KEY(conversation_id) REFERENCES conversations(id) ON DELETE CASCADE
                 );
+                CREATE TABLE IF NOT EXISTS file_revisions (
+                    id INTEGER PRIMARY KEY AUTOINCREMENT,
+                    project_id TEXT NOT NULL,
+                    path TEXT NOT NULL,
+                    content TEXT,
+                    checksum TEXT NOT NULL,
+                    operation TEXT NOT NULL,
+                    actor TEXT NOT NULL,
+                    created_at REAL NOT NULL,
+                    FOREIGN KEY(project_id) REFERENCES projects(id) ON DELETE CASCADE
+                );
                 CREATE TABLE IF NOT EXISTS settings (
                     user_id INTEGER NOT NULL,
                     key TEXT NOT NULL,
@@ -109,6 +120,8 @@ class Database:
                 );
                 CREATE INDEX IF NOT EXISTS idx_projects_user ON projects(user_id, updated_at DESC);
                 CREATE INDEX IF NOT EXISTS idx_messages_conversation ON messages(conversation_id, id);
+                CREATE INDEX IF NOT EXISTS idx_file_revisions
+                    ON file_revisions(project_id, path, id DESC);
                 """
             )
 

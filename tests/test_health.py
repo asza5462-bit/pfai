@@ -1,6 +1,8 @@
 from __future__ import annotations
 
+import io
 import json
+import zipfile
 
 import pytest
 from fastapi.testclient import TestClient
@@ -18,13 +20,15 @@ def test_health_and_index(client: TestClient):
     response = client.get("/health")
     assert response.status_code == 200
     assert response.json()["name"] == "NOVA Code"
-    assert response.json()["version"] == "2.0.0"
+    assert response.json()["version"] == "2.1.0"
     index = client.get("/")
     assert index.status_code == 200
     assert "NOVA Code" in index.text
     assert "cTrader" not in index.text
     assert client.head("/").status_code == 200
     assert client.head("/health").status_code == 200
+    assert client.get("/health/live").status_code == 200
+    assert client.get("/health/ready").status_code == 200
 
 
 def test_owner_setup_and_auth(client: TestClient):
@@ -56,8 +60,52 @@ def test_workspace_file_and_path_guards(client: TestClient):
         json={"path": "src/hello.py", "content": "print('hello')\n"},
     )
     assert write.status_code == 200
+    original_checksum = write.json()["checksum"]
     read = client.get(f"/api/projects/{project_id}/file", params={"path": "src/hello.py"})
     assert read.json()["content"] == "print('hello')\n"
+
+    update = client.put(
+        f"/api/projects/{project_id}/file",
+        json={
+            "path": "src/hello.py",
+            "content": "print('hello again')\n",
+            "expected_checksum": original_checksum,
+        },
+    )
+    assert update.status_code == 200
+    stale = client.put(
+        f"/api/projects/{project_id}/file",
+        json={
+            "path": "src/hello.py",
+            "content": "stale",
+            "expected_checksum": original_checksum,
+        },
+    )
+    assert stale.status_code == 409
+
+    search = client.get(f"/api/projects/{project_id}/search", params={"q": "hello again"})
+    assert search.status_code == 200
+    assert search.json()["results"][0]["path"] == "src/hello.py"
+
+    revisions = client.get(
+        f"/api/projects/{project_id}/revisions",
+        params={"path": "src/hello.py"},
+    ).json()["revisions"]
+    assert len(revisions) == 2
+    restored = client.post(
+        f"/api/projects/{project_id}/restore",
+        json={"revision_id": revisions[-1]["id"]},
+    )
+    assert restored.status_code == 200
+    read_restored = client.get(f"/api/projects/{project_id}/file", params={"path": "src/hello.py"})
+    assert read_restored.json()["content"] == "print('hello')\n"
+
+    exported = client.get(f"/api/projects/{project_id}/export")
+    assert exported.status_code == 200
+    assert exported.headers["content-type"] == "application/zip"
+    with zipfile.ZipFile(io.BytesIO(exported.content)) as archive:
+        assert "src/hello.py" in archive.namelist()
+        assert not any(name.startswith(".git/") for name in archive.namelist())
 
     traversal = client.get(f"/api/projects/{project_id}/file", params={"path": "../secret"})
     assert traversal.status_code == 400

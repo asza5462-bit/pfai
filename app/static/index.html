@@ -6,7 +6,7 @@
   <meta name="theme-color" content="#07080d" />
   <title>NOVA Code — AI Software Studio</title>
   <link rel="icon" href="/assets/favicon.svg" type="image/svg+xml" />
-  <link rel="stylesheet" href="/assets/styles.css?v=2.0.0" />
+  <link rel="stylesheet" href="/assets/styles.css?v=2.1.0" />
 </head>
 <body>
   <div id="auth-screen" class="auth-screen">
@@ -47,6 +47,12 @@
         </button>
         <button id="checkpoint-btn" class="icon-btn" title="نقطة حفظ Git" aria-label="نقطة حفظ">
           <svg viewBox="0 0 24 24"><circle cx="6" cy="5" r="2"/><circle cx="18" cy="6" r="2"/><circle cx="6" cy="19" r="2"/><path d="M6 7v10M8 7c5 0 4 7 8 7h2"/></svg>
+        </button>
+        <button id="history-btn" class="icon-btn" title="سجل نسخ الملف" aria-label="سجل النسخ">
+          <svg viewBox="0 0 24 24"><path d="M4 12a8 8 0 1 0 2-5.3L4 9M4 4v5h5M12 7v5l3 2"/></svg>
+        </button>
+        <button id="export-btn" class="icon-btn" title="تنزيل المشروع ZIP" aria-label="تنزيل المشروع">
+          <svg viewBox="0 0 24 24"><path d="M12 3v12M7 10l5 5 5-5M4 19h16"/></svg>
         </button>
         <button id="save-btn" class="icon-btn" title="حفظ الملف" aria-label="حفظ">
           <svg viewBox="0 0 24 24"><path d="M5 4h12l2 2v14H5zM8 4v6h8V4M8 20v-7h8v7"/></svg>
@@ -226,8 +232,16 @@
     </form>
   </dialog>
 
+  <dialog id="history-dialog">
+    <section class="modal-card history-card">
+      <div class="modal-head"><div><p class="eyebrow">FILE TIMELINE</p><h3>سجل نسخ الملف</h3></div><button type="button" class="dialog-close">×</button></div>
+      <p id="history-path" class="modal-copy" dir="ltr"></p>
+      <div id="history-list" class="history-list"></div>
+    </section>
+  </dialog>
+
   <div id="toast-stack" class="toast-stack" aria-live="polite"></div>
 
-  <script src="/assets/app.js?v=2.0.0"></script>
+  <script src="/assets/app.js?v=2.1.0"></script>
 </body>
 </html>
