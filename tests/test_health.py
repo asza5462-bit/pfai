@@ -20,11 +20,12 @@ def test_health_and_index(client: TestClient):
     response = client.get("/health")
     assert response.status_code == 200
     assert response.json()["name"] == "NOVA Code"
-    assert response.json()["version"] == "2.1.0"
+    assert response.json()["version"] == "2.1.1"
     index = client.get("/")
     assert index.status_code == 200
     assert "NOVA Code" in index.text
     assert "cTrader" not in index.text
+    assert index.text.index('id="setup-token-wrap"') < index.text.index('id="auth-username"')
     assert client.head("/").status_code == 200
     assert client.head("/health").status_code == 200
     assert client.get("/health/live").status_code == 200

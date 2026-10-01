@@ -6,7 +6,7 @@
   <meta name="theme-color" content="#07080d" />
   <title>NOVA Code — AI Software Studio</title>
   <link rel="icon" href="/assets/favicon.svg" type="image/svg+xml" />
-  <link rel="stylesheet" href="/assets/styles.css?v=2.1.0" />
+  <link rel="stylesheet" href="/assets/styles.css?v=2.1.1" />
 </head>
 <body>
   <div id="auth-screen" class="auth-screen">
@@ -17,9 +17,9 @@
       <h1>NOVA <em>Code</em></h1>
       <p id="auth-copy" class="auth-copy">ادخل إلى أقوى مساحة عمل ذكية لبناء البرمجيات.</p>
       <form id="auth-form">
+        <label id="setup-token-wrap" class="hidden">رمز الإعداد<input id="setup-token" type="password" autocomplete="one-time-code" /></label>
         <label>اسم المستخدم<input id="auth-username" autocomplete="username" required minlength="3" /></label>
         <label>كلمة المرور<input id="auth-password" type="password" autocomplete="current-password" required minlength="12" /></label>
-        <label id="setup-token-wrap" class="hidden">رمز الإعداد<input id="setup-token" type="password" autocomplete="one-time-code" /></label>
         <button class="primary wide" type="submit"><span id="auth-submit-label">دخول</span><span class="arrow">←</span></button>
         <p id="auth-error" class="form-error"></p>
       </form>
@@ -242,6 +242,6 @@
 
   <div id="toast-stack" class="toast-stack" aria-live="polite"></div>
 
-  <script src="/assets/app.js?v=2.1.0"></script>
+  <script src="/assets/app.js?v=2.1.1"></script>
 </body>
 </html>

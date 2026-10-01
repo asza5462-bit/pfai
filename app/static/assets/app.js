@@ -81,8 +81,11 @@ function showAuth(needsSetup, setupTokenRequired) {
   $("#auth-copy").textContent = needsSetup
     ? "الإعداد الأول والوحيد. أنشئ حساب المالك للبدء."
     : "ادخل إلى مساحة البرمجة الذكية الخاصة بك.";
-  $("#setup-token-wrap").classList.toggle("hidden", !needsSetup || !setupTokenRequired);
+  const needsToken = needsSetup && setupTokenRequired;
+  $("#setup-token-wrap").classList.toggle("hidden", !needsToken);
+  $("#setup-token").required = needsToken;
   $("#auth-password").autocomplete = needsSetup ? "new-password" : "current-password";
+  setTimeout(() => (needsToken ? $("#setup-token") : $("#auth-username")).focus(), 50);
 }
 
 async function enterStudio() {
@@ -203,11 +206,13 @@ async function createProject(event) {
         template,
       }),
     });
-    state.projects.unshift({ ...result.project, file_count: 0 });
-    renderProjectMenu();
+    localStorage.setItem("nova.project", result.project.id);
     $("#project-dialog").close();
     event.currentTarget.reset();
-    await selectProject(result.project.id);
+    await loadProjects();
+    if (state.project?.id !== result.project.id) {
+      throw new Error("تم إنشاء المشروع لكن تعذّر فتحه تلقائياً");
+    }
     toast("تم إنشاء مساحة العمل", "success");
   } catch (error) {
     $("#project-error").textContent = error.message;
