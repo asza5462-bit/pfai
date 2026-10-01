@@ -8,6 +8,9 @@ import shutil
 import subprocess
 import time
 import uuid
+import hashlib
+import io
+import zipfile
 from pathlib import Path
 from typing import Any
 
@@ -183,15 +186,38 @@ def read_file(project_id: str, user_id: int, path: str) -> dict:
         content = target.read_text(encoding="utf-8")
     except UnicodeDecodeError as exc:
         raise HTTPException(415, "الملف ثنائي ولا يمكن تحريره") from exc
-    return {"path": path, "content": content, "size": size, "language": language_for(path)}
+    return {
+        "path": path,
+        "content": content,
+        "size": size,
+        "language": language_for(path),
+        "checksum": hashlib.sha256(content.encode()).hexdigest(),
+    }
 
 
-def write_file(project_id: str, user_id: int, path: str, content: str) -> dict:
+def write_file(
+    project_id: str,
+    user_id: int,
+    path: str,
+    content: str,
+    *,
+    expected_checksum: str | None = None,
+    actor: str = "user",
+) -> dict:
     encoded_size = len(content.encode())
     if encoded_size > settings.max_file_bytes:
         raise HTTPException(413, "محتوى الملف أكبر من الحد")
     root = project_root(project_id, user_id)
     target = safe_path(root, path)
+    previous_content: str | None = None
+    if target.exists() and target.is_file():
+        try:
+            previous_content = target.read_text(encoding="utf-8")
+        except UnicodeDecodeError as exc:
+            raise HTTPException(415, "لا يمكن استبدال ملف ثنائي") from exc
+        current_checksum = hashlib.sha256(previous_content.encode()).hexdigest()
+        if expected_checksum and not secrets_compare(expected_checksum, current_checksum):
+            raise HTTPException(409, "تغيّر الملف منذ فتحه؛ أعد تحميله قبل الحفظ")
     previous_size = target.stat().st_size if target.exists() and target.is_file() else 0
     project_size = sum(
         item.stat().st_size
@@ -202,22 +228,178 @@ def write_file(project_id: str, user_id: int, path: str, content: str) -> dict:
         raise HTTPException(413, "المشروع تجاوز حد التخزين")
     target.parent.mkdir(parents=True, exist_ok=True)
     target.write_text(content, encoding="utf-8")
+    _record_revision(
+        project_id,
+        path,
+        content,
+        operation="create" if previous_content is None else "write",
+        actor=actor,
+    )
     db.execute("UPDATE projects SET updated_at=? WHERE id=?", (time.time(), project_id))
     db.audit(user_id, "file.write", {"project_id": project_id, "path": path, "bytes": len(content.encode())})
-    return {"ok": True, "path": path, "size": target.stat().st_size}
+    return {
+        "ok": True,
+        "path": path,
+        "size": target.stat().st_size,
+        "checksum": hashlib.sha256(content.encode()).hexdigest(),
+    }
 
 
-def delete_file(project_id: str, user_id: int, path: str) -> None:
+def delete_file(project_id: str, user_id: int, path: str, *, actor: str = "user") -> None:
     root = project_root(project_id, user_id)
     target = safe_path(root, path, must_exist=True)
     if target == root:
         raise HTTPException(400, "لا يمكن حذف جذر المشروع")
     if target.is_dir():
+        for item in target.rglob("*"):
+            if item.is_file() and not item.is_symlink():
+                try:
+                    content = item.read_text(encoding="utf-8")
+                except UnicodeDecodeError:
+                    continue
+                _record_revision(
+                    project_id,
+                    item.relative_to(root).as_posix(),
+                    content,
+                    operation="delete",
+                    actor=actor,
+                )
         shutil.rmtree(target)
     else:
+        try:
+            content = target.read_text(encoding="utf-8")
+            _record_revision(project_id, path, content, operation="delete", actor=actor)
+        except UnicodeDecodeError:
+            pass
         target.unlink()
     db.execute("UPDATE projects SET updated_at=? WHERE id=?", (time.time(), project_id))
     db.audit(user_id, "file.delete", {"project_id": project_id, "path": path})
+
+
+def secrets_compare(left: str, right: str) -> bool:
+    import hmac
+
+    return hmac.compare_digest(left, right)
+
+
+def _record_revision(
+    project_id: str,
+    path: str,
+    content: str,
+    *,
+    operation: str,
+    actor: str,
+) -> None:
+    checksum = hashlib.sha256(content.encode()).hexdigest()
+    db.execute(
+        """
+        INSERT INTO file_revisions(project_id, path, content, checksum, operation, actor, created_at)
+        VALUES (?,?,?,?,?,?,?)
+        """,
+        (project_id, path, content, checksum, operation, actor[:30], time.time()),
+    )
+    with db.transaction() as conn:
+        conn.execute(
+            """
+            DELETE FROM file_revisions
+            WHERE project_id=? AND path=? AND id NOT IN (
+                SELECT id FROM file_revisions
+                WHERE project_id=? AND path=?
+                ORDER BY id DESC LIMIT 50
+            )
+            """,
+            (project_id, path, project_id, path),
+        )
+
+
+def file_revisions(project_id: str, user_id: int, path: str) -> list[dict[str, Any]]:
+    project_root(project_id, user_id)
+    return db.all(
+        """
+        SELECT id, path, checksum, operation, actor, created_at, length(content) AS size
+        FROM file_revisions
+        WHERE project_id=? AND path=?
+        ORDER BY id DESC LIMIT 50
+        """,
+        (project_id, path),
+    )
+
+
+def restore_revision(project_id: str, user_id: int, revision_id: int) -> dict[str, Any]:
+    project_root(project_id, user_id)
+    revision = db.one(
+        "SELECT * FROM file_revisions WHERE id=? AND project_id=?",
+        (revision_id, project_id),
+    )
+    if not revision:
+        raise HTTPException(404, "النسخة غير موجودة")
+    result = write_file(
+        project_id,
+        user_id,
+        revision["path"],
+        revision["content"] or "",
+        actor="restore",
+    )
+    db.audit(
+        user_id,
+        "file.restore",
+        {"project_id": project_id, "path": revision["path"], "revision_id": revision_id},
+    )
+    return {**result, "revision_id": revision_id}
+
+
+def search_files(project_id: str, user_id: int, query: str, limit: int = 100) -> list[dict[str, Any]]:
+    root = project_root(project_id, user_id)
+    needle = query.strip().casefold()
+    if len(needle) < 2:
+        raise HTTPException(400, "اكتب حرفين على الأقل للبحث")
+    output: list[dict[str, Any]] = []
+    for target in sorted(root.rglob("*")):
+        if len(output) >= limit:
+            break
+        if (
+            not target.is_file()
+            or target.is_symlink()
+            or any(part in IGNORE_NAMES for part in target.relative_to(root).parts)
+            or target.stat().st_size > 500_000
+        ):
+            continue
+        try:
+            lines = target.read_text(encoding="utf-8").splitlines()
+        except (UnicodeDecodeError, OSError):
+            continue
+        for line_number, line in enumerate(lines, start=1):
+            column = line.casefold().find(needle)
+            if column < 0:
+                continue
+            output.append(
+                {
+                    "path": target.relative_to(root).as_posix(),
+                    "line": line_number,
+                    "column": column + 1,
+                    "preview": line.strip()[:300],
+                }
+            )
+            if len(output) >= limit:
+                break
+    return output
+
+
+def export_project(project_id: str, user_id: int) -> tuple[str, bytes]:
+    project = _project_row(project_id, user_id)
+    root = project_root(project_id, user_id)
+    buffer = io.BytesIO()
+    with zipfile.ZipFile(buffer, "w", compression=zipfile.ZIP_DEFLATED) as archive:
+        for target in sorted(root.rglob("*")):
+            if (
+                not target.is_file()
+                or target.is_symlink()
+                or any(part in IGNORE_NAMES for part in target.relative_to(root).parts)
+            ):
+                continue
+            archive.write(target, target.relative_to(root).as_posix())
+    safe_name = re.sub(r"[^\w.-]+", "-", project["name"], flags=re.UNICODE).strip("-") or "nova-project"
+    return f"{safe_name}.zip", buffer.getvalue()
 
 
 def language_for(path: str) -> str:

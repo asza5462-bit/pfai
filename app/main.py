@@ -8,6 +8,7 @@ from collections import defaultdict, deque
 from contextlib import asynccontextmanager
 from pathlib import Path
 from typing import Annotated
+from urllib.parse import quote
 
 from fastapi import (
     Cookie,
@@ -121,6 +122,7 @@ class ProjectBody(BaseModel):
 class FileBody(BaseModel):
     path: str = Field(min_length=1, max_length=500)
     content: str = Field(max_length=1_100_000)
+    expected_checksum: str | None = Field(default=None, min_length=64, max_length=64)
 
 
 class DeleteFileBody(BaseModel):
@@ -133,6 +135,10 @@ class CommandBody(BaseModel):
 
 class CheckpointBody(BaseModel):
     message: str = Field(default="NOVA checkpoint", min_length=1, max_length=120)
+
+
+class RestoreBody(BaseModel):
+    revision_id: int = Field(gt=0)
 
 
 class ConversationBody(BaseModel):
@@ -164,6 +170,23 @@ async def health():
     }
 
 
+@app.api_route("/health/live", methods=["GET", "HEAD"])
+async def health_live():
+    return {"ok": True, "status": "live"}
+
+
+@app.api_route("/health/ready", methods=["GET", "HEAD"])
+async def health_ready():
+    try:
+        row = db.one("SELECT 1 AS ready")
+        ready = bool(row and row["ready"] == 1)
+    except Exception:  # noqa: BLE001 - readiness must report failure instead of crashing
+        ready = False
+    if not ready:
+        raise HTTPException(503, "database_not_ready")
+    return {"ok": True, "status": "ready"}
+
+
 @app.get("/api/info")
 async def info():
     return {
@@ -174,6 +197,8 @@ async def info():
             "AI chat",
             "agentic code editing",
             "file workspace",
+            "code search and file revisions",
+            "project ZIP export",
             "safe command runner",
             "Git checkpoints",
             "OpenAI",
@@ -274,13 +299,49 @@ async def get_file(project_id: str, user: User, path: str = Query(..., max_lengt
 
 @app.put("/api/projects/{project_id}/file")
 async def put_file(project_id: str, body: FileBody, user: User):
-    return workspace.write_file(project_id, user["id"], body.path, body.content)
+    return workspace.write_file(
+        project_id,
+        user["id"],
+        body.path,
+        body.content,
+        expected_checksum=body.expected_checksum,
+    )
 
 
 @app.delete("/api/projects/{project_id}/file")
 async def remove_file(project_id: str, body: DeleteFileBody, user: User):
     workspace.delete_file(project_id, user["id"], body.path)
     return {"ok": True}
+
+
+@app.get("/api/projects/{project_id}/search")
+async def project_search(
+    project_id: str,
+    user: User,
+    q: str = Query(..., min_length=2, max_length=200),
+    limit: int = Query(100, ge=1, le=300),
+):
+    return {"ok": True, "results": workspace.search_files(project_id, user["id"], q, limit)}
+
+
+@app.get("/api/projects/{project_id}/revisions")
+async def revisions(project_id: str, user: User, path: str = Query(..., max_length=500)):
+    return {"ok": True, "revisions": workspace.file_revisions(project_id, user["id"], path)}
+
+
+@app.post("/api/projects/{project_id}/restore")
+async def restore(project_id: str, body: RestoreBody, user: User):
+    return workspace.restore_revision(project_id, user["id"], body.revision_id)
+
+
+@app.get("/api/projects/{project_id}/export")
+async def export(project_id: str, user: User):
+    filename, content = workspace.export_project(project_id, user["id"])
+    return Response(
+        content=content,
+        media_type="application/zip",
+        headers={"Content-Disposition": f"attachment; filename*=UTF-8''{quote(filename)}"},
+    )
 
 
 @app.get("/api/projects/{project_id}/diff")

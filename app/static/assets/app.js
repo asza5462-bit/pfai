@@ -258,13 +258,46 @@ function fileIcon(ext) {
   return map[ext] || "·";
 }
 
-async function openFile(path) {
+async function searchWorkspace() {
+  if (!state.project) return toast("اختر مشروعاً أولاً");
+  const query = prompt("ابحث داخل كل ملفات المشروع");
+  if (!query) return;
+  try {
+    const result = await api(
+      `/api/projects/${state.project.id}/search?q=${encodeURIComponent(query)}&limit=200`,
+    );
+    const root = $("#file-tree");
+    root.innerHTML = "";
+    result.results.forEach((match) => {
+      const row = document.createElement("div");
+      row.className = "tree-row search-result";
+      row.innerHTML = `<span class="tree-icon">${match.line}</span><span><strong>${escapeHtml(match.path)}</strong><code>${escapeHtml(match.preview)}</code></span>`;
+      row.addEventListener("click", () => openFile(match.path, match.line));
+      root.append(row);
+    });
+    if (!result.results.length) {
+      root.innerHTML = '<div class="empty-project"><p>لا توجد نتائج</p></div>';
+    }
+    toast(`${result.results.length} نتيجة — اضغط التحديث للعودة إلى الملفات`, "success");
+  } catch (error) {
+    toast(error.message, "error");
+  }
+}
+
+async function openFile(path, line = null) {
   if (!state.project) return;
   try {
     let file = state.openFiles.get(path);
     if (!file) {
       const result = await api(`/api/projects/${state.project.id}/file?path=${encodeURIComponent(path)}`);
-      file = { path, content: result.content, original: result.content, language: result.language, dirty: false };
+      file = {
+        path,
+        content: result.content,
+        original: result.content,
+        language: result.language,
+        checksum: result.checksum,
+        dirty: false,
+      };
       state.openFiles.set(path, file);
     }
     state.activeFile = path;
@@ -276,6 +309,14 @@ async function openFile(path) {
     renderTabs();
     $$(".tree-row").forEach((row) => row.classList.toggle("active", row.dataset.path === path));
     $("#code-editor").focus();
+    if (line && line > 0) {
+      const editor = $("#code-editor");
+      const lines = editor.value.split("\n");
+      const offset = lines.slice(0, line - 1).reduce((total, value) => total + value.length + 1, 0);
+      editor.setSelectionRange(offset, offset + (lines[line - 1]?.length || 0));
+      editor.scrollTop = Math.max(0, (line - 3) * 21);
+      updateCursor();
+    }
   } catch (error) {
     toast(error.message, "error");
   }
@@ -341,11 +382,16 @@ async function saveActiveFile() {
   if (!state.project || !state.activeFile) return;
   const file = state.openFiles.get(state.activeFile);
   try {
-    await api(`/api/projects/${state.project.id}/file`, {
+    const result = await api(`/api/projects/${state.project.id}/file`, {
       method: "PUT",
-      body: JSON.stringify({ path: file.path, content: file.content }),
+      body: JSON.stringify({
+        path: file.path,
+        content: file.content,
+        expected_checksum: file.checksum || null,
+      }),
     });
     file.original = file.content;
+    file.checksum = result.checksum;
     file.dirty = false;
     $("#file-state").textContent = "محفوظ";
     renderTabs();
@@ -554,6 +600,52 @@ async function createCheckpoint() {
   }
 }
 
+async function openHistory() {
+  if (!state.project || !state.activeFile) return toast("افتح ملفاً أولاً", "error");
+  try {
+    const result = await api(
+      `/api/projects/${state.project.id}/revisions?path=${encodeURIComponent(state.activeFile)}`,
+    );
+    $("#history-path").textContent = state.activeFile;
+    const list = $("#history-list");
+    list.innerHTML = "";
+    result.revisions.forEach((revision) => {
+      const item = document.createElement("button");
+      item.className = "history-item";
+      const timestamp = new Date(revision.created_at * 1000).toLocaleString("ar");
+      item.innerHTML = `<strong>${revision.operation} · ${revision.actor}</strong><span>${timestamp}</span><small>${revision.checksum.slice(0, 12)} · ${revision.size} bytes</small>`;
+      item.addEventListener("click", () => restoreRevision(revision.id));
+      list.append(item);
+    });
+    if (!result.revisions.length) list.innerHTML = '<p class="modal-copy">لا توجد نسخ محفوظة لهذا الملف.</p>';
+    $("#history-dialog").showModal();
+  } catch (error) {
+    toast(error.message, "error");
+  }
+}
+
+async function restoreRevision(revisionId) {
+  if (!confirm("استرجاع هذه النسخة؟ ستُحفظ الحالة الحالية في السجل.")) return;
+  try {
+    const result = await api(`/api/projects/${state.project.id}/restore`, {
+      method: "POST",
+      body: JSON.stringify({ revision_id: revisionId }),
+    });
+    $("#history-dialog").close();
+    state.openFiles.delete(result.path);
+    await Promise.all([loadTree(), loadDiff()]);
+    await openFile(result.path);
+    toast("تم استرجاع النسخة", "success");
+  } catch (error) {
+    toast(error.message, "error");
+  }
+}
+
+function exportProject() {
+  if (!state.project) return toast("اختر مشروعاً", "error");
+  window.location.href = `/api/projects/${state.project.id}/export`;
+}
+
 function previewProject() {
   if (!state.project) return toast("اختر مشروعاً", "error");
   const path = state.activeFile?.endsWith(".html") ? state.activeFile : "index.html";
@@ -636,6 +728,8 @@ function bindEvents() {
   $("#settings-btn").addEventListener("click", openSettings);
   $("#preview-btn").addEventListener("click", previewProject);
   $("#checkpoint-btn").addEventListener("click", createCheckpoint);
+  $("#history-btn").addEventListener("click", openHistory);
+  $("#export-btn").addEventListener("click", exportProject);
   $("#settings-form").addEventListener("submit", saveProvider);
   $("#test-provider-btn").addEventListener("click", testProvider);
   $$(".dialog-close").forEach((button) => button.addEventListener("click", () => button.closest("dialog").close()));
@@ -692,13 +786,7 @@ function bindEvents() {
   $(".activity[data-panel=explorer]").addEventListener("click", () => $("#sidebar").classList.toggle("open"));
   $(".activity[data-panel=git]").addEventListener("click", () => showBottom("diff"));
   $(".activity[data-panel=chat]").addEventListener("click", () => $("#app .chat-panel").classList.toggle("mobile-closed"));
-  $(".activity[data-panel=search]").addEventListener("click", () => {
-    if (!state.project) return toast("اختر مشروعاً أولاً");
-    const query = prompt("ابحث باسم الملف");
-    $$(".tree-row").forEach((row) => {
-      row.style.display = !query || row.dataset.path.toLowerCase().includes(query.toLowerCase()) ? "" : "none";
-    });
-  });
+  $(".activity[data-panel=search]").addEventListener("click", searchWorkspace);
   document.addEventListener("click", (event) => {
     if (!event.target.closest(".project-switcher")) $("#project-menu").classList.add("hidden");
   });

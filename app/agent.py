@@ -31,6 +31,7 @@ Return ONLY one valid JSON object (no markdown fences):
   "status": "continue" or "complete",
   "actions": [
     {"type":"inspect","path":"relative/file"},
+    {"type":"search","query":"symbol or text"},
     {"type":"write","path":"relative/file","content":"complete new file content"},
     {"type":"delete","path":"relative/file"},
     {"type":"run","command":"pytest -q"},
@@ -200,7 +201,7 @@ async def run_agent(
                 proposed.append(action)
             if action.get("type") == "run":
                 commands.append(result)
-            if action.get("type") in {"inspect", "run"}:
+            if action.get("type") in {"inspect", "search", "run"}:
                 needs_followup = True
 
         if not needs_followup or round_index == MAX_ROUNDS - 1:
@@ -279,18 +280,22 @@ def _execute_action(
         if kind == "inspect":
             file = workspace.read_file(project_id, user_id, path)
             return {"type": kind, "path": path, "ok": True, "content": file["content"][:50_000]}
+        if kind == "search":
+            query = str(action.get("query") or "")
+            results = workspace.search_files(project_id, user_id, query, limit=100)
+            return {"type": kind, "query": query, "ok": True, "results": results}
         if kind == "write":
             if not auto_apply:
                 return {"type": kind, "path": path, "ok": True, "proposed": True}
             content = action.get("content")
             if not isinstance(content, str):
                 return {"type": kind, "path": path, "ok": False, "error": "missing content"}
-            result = workspace.write_file(project_id, user_id, path, content)
+            result = workspace.write_file(project_id, user_id, path, content, actor="agent")
             return {"type": kind, "path": path, "ok": True, "changed": True, "size": result["size"]}
         if kind == "delete":
             if not auto_apply:
                 return {"type": kind, "path": path, "ok": True, "proposed": True}
-            workspace.delete_file(project_id, user_id, path)
+            workspace.delete_file(project_id, user_id, path, actor="agent")
             return {"type": kind, "path": path, "ok": True, "changed": True}
         if kind == "run":
             command = str(action.get("command") or "")
