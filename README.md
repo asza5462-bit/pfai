@@ -1,28 +1,51 @@
-# ORBIT
+# NOVA Code
 
-مشروع ويب نظيف: **GitHub → Render**.
+استوديو برمجة ذكي يحوّل المحادثة إلى كود حقيقي داخل مساحة عمل معزولة.
+
+## القدرات
+
+- شات عربي/إنجليزي مع وكيل برمجي متعدد الخطوات.
+- قراءة وكتابة وحذف الملفات مع حماية كاملة من Path Traversal.
+- مستكشف ملفات ومحرر كود وتبويبات وحفظ مباشر.
+- تنفيذ أوامر تطوير آمنة بمهلة وحدود إخراج.
+- معاينة Git diff وإنشاء نقاط حفظ محلية.
+- محادثات ومشاريع دائمة في SQLite.
+- OpenAI وAnthropic وأي API متوافق مع OpenAI.
+- تشفير مفاتيح API في قاعدة البيانات باستخدام Fernet.
+- حساب مالك واحد، جلسات HttpOnly، Rate Limiting، وSecurity Headers.
 
 ## التشغيل محلياً
 
 ```bash
-pip install -r requirements.txt
-PYTHONPATH=. uvicorn app.main:app --reload --port 8000
+python -m venv .venv
+.venv/bin/pip install -r requirements.txt
+export NOVA_APP_SECRET="$(python -c 'import secrets; print(secrets.token_urlsafe(48))')"
+export NOVA_SETUP_TOKEN="$(python -c 'import secrets; print(secrets.token_urlsafe(24))')"
+export NOVA_COOKIE_SECURE=false
+.venv/bin/uvicorn app.main:app --reload --port 8000
 ```
 
-افتح: http://127.0.0.1:8000
+افتح `http://127.0.0.1:8000` واستخدم `NOVA_SETUP_TOKEN` عند إنشاء حساب المالك.
 
-## النشر على Render
+## متغيرات البيئة
 
-1. ادفع الكود إلى GitHub.
-2. اربط المستودع بخدمة Web على Render (Docker).
-3. مسار الصحة: `/health`
+| المتغير | الغرض |
+|---|---|
+| `NOVA_APP_SECRET` | مفتاح تشفير الجلسات والأسرار (إلزامي في الإنتاج) |
+| `NOVA_SETUP_TOKEN` | يحمي إنشاء حساب المالك الأول |
+| `NOVA_DATA_DIR` | قاعدة البيانات ومساحات العمل، افتراضياً `data` |
+| `NOVA_COOKIE_SECURE` | كوكي HTTPS، افتراضياً `true` |
+| `OPENAI_API_KEY` | مفتاح اختياري من بيئة الخادم |
+| `ANTHROPIC_API_KEY` | مفتاح اختياري من بيئة الخادم |
+| `NOVA_AI_MODEL` | النموذج الافتراضي |
+| `NOVA_ALLOW_COMMANDS` | تشغيل الطرفية المقيدة، افتراضياً `true` |
 
-أو استخدم `render.yaml` من جذر المستودع.
+## الأمان
 
-## المسارات
+الطرفية ليست Shell مفتوحة. الأوامر تمر عبر قائمة مسموحة، دون Shell expansion، ببيئة محدودة ومهلة. مفاتيح API لا تعاد إلى المتصفح بعد حفظها. في Render يجب تركيب Persistent Disk على مسار `NOVA_DATA_DIR` للحفاظ على المشاريع بين عمليات النشر.
 
-| المسار | الوصف |
-|--------|--------|
-| `/` | الصفحة الرئيسية |
-| `/health` | فحص الصحة |
-| `/api/info` | معلومات الـ API |
+## الاختبارات
+
+```bash
+.venv/bin/pytest -q
+```

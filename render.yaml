@@ -1,6 +1,6 @@
 services:
   - type: web
-    name: app-github-render
+    name: nova-code
     runtime: docker
     plan: free
     region: oregon
@@ -13,3 +13,13 @@ services:
         value: production
       - key: PORT
         value: "8000"
+      - key: NOVA_DATA_DIR
+        value: /app/data
+      - key: NOVA_COOKIE_SECURE
+        value: "true"
+      - key: NOVA_ALLOW_COMMANDS
+        value: "true"
+      - key: NOVA_APP_SECRET
+        generateValue: true
+      - key: NOVA_SETUP_TOKEN
+        sync: false
