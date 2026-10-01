@@ -198,7 +198,8 @@ function openProjectDialog() {
 
 async function createProject(event) {
   event.preventDefault();
-  const submit = event.currentTarget.querySelector("button[type=submit]");
+  const form = event.currentTarget;
+  const submit = form.querySelector("button[type=submit]");
   submit.disabled = true;
   $("#project-error").textContent = "";
   try {
@@ -213,7 +214,7 @@ async function createProject(event) {
     });
     localStorage.setItem("nova.project", result.project.id);
     $("#project-dialog").close();
-    event.currentTarget.reset();
+    form.reset();
     await loadProjects();
     if (state.project?.id !== result.project.id) {
       throw new Error("تم إنشاء المشروع لكن تعذّر فتحه تلقائياً");

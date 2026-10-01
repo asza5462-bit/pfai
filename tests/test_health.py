@@ -20,7 +20,7 @@ def test_health_and_index(client: TestClient):
     response = client.get("/health")
     assert response.status_code == 200
     assert response.json()["name"] == "NOVA Code"
-    assert response.json()["version"] == "2.1.2"
+    assert response.json()["version"] == "2.1.3"
     index = client.get("/")
     assert index.status_code == 200
     assert "NOVA Code" in index.text
