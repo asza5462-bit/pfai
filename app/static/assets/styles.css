@@ -40,7 +40,8 @@ svg { width: 18px; height: 18px; fill: none; stroke: currentColor; stroke-width:
 
 .auth-screen {
   position: fixed; inset: 0; z-index: 100;
-  display: grid; place-items: center; padding: 24px;
+  display: flex; align-items: flex-start; justify-content: center; padding: 24px;
+  overflow-y: auto;
   background:
     radial-gradient(circle at 50% 20%, rgba(139, 92, 246, .13), transparent 34%),
     radial-gradient(circle at 15% 85%, rgba(34, 211, 238, .07), transparent 25%),
@@ -59,6 +60,7 @@ svg { width: 18px; height: 18px; fill: none; stroke: currentColor; stroke-width:
 }
 .auth-card {
   position: relative; width: min(410px, 100%); padding: 38px;
+  margin: auto 0; flex: 0 0 auto;
   background: linear-gradient(155deg, rgba(20, 23, 35, .96), rgba(10, 12, 19, .96));
   border: 1px solid rgba(167, 139, 250, .18); border-radius: 16px;
   box-shadow: 0 30px 90px rgba(0, 0, 0, .55), inset 0 1px rgba(255, 255, 255, .03);
@@ -347,4 +349,10 @@ dialog::backdrop { background: rgba(2,3,7,.78); backdrop-filter: blur(5px); }
   .chat-panel { width: calc(100vw - var(--activity)); }
   .template-grid { grid-template-columns: 1fr; }
   .auth-card { padding: 28px 20px; }
+}
+@media (max-height: 720px) {
+  .auth-screen { padding-block: 14px; }
+  .auth-card { margin-block: 0; padding-block: 24px; }
+  .auth-card .nova-mark { width: 43px; height: 43px; margin-bottom: 10px; }
+  .auth-copy { margin-bottom: 15px; }
 }
